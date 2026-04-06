@@ -404,6 +404,7 @@ export default function RequirementDetail({
         return
       }
 
+      setSaving(false)
       onSaved(savedId)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Save failed')
