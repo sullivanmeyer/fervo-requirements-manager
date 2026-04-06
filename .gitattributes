@@ -1,0 +1,5 @@
+# Normalise line endings to LF in the repo; convert on checkout for Windows
+* text=auto eol=lf
+
+# Shell scripts must always be LF or they'll break inside Linux containers
+*.sh text eol=lf
