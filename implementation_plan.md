@@ -56,59 +56,59 @@ Refer to the PRD (v0.3) for full field definitions and business logic.
 - [x] User identity: text input at top of page for display name, persisted to localStorage
 
 ### Stage 1 Verification
-- [ ] `docker compose up` starts all services without errors
-- [ ] Geoblock hierarchy visible on page load at localhost:3000
-- [ ] Can add a new node, rename it, reparent it, archive it
-- [ ] Changes persist across page refresh
-- [ ] Changes persist across `docker compose down` / `docker compose up` cycle
+- [x] `docker compose up` starts all services without errors
+- [x] Geoblock hierarchy visible on page load at localhost:3000
+- [x] Can add a new node, rename it, reparent it, archive it
+- [x] Changes persist across page refresh
+- [x] Changes persist across `docker compose down` / `docker compose up` cycle
 
 ---
 
 ## Stage 2 — Requirement CRUD (Core Fields Only)
 
 ### Backend — Database
-- [ ] Alembic migration: `requirements` table with columns:
-  - [ ] id (UUID), requirement_id (auto-generated string), title, statement
-  - [ ] classification (enum: Requirement, Guideline)
-  - [ ] owner (text), source_type (enum: Manual Entry, Derived from Document)
-  - [ ] status (enum: Draft, Under Review, Approved, Superseded, Withdrawn)
-  - [ ] discipline (enum: Mechanical, Electrical, I&C, Civil/Structural, Process, Fire Protection, General)
-  - [ ] created_by (text), created_date (date), last_modified_by (text), last_modified_date (date)
-  - [ ] change_history (text, nullable), rationale (text, nullable)
-  - [ ] verification_method (enum nullable: Analysis, Inspection, Test, Demonstration, Review of Record)
-  - [ ] tags (text array, nullable)
-- [ ] Alembic migration: `requirement_hierarchy_nodes` junction table (requirement_id, hierarchy_node_id)
-- [ ] Alembic migration: `sites` reference table, seeded with Cape Phase II and Red
-- [ ] Alembic migration: `units` reference table, seeded with ORC Unit 1–8 and All Units
-- [ ] Alembic migration: `requirement_sites` junction table
-- [ ] Alembic migration: `requirement_units` junction table
-- [ ] Auto-generation logic for requirement_id: [DISCIPLINE_PREFIX]-[ZERO_PADDED_SEQ] (e.g., MECH-001)
+- [x] Alembic migration: `requirements` table with columns:
+  - [x] id (UUID), requirement_id (auto-generated string), title, statement
+  - [x] classification (enum: Requirement, Guideline)
+  - [x] owner (text), source_type (enum: Manual Entry, Derived from Document)
+  - [x] status (enum: Draft, Under Review, Approved, Superseded, Withdrawn)
+  - [x] discipline (enum: Mechanical, Electrical, I&C, Civil/Structural, Process, Fire Protection, General)
+  - [x] created_by (text), created_date (date), last_modified_by (text), last_modified_date (date)
+  - [x] change_history (text, nullable), rationale (text, nullable)
+  - [x] verification_method (enum nullable: Analysis, Inspection, Test, Demonstration, Review of Record)
+  - [x] tags (text array, nullable)
+- [x] Alembic migration: `requirement_hierarchy_nodes` junction table (requirement_id, hierarchy_node_id)
+- [x] Alembic migration: `sites` reference table, seeded with Cape Phase II and Red
+- [x] Alembic migration: `units` reference table, seeded with ORC Unit 1–8 and All Units
+- [x] Alembic migration: `requirement_sites` junction table
+- [x] Alembic migration: `requirement_units` junction table
+- [x] Auto-generation logic for requirement_id: [DISCIPLINE_PREFIX]-[ZERO_PADDED_SEQ] (e.g., MECH-001)
 
 ### Backend — API Endpoints
-- [ ] `GET /api/requirements` — list with pagination (page, page_size params), returns lightweight records for table view
-- [ ] `GET /api/requirements/{id}` — full detail for single requirement including all fields
-- [ ] `POST /api/requirements` — create requirement, validates required fields, auto-generates requirement_id
-- [ ] `PUT /api/requirements/{id}` — update requirement, validates changes
-- [ ] `GET /api/sites` — list all sites
-- [ ] `GET /api/units` — list all units
+- [x] `GET /api/requirements` — list with pagination (page, page_size params), returns lightweight records for table view
+- [x] `GET /api/requirements/{id}` — full detail for single requirement including all fields
+- [x] `POST /api/requirements` — create requirement, validates required fields, auto-generates requirement_id
+- [x] `PUT /api/requirements/{id}` — update requirement, validates changes
+- [x] `GET /api/sites` — list all sites
+- [x] `GET /api/units` — list all units
 
 ### Frontend — Requirements Table View
-- [ ] Table with requirements as rows, fields as columns
-- [ ] Default visible columns: Requirement ID, Title, Classification, Owner, Status, Discipline, Hierarchy Nodes, Site, Applicable Units, Created By, Created Date
-- [ ] Column show/hide toggle
-- [ ] Click column header to sort ascending/descending
-- [ ] Click row to open detail view
-- [ ] "Create Requirement" button opens blank detail form
+- [x] Table with requirements as rows, fields as columns
+- [x] Default visible columns: Requirement ID, Title, Classification, Owner, Status, Discipline, Hierarchy Nodes, Site, Applicable Units, Created By, Created Date
+- [x] Column show/hide toggle
+- [x] Click column header to sort ascending/descending
+- [x] Click row to open detail view
+- [x] "Create Requirement" button opens blank detail form
 
 ### Frontend — Requirement Detail/Edit View
-- [ ] Form showing all requirement fields
-- [ ] Hierarchy Nodes: multi-select tree picker (check nodes from hierarchy)
-- [ ] Site: multi-select dropdown
-- [ ] Applicable Units: multi-select dropdown
-- [ ] Owner defaults to current display name
-- [ ] Created By and Created Date auto-fill on creation but remain editable
-- [ ] Save button commits changes via API
-- [ ] Cancel button returns to table view without saving
+- [x] Form showing all requirement fields
+- [x] Hierarchy Nodes: multi-select tree picker (check nodes from hierarchy)
+- [x] Site: multi-select dropdown
+- [x] Applicable Units: multi-select dropdown
+- [x] Owner defaults to current display name
+- [x] Created By and Created Date auto-fill on creation but remain editable
+- [x] Save button commits changes via API
+- [x] Cancel button returns to table view without saving
 
 ### Stage 2 Verification
 - [ ] Create requirement "ACC Design Pressure" — Discipline=Mechanical, assign to ACC node and ACC Headers & Nozzles, Site=Cape Phase II, Units=All Units
