@@ -128,8 +128,6 @@ export default function SidePanel({ node, flatNodes, onRefresh, onSelect }: Prop
   const currentParentName =
     flatNodes.find(({ node: n }) => n.id === node.parent_id)?.node.name ?? 'Root'
 
-  const moveChanged = moveToId !== (node.parent_id ?? '')
-
   return (
     <div className="max-w-2xl">
       {/* Name row */}
@@ -266,7 +264,7 @@ export default function SidePanel({ node, flatNodes, onRefresh, onSelect }: Prop
             </select>
             <button
               onClick={() => void handleMove()}
-              disabled={saving || !moveChanged}
+              disabled={saving}
               className="px-4 py-2 text-sm bg-gray-700 text-white rounded hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed"
             >
               Move
