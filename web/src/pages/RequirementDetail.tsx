@@ -7,7 +7,7 @@
  * Pass requirementId=null to create a new requirement.
  * Pass initialParentIds to pre-populate parents (used by "Add Child").
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import {
   addLink,
   createRequirement,
@@ -307,6 +307,14 @@ export default function RequirementDetail({
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
+  // "Add Child" dropdown state
+  const [showChildMenu, setShowChildMenu] = useState(false)
+  const childMenuRef = useRef<HTMLDivElement>(null)
+  // "Link Existing" inline picker state
+  const [linkingExisting, setLinkingExisting] = useState(false)
+  const [linkingIds, setLinkingIds] = useState<string[]>([])
+  const [linkingSaving, setLinkingSaving] = useState(false)
+
   // -------------------------------------------------------------------------
   // Load on mount
   // -------------------------------------------------------------------------
@@ -412,6 +420,42 @@ export default function RequirementDetail({
     }
   }
 
+  // Close the "Add Child" dropdown when the user clicks anywhere outside it
+  useEffect(() => {
+    if (!showChildMenu) return
+    const handler = (e: MouseEvent) => {
+      if (childMenuRef.current && !childMenuRef.current.contains(e.target as Node)) {
+        setShowChildMenu(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [showChildMenu])
+
+  // -------------------------------------------------------------------------
+  // Link an existing requirement as a child of the current one
+  // -------------------------------------------------------------------------
+
+  const handleLinkExisting = async () => {
+    if (!savedDbId || linkingIds.length === 0) return
+    setLinkingSaving(true)
+    setError(null)
+    try {
+      for (const childId of linkingIds) {
+        await addLink(savedDbId, childId)
+      }
+      // Re-fetch just the detail to refresh the child list without a full reload
+      const updated = await fetchRequirement(requirementId!)
+      setChildRequirements(updated.child_requirements)
+      setLinkingExisting(false)
+      setLinkingIds([])
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to link requirement')
+    } finally {
+      setLinkingSaving(false)
+    }
+  }
+
   // -------------------------------------------------------------------------
   // Build the options list for the parent search — exclude self and SELF-000
   // (SELF-000 is already filtered out of allRequirements by the list endpoint)
@@ -419,6 +463,12 @@ export default function RequirementDetail({
 
   const parentOptions: RequirementStub[] = allRequirements
     .filter((r) => r.id !== savedDbId)
+    .map((r) => ({ id: r.id, requirement_id: r.requirement_id, title: r.title }))
+
+  // Options for "Link Existing" child picker — exclude self and already-linked children
+  const linkedChildIds = new Set(childRequirements.map((c: RequirementStub) => c.id))
+  const childLinkOptions: RequirementStub[] = allRequirements
+    .filter((r) => r.id !== savedDbId && !linkedChildIds.has(r.id))
     .map((r) => ({ id: r.id, requirement_id: r.requirement_id, title: r.title }))
 
   // -------------------------------------------------------------------------
@@ -456,12 +506,38 @@ export default function RequirementDetail({
             </button>
           )}
           {!isNew && savedDbId && (
-            <button
-              onClick={() => onAddChild(savedDbId)}
-              className="px-3 py-1.5 text-sm border border-blue-300 text-blue-600 rounded hover:bg-blue-50"
-            >
-              + Add Child
-            </button>
+            <div ref={childMenuRef} className="relative">
+              <button
+                onClick={() => setShowChildMenu((v: boolean) => !v)}
+                className="px-3 py-1.5 text-sm border border-blue-300 text-blue-600 rounded hover:bg-blue-50 flex items-center gap-1"
+              >
+                + Add Child
+                <span className="text-blue-400 text-xs">▾</span>
+              </button>
+              {showChildMenu && (
+                <div className="absolute right-0 top-9 z-30 bg-white border border-gray-200 rounded shadow-lg min-w-48 py-1">
+                  <button
+                    onClick={() => { setShowChildMenu(false); onAddChild(savedDbId) }}
+                    className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                  >
+                    <span className="font-medium">Create New</span>
+                    <span className="block text-xs text-gray-400 mt-0.5">
+                      Open a blank form pre-linked to this requirement
+                    </span>
+                  </button>
+                  <div className="border-t border-gray-100" />
+                  <button
+                    onClick={() => { setShowChildMenu(false); setLinkingExisting(true) }}
+                    className="w-full text-left px-4 py-2 text-sm text-gray-700 hover:bg-gray-50"
+                  >
+                    <span className="font-medium">Link Existing</span>
+                    <span className="block text-xs text-gray-400 mt-0.5">
+                      Assign an existing requirement as a child
+                    </span>
+                  </button>
+                </div>
+              )}
+            </div>
           )}
           <button
             onClick={onCancel}
@@ -554,10 +630,14 @@ export default function RequirementDetail({
                 />
               </Field>
 
-              {/* Child requirements: read-only list populated from the API */}
-              {childRequirements.length > 0 && (
-                <Field label="Child Requirements">
-                  <div className="flex flex-wrap gap-2">
+              {/* Child requirements: read-only list + optional "Link Existing" picker */}
+              <Field label="Child Requirements">
+                {childRequirements.length === 0 && !linkingExisting ? (
+                  <p className="text-sm text-gray-400 italic">
+                    No child requirements yet. Use "+ Add Child" above to add one.
+                  </p>
+                ) : (
+                  <div className="flex flex-wrap gap-2 mb-2">
                     {childRequirements.map((child) => (
                       <button
                         key={child.id}
@@ -570,11 +650,40 @@ export default function RequirementDetail({
                       </button>
                     ))}
                   </div>
-                  <p className="text-xs text-gray-400 mt-1.5">
-                    Click a child to open it. Use "Add Child" in the header to create a new one.
-                  </p>
-                </Field>
-              )}
+                )}
+
+                {/* Inline picker — shown when user chose "Link Existing" */}
+                {linkingExisting && (
+                  <div className="mt-2 p-3 border border-blue-200 rounded bg-blue-50 space-y-2">
+                    <p className="text-xs font-semibold text-blue-700">
+                      Select one or more requirements to link as children:
+                    </p>
+                    <RequirementSearch
+                      options={childLinkOptions}
+                      selectedIds={linkingIds}
+                      onChange={setLinkingIds}
+                      placeholder="Search by ID or title…"
+                    />
+                    <div className="flex gap-2 justify-end pt-1">
+                      <button
+                        type="button"
+                        onClick={() => { setLinkingExisting(false); setLinkingIds([]) }}
+                        className="px-3 py-1.5 text-xs border border-gray-300 text-gray-600 rounded hover:bg-white"
+                      >
+                        Cancel
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => void handleLinkExisting()}
+                        disabled={linkingIds.length === 0 || linkingSaving}
+                        className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+                      >
+                        {linkingSaving ? 'Linking…' : `Link ${linkingIds.length > 0 ? `(${linkingIds.length})` : ''}`}
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </Field>
             </div>
           </section>
 

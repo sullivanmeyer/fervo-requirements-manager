@@ -194,14 +194,19 @@ export default function App() {
         {/* ------------------------------------------------------------------ */}
         {view.page === 'requirement-detail' && (
           <div className="flex-1 overflow-hidden flex flex-col">
+            {/*
+              key forces a full unmount+remount whenever we navigate to a
+              different requirement or switch from editing to creating new.
+              Without it, React reuses the same component instance and the
+              form state (field values, saving flag, etc.) doesn't reset.
+            */}
             <RequirementDetail
+              key={view.requirementId ?? `new-${(view.initialParentIds ?? []).join('-')}`}
               requirementId={view.requirementId}
               hierarchyNodes={nodes}
               userName={userName}
               initialParentIds={view.initialParentIds}
               onSaved={(savedId) => {
-                // After saving, open the saved record's detail view so the
-                // user can see the generated ID and then navigate away
                 setView({ page: 'requirement-detail', requirementId: savedId })
               }}
               onCancel={() => setView({ page: 'requirements' })}
