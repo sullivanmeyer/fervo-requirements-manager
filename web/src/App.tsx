@@ -4,6 +4,7 @@ import type { FlatNode, HierarchyNode } from './types'
 import HierarchyTree from './components/HierarchyTree'
 import SidePanel from './components/SidePanel'
 import UserIdentity from './components/UserIdentity'
+import RequirementsTable from './pages/RequirementsTable'
 
 export function flattenTree(nodes: HierarchyNode[], depth = 0): FlatNode[] {
   const result: FlatNode[] = []
@@ -14,7 +15,10 @@ export function flattenTree(nodes: HierarchyNode[], depth = 0): FlatNode[] {
   return result
 }
 
+type Tab = 'hierarchy' | 'requirements'
+
 export default function App() {
+  const [activeTab, setActiveTab] = useState<Tab>('hierarchy')
   const [nodes, setNodes] = useState<HierarchyNode[]>([])
   const [selectedNode, setSelectedNode] = useState<HierarchyNode | null>(null)
   const [loading, setLoading] = useState(true)
@@ -64,47 +68,83 @@ export default function App() {
           Requirements Manager
         </h1>
         <div className="w-px h-5 bg-gray-200" />
-        <UserIdentity userName={userName} onChange={handleUserNameChange} />
+        {/* Tab navigation */}
+        <nav className="flex gap-1">
+          <button
+            onClick={() => setActiveTab('hierarchy')}
+            className={`px-3 py-1.5 text-sm rounded transition-colors ${
+              activeTab === 'hierarchy'
+                ? 'bg-blue-600 text-white'
+                : 'text-gray-600 hover:bg-gray-100'
+            }`}
+          >
+            System Hierarchy
+          </button>
+          <button
+            onClick={() => setActiveTab('requirements')}
+            className={`px-3 py-1.5 text-sm rounded transition-colors ${
+              activeTab === 'requirements'
+                ? 'bg-blue-600 text-white'
+                : 'text-gray-600 hover:bg-gray-100'
+            }`}
+          >
+            Requirements
+          </button>
+        </nav>
+        <div className="ml-auto">
+          <UserIdentity userName={userName} onChange={handleUserNameChange} />
+        </div>
       </header>
 
       {/* Body */}
       <main className="flex flex-1 overflow-hidden">
-        {/* Left: system hierarchy tree */}
-        <aside className="w-72 bg-white border-r border-gray-200 flex flex-col overflow-hidden shrink-0">
-          {loading ? (
-            <div className="flex items-center justify-center flex-1 text-gray-400 text-sm">
-              Loading…
-            </div>
-          ) : error ? (
-            <div className="p-4 text-sm">
-              <p className="font-medium text-red-600">Failed to load hierarchy</p>
-              <p className="mt-1 text-xs text-red-500">{error}</p>
-              <button
-                onClick={() => void loadHierarchy()}
-                className="mt-2 text-xs text-blue-600 underline"
-              >
-                Retry
-              </button>
-            </div>
-          ) : (
-            <HierarchyTree
-              nodes={nodes}
-              selectedId={selectedNode?.id ?? null}
-              onSelect={setSelectedNode}
-              onRefresh={() => void loadHierarchy()}
-            />
-          )}
-        </aside>
+        {activeTab === 'hierarchy' ? (
+          <>
+            {/* Left: system hierarchy tree */}
+            <aside className="w-72 bg-white border-r border-gray-200 flex flex-col overflow-hidden shrink-0">
+              {loading ? (
+                <div className="flex items-center justify-center flex-1 text-gray-400 text-sm">
+                  Loading…
+                </div>
+              ) : error ? (
+                <div className="p-4 text-sm">
+                  <p className="font-medium text-red-600">
+                    Failed to load hierarchy
+                  </p>
+                  <p className="mt-1 text-xs text-red-500">{error}</p>
+                  <button
+                    onClick={() => void loadHierarchy()}
+                    className="mt-2 text-xs text-blue-600 underline"
+                  >
+                    Retry
+                  </button>
+                </div>
+              ) : (
+                <HierarchyTree
+                  nodes={nodes}
+                  selectedId={selectedNode?.id ?? null}
+                  onSelect={setSelectedNode}
+                  onRefresh={() => void loadHierarchy()}
+                />
+              )}
+            </aside>
 
-        {/* Right: detail / side panel */}
-        <section className="flex-1 overflow-y-auto p-6">
-          <SidePanel
-            node={selectedNode}
-            flatNodes={flatNodes}
-            onRefresh={() => void loadHierarchy()}
-            onSelect={setSelectedNode}
+            {/* Right: detail / side panel */}
+            <section className="flex-1 overflow-y-auto p-6">
+              <SidePanel
+                node={selectedNode}
+                flatNodes={flatNodes}
+                onRefresh={() => void loadHierarchy()}
+                onSelect={setSelectedNode}
+              />
+            </section>
+          </>
+        ) : (
+          <RequirementsTable
+            hierarchyNodes={nodes}
+            userName={userName}
           />
-        </section>
+        )}
       </main>
     </div>
   )
