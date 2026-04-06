@@ -5,6 +5,8 @@ import HierarchyTree from './components/HierarchyTree'
 import SidePanel from './components/SidePanel'
 import UserIdentity from './components/UserIdentity'
 import RequirementsTable from './pages/RequirementsTable'
+import RequirementDetail from './pages/RequirementDetail'
+import DerivationTree from './pages/DerivationTree'
 
 export function flattenTree(nodes: HierarchyNode[], depth = 0): FlatNode[] {
   const result: FlatNode[] = []
@@ -15,37 +17,55 @@ export function flattenTree(nodes: HierarchyNode[], depth = 0): FlatNode[] {
   return result
 }
 
-type Tab = 'hierarchy' | 'requirements'
+// ---------------------------------------------------------------------------
+// Navigation state
+//
+// Rather than a single flat "activeTab" string, we use a discriminated union.
+// Each variant carries the data needed to render that view — e.g. the detail
+// view needs to know which requirement to show, and whether it's being
+// created fresh with a pre-set parent.
+//
+// A discriminated union is like a tagged enum: the `page` field tells you
+// which variant you have, and TypeScript can then narrow the type to know
+// exactly what other fields are available.
+// ---------------------------------------------------------------------------
+
+type AppView =
+  | { page: 'hierarchy' }
+  | { page: 'requirements' }
+  | { page: 'requirement-detail'; requirementId: string | null; initialParentIds?: string[] }
+  | { page: 'derivation-tree'; focusId: string | null }
 
 export default function App() {
-  const [activeTab, setActiveTab] = useState<Tab>('hierarchy')
+  const [view, setView] = useState<AppView>({ page: 'hierarchy' })
+
+  // Hierarchy state (used by the Hierarchy tab)
   const [nodes, setNodes] = useState<HierarchyNode[]>([])
   const [selectedNode, setSelectedNode] = useState<HierarchyNode | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  const [hierarchyLoading, setHierarchyLoading] = useState(true)
+  const [hierarchyError, setHierarchyError] = useState<string | null>(null)
+
   const [userName, setUserName] = useState<string>(
     () => localStorage.getItem('userName') ?? '',
   )
 
-  // Track selected ID separately so we can re-sync after a refresh
   const selectedIdRef = useRef<string | null>(null)
   selectedIdRef.current = selectedNode?.id ?? null
 
   const loadHierarchy = useCallback(async () => {
     try {
-      setError(null)
+      setHierarchyError(null)
       const data = await fetchHierarchy()
       setNodes(data)
-      // Keep the selected node in sync after mutations
       if (selectedIdRef.current) {
         const flat = flattenTree(data)
         const updated = flat.find((f) => f.node.id === selectedIdRef.current)
         setSelectedNode(updated?.node ?? null)
       }
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'Failed to load hierarchy')
+      setHierarchyError(e instanceof Error ? e.message : 'Failed to load hierarchy')
     } finally {
-      setLoading(false)
+      setHierarchyLoading(false)
     }
   }, [])
 
@@ -60,6 +80,14 @@ export default function App() {
 
   const flatNodes = flattenTree(nodes)
 
+  // Convenience: which top-level tab is visually active?
+  const activeTab =
+    view.page === 'hierarchy'
+      ? 'hierarchy'
+      : view.page === 'derivation-tree'
+        ? 'derivation-tree'
+        : 'requirements'
+
   return (
     <div className="flex flex-col h-screen bg-gray-50">
       {/* Header */}
@@ -68,29 +96,34 @@ export default function App() {
           Requirements Manager
         </h1>
         <div className="w-px h-5 bg-gray-200" />
+
         {/* Tab navigation */}
         <nav className="flex gap-1">
-          <button
-            onClick={() => setActiveTab('hierarchy')}
-            className={`px-3 py-1.5 text-sm rounded transition-colors ${
-              activeTab === 'hierarchy'
-                ? 'bg-blue-600 text-white'
-                : 'text-gray-600 hover:bg-gray-100'
-            }`}
-          >
-            System Hierarchy
-          </button>
-          <button
-            onClick={() => setActiveTab('requirements')}
-            className={`px-3 py-1.5 text-sm rounded transition-colors ${
-              activeTab === 'requirements'
-                ? 'bg-blue-600 text-white'
-                : 'text-gray-600 hover:bg-gray-100'
-            }`}
-          >
-            Requirements
-          </button>
+          {(
+            [
+              { id: 'hierarchy', label: 'System Hierarchy' },
+              { id: 'requirements', label: 'Requirements' },
+              { id: 'derivation-tree', label: 'Derivation Tree' },
+            ] as const
+          ).map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => {
+                if (tab.id === 'hierarchy') setView({ page: 'hierarchy' })
+                else if (tab.id === 'requirements') setView({ page: 'requirements' })
+                else setView({ page: 'derivation-tree', focusId: null })
+              }}
+              className={`px-3 py-1.5 text-sm rounded transition-colors ${
+                activeTab === tab.id
+                  ? 'bg-blue-600 text-white'
+                  : 'text-gray-600 hover:bg-gray-100'
+              }`}
+            >
+              {tab.label}
+            </button>
+          ))}
         </nav>
+
         <div className="ml-auto">
           <UserIdentity userName={userName} onChange={handleUserNameChange} />
         </div>
@@ -98,20 +131,21 @@ export default function App() {
 
       {/* Body */}
       <main className="flex flex-1 overflow-hidden">
-        {activeTab === 'hierarchy' ? (
+
+        {/* ------------------------------------------------------------------ */}
+        {/* Hierarchy tab                                                        */}
+        {/* ------------------------------------------------------------------ */}
+        {view.page === 'hierarchy' && (
           <>
-            {/* Left: system hierarchy tree */}
             <aside className="w-72 bg-white border-r border-gray-200 flex flex-col overflow-hidden shrink-0">
-              {loading ? (
+              {hierarchyLoading ? (
                 <div className="flex items-center justify-center flex-1 text-gray-400 text-sm">
                   Loading…
                 </div>
-              ) : error ? (
+              ) : hierarchyError ? (
                 <div className="p-4 text-sm">
-                  <p className="font-medium text-red-600">
-                    Failed to load hierarchy
-                  </p>
-                  <p className="mt-1 text-xs text-red-500">{error}</p>
+                  <p className="font-medium text-red-600">Failed to load hierarchy</p>
+                  <p className="mt-1 text-xs text-red-500">{hierarchyError}</p>
                   <button
                     onClick={() => void loadHierarchy()}
                     className="mt-2 text-xs text-blue-600 underline"
@@ -128,8 +162,6 @@ export default function App() {
                 />
               )}
             </aside>
-
-            {/* Right: detail / side panel */}
             <section className="flex-1 overflow-y-auto p-6">
               <SidePanel
                 node={selectedNode}
@@ -139,12 +171,68 @@ export default function App() {
               />
             </section>
           </>
-        ) : (
+        )}
+
+        {/* ------------------------------------------------------------------ */}
+        {/* Requirements table                                                   */}
+        {/* ------------------------------------------------------------------ */}
+        {view.page === 'requirements' && (
           <RequirementsTable
             hierarchyNodes={nodes}
             userName={userName}
+            onOpenDetail={(id) =>
+              setView({ page: 'requirement-detail', requirementId: id })
+            }
+            onCreateNew={() =>
+              setView({ page: 'requirement-detail', requirementId: null })
+            }
           />
         )}
+
+        {/* ------------------------------------------------------------------ */}
+        {/* Requirement detail / create                                          */}
+        {/* ------------------------------------------------------------------ */}
+        {view.page === 'requirement-detail' && (
+          <div className="flex-1 overflow-hidden flex flex-col">
+            <RequirementDetail
+              requirementId={view.requirementId}
+              hierarchyNodes={nodes}
+              userName={userName}
+              initialParentIds={view.initialParentIds}
+              onSaved={(savedId) => {
+                // After saving, open the saved record's detail view so the
+                // user can see the generated ID and then navigate away
+                setView({ page: 'requirement-detail', requirementId: savedId })
+              }}
+              onCancel={() => setView({ page: 'requirements' })}
+              onViewInTree={(id) =>
+                setView({ page: 'derivation-tree', focusId: id })
+              }
+              onAddChild={(parentId) =>
+                setView({
+                  page: 'requirement-detail',
+                  requirementId: null,
+                  initialParentIds: [parentId],
+                })
+              }
+            />
+          </div>
+        )}
+
+        {/* ------------------------------------------------------------------ */}
+        {/* Derivation tree                                                      */}
+        {/* ------------------------------------------------------------------ */}
+        {view.page === 'derivation-tree' && (
+          <div className="flex-1 overflow-hidden flex flex-col">
+            <DerivationTree
+              focusId={view.focusId}
+              onSelect={(id) =>
+                setView({ page: 'requirement-detail', requirementId: id })
+              }
+            />
+          </div>
+        )}
+
       </main>
     </div>
   )

@@ -111,40 +111,40 @@ Refer to the PRD (v0.3) for full field definitions and business logic.
 - [x] Cancel button returns to table view without saving
 
 ### Stage 2 Verification
-- [ ] Create requirement "ACC Design Pressure" — Discipline=Mechanical, assign to ACC node and ACC Headers & Nozzles, Site=Cape Phase II, Units=All Units
-- [ ] Verify it appears in table with generated ID like MECH-001
-- [ ] Edit it: change Status from Draft to Under Review — verify table updates
-- [ ] Create second requirement with Discipline=Electrical — verify it gets ELEC-001
-- [ ] Verify hierarchy nodes show correctly as tags/list in the table column
+- [x] Create requirement "ACC Design Pressure" — Discipline=Mechanical, assign to ACC node and ACC Headers & Nozzles, Site=Cape Phase II, Units=All Units
+- [x] Verify it appears in table with generated ID like MECH-001
+- [x] Edit it: change Status from Draft to Under Review — verify table updates
+- [x] Create second requirement with Discipline=Electrical — verify it gets ELEC-001
+- [x] Verify hierarchy nodes show correctly as tags/list in the table column
 
 ---
 
 ## Stage 3 — Traceability Links (Parent/Child Requirements)
 
 ### Backend — Database
-- [ ] Alembic migration: `requirement_links` table (parent_requirement_id UUID FK, child_requirement_id UUID FK, created_at). Unique constraint on the pair.
-- [ ] System-seeded "Self-Derived" requirement record (special ID like SELF-000, not editable by users)
+- [x] Alembic migration: `requirement_links` table (parent_requirement_id UUID FK, child_requirement_id UUID FK, created_at). Unique constraint on the pair.
+- [x] System-seeded "Self-Derived" requirement record (special ID like SELF-000, not editable by users)
 
 ### Backend — Logic
-- [ ] Cycle detection: before inserting a link, walk ancestor chain of proposed parent to confirm proposed child is not already an ancestor. Reject with clear error if cycle detected.
-- [ ] `POST /api/requirement-links` — add a parent/child link
-- [ ] `DELETE /api/requirement-links` — remove a parent/child link
-- [ ] `GET /api/requirements/{id}/ancestors` — recursive upward traversal
-- [ ] `GET /api/requirements/{id}/descendants` — recursive downward traversal
-- [ ] Update `GET /api/requirements/{id}` to include parent_requirements and child_requirements lists
+- [x] Cycle detection: before inserting a link, walk ancestor chain of proposed parent to confirm proposed child is not already an ancestor. Reject with clear error if cycle detected.
+- [x] `POST /api/requirement-links` — add a parent/child link
+- [x] `DELETE /api/requirement-links` — remove a parent/child link
+- [x] `GET /api/requirements/{id}/ancestors` — recursive upward traversal
+- [x] `GET /api/requirements/{id}/descendants` — recursive downward traversal
+- [x] Update `GET /api/requirements/{id}` to include parent_requirements and child_requirements lists
 
 ### Frontend — Requirement Detail/Edit View Updates
-- [ ] Parent Requirement(s) field: searchable multi-select dropdown listing all requirements. Defaults to "Self-Derived" if nothing selected.
-- [ ] Child Requirement(s) field: read-only auto-populated list, each child is a clickable link
-- [ ] "Add Child" button: creates new requirement pre-populated with current requirement as parent
-- [ ] Bi-directional sync: adding B as child of A shows A as parent of B, and vice versa
+- [x] Parent Requirement(s) field: searchable multi-select dropdown listing all requirements. Defaults to "Self-Derived" if nothing selected.
+- [x] Child Requirement(s) field: read-only auto-populated list, each child is a clickable link
+- [x] "Add Child" button: creates new requirement pre-populated with current requirement as parent
+- [x] Bi-directional sync: adding B as child of A shows A as parent of B, and vice versa
 
 ### Frontend — Requirement Derivation Tree View
-- [ ] New page/tab: navigable collapsible tree of requirements by parent/child links
-- [ ] Each tree node shows: Requirement ID, Title, Classification, Status, Owner, Hierarchy Nodes (as tags)
-- [ ] Click a node to open its detail view
-- [ ] "View in Tree" button on detail view opens tree centered on that requirement
-- [ ] Tree rooted at Self-Derived shows full derivation hierarchy
+- [x] New page/tab: navigable collapsible tree of requirements by parent/child links
+- [x] Each tree node shows: Requirement ID, Title, Classification, Status, Owner, Hierarchy Nodes (as tags)
+- [x] Click a node to open its detail view
+- [x] "View in Tree" button on detail view opens tree centered on that requirement
+- [x] Tree rooted at Self-Derived shows full derivation hierarchy
 
 ### Stage 3 Verification
 - [ ] Create three requirements forming a chain: plant-level → system-level → component-level

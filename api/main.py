@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from routers import hierarchy, requirements
+from routers import hierarchy, requirement_links, requirements
 
 app = FastAPI(title="Requirements Management API", version="0.1.0")
 
@@ -15,6 +15,7 @@ app.add_middleware(
 
 app.include_router(hierarchy.router, prefix="/api", tags=["hierarchy"])
 app.include_router(requirements.router, prefix="/api", tags=["requirements"])
+app.include_router(requirement_links.router, prefix="/api", tags=["requirement-links"])
 
 
 @app.get("/health")

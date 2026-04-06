@@ -50,6 +50,13 @@ export interface RequirementListItem {
   units: { id: string; name: string }[]
 }
 
+/** Minimal stub used in parent/child link lists */
+export interface RequirementStub {
+  id: string
+  requirement_id: string
+  title: string
+}
+
 /** Full record returned by the detail endpoint */
 export interface RequirementDetail extends RequirementListItem {
   statement: string
@@ -62,6 +69,17 @@ export interface RequirementDetail extends RequirementListItem {
   tags: string[]
   created_at: string
   updated_at: string
+  parent_requirements: RequirementStub[]
+  child_requirements: RequirementStub[]
+}
+
+// ---------------------------------------------------------------------------
+// Traceability links
+// ---------------------------------------------------------------------------
+
+export interface RequirementLink {
+  parent_requirement_id: string
+  child_requirement_id: string
 }
 
 export interface RequirementListResponse {

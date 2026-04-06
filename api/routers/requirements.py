@@ -8,10 +8,14 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from database import get_db
-from models import HierarchyNode, Requirement, Site, Unit
+from models import HierarchyNode, Requirement, RequirementLink, Site, Unit
 from schemas import RequirementCreate, RequirementUpdate
 
 router = APIRouter()
+
+# SELF-000 is a system-seeded record that anchors the derivation tree root.
+# It must not be editable or deletable by end users.
+SELF_DERIVED_ID = "SELF-000"
 
 # Maps discipline enum value → prefix used in auto-generated requirement_id
 DISCIPLINE_PREFIXES: dict[str, str] = {
@@ -45,8 +49,22 @@ def _generate_requirement_id(discipline: str, db: Session) -> str:
     return f"{prefix}-{padded}"
 
 
-def _requirement_to_dict(req: Requirement, detail: bool = False) -> dict[str, Any]:
-    """Serialize a Requirement ORM object to a JSON-friendly dict."""
+def _req_stub(r: Requirement) -> dict[str, Any]:
+    """Minimal representation used in parent/child link lists."""
+    return {"id": str(r.id), "requirement_id": r.requirement_id, "title": r.title}
+
+
+def _requirement_to_dict(
+    req: Requirement,
+    detail: bool = False,
+    db: Session | None = None,
+) -> dict[str, Any]:
+    """Serialize a Requirement ORM object to a JSON-friendly dict.
+
+    When detail=True and a db session is provided, the response also
+    includes parent_requirements and child_requirements lists — the two
+    ends of every traceability link touching this requirement.
+    """
     base = {
         "id": str(req.id),
         "requirement_id": req.requirement_id,
@@ -64,6 +82,29 @@ def _requirement_to_dict(req: Requirement, detail: bool = False) -> dict[str, An
         "units": [{"id": str(u.id), "name": u.name} for u in req.units],
     }
     if detail:
+        parent_reqs: list[dict] = []
+        child_reqs: list[dict] = []
+        if db is not None:
+            parent_links = (
+                db.query(RequirementLink)
+                .filter(RequirementLink.child_requirement_id == req.id)
+                .all()
+            )
+            for lnk in parent_links:
+                parent = db.get(Requirement, lnk.parent_requirement_id)
+                if parent:
+                    parent_reqs.append(_req_stub(parent))
+
+            child_links = (
+                db.query(RequirementLink)
+                .filter(RequirementLink.parent_requirement_id == req.id)
+                .all()
+            )
+            for lnk in child_links:
+                child = db.get(Requirement, lnk.child_requirement_id)
+                if child:
+                    child_reqs.append(_req_stub(child))
+
         base.update(
             {
                 "statement": req.statement,
@@ -80,9 +121,32 @@ def _requirement_to_dict(req: Requirement, detail: bool = False) -> dict[str, An
                 "tags": req.tags or [],
                 "created_at": req.created_at.isoformat(),
                 "updated_at": req.updated_at.isoformat(),
+                "parent_requirements": parent_reqs,
+                "child_requirements": child_reqs,
             }
         )
     return base
+
+
+# ---------------------------------------------------------------------------
+# System record endpoint
+# ---------------------------------------------------------------------------
+
+
+@router.get("/self-derived")
+def get_self_derived(db: Session = Depends(get_db)):
+    """
+    Return the minimal fields of the SELF-000 record so the frontend can
+    use its real UUID when building the derivation tree.
+    """
+    req = (
+        db.query(Requirement)
+        .filter(Requirement.requirement_id == SELF_DERIVED_ID)
+        .first()
+    )
+    if not req:
+        raise HTTPException(status_code=404, detail="Self-Derived record not found")
+    return {"id": str(req.id), "requirement_id": req.requirement_id, "title": req.title}
 
 
 # ---------------------------------------------------------------------------
@@ -119,9 +183,12 @@ def list_requirements(
     render a page indicator without a second request.
     """
     offset = (page - 1) * page_size
-    total = db.query(Requirement).count()
+    base_q = db.query(Requirement).filter(
+        Requirement.requirement_id != SELF_DERIVED_ID
+    )
+    total = base_q.count()
     reqs = (
-        db.query(Requirement)
+        base_q
         .order_by(Requirement.requirement_id)
         .offset(offset)
         .limit(page_size)
@@ -140,7 +207,7 @@ def get_requirement(req_id: UUID, db: Session = Depends(get_db)):
     req = db.get(Requirement, req_id)
     if not req:
         raise HTTPException(status_code=404, detail="Requirement not found")
-    return _requirement_to_dict(req, detail=True)
+    return _requirement_to_dict(req, detail=True, db=db)
 
 
 @router.post("/requirements", status_code=201)
@@ -188,7 +255,7 @@ def create_requirement(data: RequirementCreate, db: Session = Depends(get_db)):
     db.add(req)
     db.commit()
     db.refresh(req)
-    return _requirement_to_dict(req, detail=True)
+    return _requirement_to_dict(req, detail=True, db=db)
 
 
 @router.put("/requirements/{req_id}")
@@ -198,6 +265,12 @@ def update_requirement(
     req = db.get(Requirement, req_id)
     if not req:
         raise HTTPException(status_code=404, detail="Requirement not found")
+
+    if req.requirement_id == SELF_DERIVED_ID:
+        raise HTTPException(
+            status_code=403,
+            detail="The Self-Derived record is read-only and cannot be edited",
+        )
 
     # Update scalar fields (exclude relationship ID lists)
     scalar_fields = data.model_dump(
@@ -235,4 +308,4 @@ def update_requirement(
     req.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(req)
-    return _requirement_to_dict(req, detail=True)
+    return _requirement_to_dict(req, detail=True, db=db)

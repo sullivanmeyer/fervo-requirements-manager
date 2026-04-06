@@ -1,7 +1,6 @@
 import { useEffect, useState } from 'react'
 import { fetchRequirements } from '../api/requirements'
 import type { HierarchyNode, RequirementListItem } from '../types'
-import RequirementDetail from './RequirementDetail'
 
 // ---------------------------------------------------------------------------
 // Column definition
@@ -121,13 +120,20 @@ function renderCell(col: string, req: RequirementListItem): React.ReactNode {
 interface Props {
   hierarchyNodes: HierarchyNode[]
   userName: string
+  onOpenDetail: (id: string) => void
+  onCreateNew: () => void
 }
 
 // ---------------------------------------------------------------------------
 // Component
 // ---------------------------------------------------------------------------
 
-export default function RequirementsTable({ hierarchyNodes, userName }: Props) {
+export default function RequirementsTable({
+  hierarchyNodes: _hierarchyNodes,
+  userName: _userName,
+  onOpenDetail,
+  onCreateNew,
+}: Props) {
   const [items, setItems] = useState<RequirementListItem[]>([])
   const [total, setTotal] = useState(0)
   const [page, setPage] = useState(1)
@@ -142,11 +148,6 @@ export default function RequirementsTable({ hierarchyNodes, userName }: Props) {
   // Sort state: key is a column key, direction is asc or desc
   const [sortKey, setSortKey] = useState<string>('requirement_id')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
-
-  // Detail view: null = table, string = requirement id being viewed/created
-  const [detailId, setDetailId] = useState<string | null>(null)
-  // 'new' is used as a sentinel when creating a new requirement
-  const [isCreating, setIsCreating] = useState(false)
 
   const load = async (p = page) => {
     setLoading(true)
@@ -198,29 +199,6 @@ export default function RequirementsTable({ hierarchyNodes, userName }: Props) {
   const visibleColumns = columns.filter((c) => c.visible)
 
   // -------------------------------------------------------------------------
-  // Detail view
-  // -------------------------------------------------------------------------
-
-  if (detailId !== null || isCreating) {
-    return (
-      <RequirementDetail
-        requirementId={isCreating ? null : detailId}
-        hierarchyNodes={hierarchyNodes}
-        userName={userName}
-        onSaved={() => {
-          setDetailId(null)
-          setIsCreating(false)
-          void load(page)
-        }}
-        onCancel={() => {
-          setDetailId(null)
-          setIsCreating(false)
-        }}
-      />
-    )
-  }
-
-  // -------------------------------------------------------------------------
   // Table view
   // -------------------------------------------------------------------------
 
@@ -264,7 +242,7 @@ export default function RequirementsTable({ hierarchyNodes, userName }: Props) {
           )}
           {/* Create */}
           <button
-            onClick={() => setIsCreating(true)}
+            onClick={onCreateNew}
             className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
           >
             + Create Requirement
@@ -322,7 +300,7 @@ export default function RequirementsTable({ hierarchyNodes, userName }: Props) {
               {sorted.map((req, i) => (
                 <tr
                   key={req.id}
-                  onClick={() => setDetailId(req.id)}
+                  onClick={() => onOpenDetail(req.id)}
                   className={`border-b border-gray-100 cursor-pointer hover:bg-blue-50 transition-colors ${
                     i % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'
                   }`}

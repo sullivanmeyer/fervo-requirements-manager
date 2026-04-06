@@ -32,6 +32,20 @@ VERIFICATION_METHODS = {
 
 
 # ---------------------------------------------------------------------------
+# Requirement link schemas
+# ---------------------------------------------------------------------------
+
+class RequirementLinkCreate(BaseModel):
+    parent_requirement_id: UUID
+    child_requirement_id: UUID
+
+
+class RequirementLinkDelete(BaseModel):
+    parent_requirement_id: UUID
+    child_requirement_id: UUID
+
+
+# ---------------------------------------------------------------------------
 # Hierarchy schemas
 # ---------------------------------------------------------------------------
 

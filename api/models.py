@@ -1,7 +1,7 @@
 import uuid
 from datetime import datetime
 
-from sqlalchemy import Boolean, Column, DateTime, Date, ForeignKey, Integer, Table, Text
+from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, Date, ForeignKey, Integer, Table, Text
 from sqlalchemy.dialects.postgresql import ARRAY, UUID
 from sqlalchemy.orm import relationship
 
@@ -168,4 +168,38 @@ class Requirement(Base):
         "Unit",
         secondary=requirement_units,
         lazy="joined",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Requirement traceability links
+# ---------------------------------------------------------------------------
+
+class RequirementLink(Base):
+    """
+    A directed edge in the requirement derivation tree.
+    One row means: child_requirement derives from parent_requirement.
+    The composite primary key also enforces uniqueness on the pair.
+    """
+    __tablename__ = "requirement_links"
+
+    parent_requirement_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("requirements.id", ondelete="CASCADE"),
+        primary_key=True,
+        nullable=False,
+    )
+    child_requirement_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("requirements.id", ondelete="CASCADE"),
+        primary_key=True,
+        nullable=False,
+    )
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    __table_args__ = (
+        CheckConstraint(
+            "parent_requirement_id != child_requirement_id",
+            name="ck_requirement_links_no_self_loop",
+        ),
     )

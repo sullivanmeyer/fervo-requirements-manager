@@ -1,28 +1,37 @@
 /**
  * RequirementDetail
  *
- * Full create / edit form for a single requirement.
- * Pass requirementId=null to create a new one.
+ * Full create / edit form for a single requirement, now including
+ * parent/child traceability link management (Stage 3).
+ *
+ * Pass requirementId=null to create a new requirement.
+ * Pass initialParentIds to pre-populate parents (used by "Add Child").
  */
 import { useEffect, useState } from 'react'
 import {
+  addLink,
   createRequirement,
+  fetchAllRequirements,
   fetchRequirement,
   fetchSites,
   fetchUnits,
+  removeLink,
   updateRequirement,
 } from '../api/requirements'
 import type {
   HierarchyNode,
   RequirementDetail as ReqDetail,
+  RequirementListItem,
+  RequirementStub,
   Site,
   Unit,
 } from '../types'
 import HierarchyNodePicker from '../components/HierarchyNodePicker'
+import RequirementSearch from '../components/RequirementSearch'
 import TagInput from '../components/TagInput'
 
 // ---------------------------------------------------------------------------
-// Allowed enum values (must match api/schemas.py)
+// Enum values (must match api/schemas.py)
 // ---------------------------------------------------------------------------
 
 const CLASSIFICATIONS = ['Requirement', 'Guideline']
@@ -50,11 +59,14 @@ const VERIFICATION_METHODS = [
 // ---------------------------------------------------------------------------
 
 interface Props {
-  requirementId: string | null  // null = creating new
+  requirementId: string | null        // null = creating new
   hierarchyNodes: HierarchyNode[]
   userName: string
-  onSaved: () => void
+  initialParentIds?: string[]         // pre-link parents (used by "Add Child")
+  onSaved: (savedId: string) => void
   onCancel: () => void
+  onViewInTree: (id: string) => void  // navigate to derivation tree tab
+  onAddChild: (parentId: string) => void
 }
 
 interface FormState {
@@ -127,7 +139,7 @@ function formFromDetail(req: ReqDetail): FormState {
 }
 
 // ---------------------------------------------------------------------------
-// Small helpers
+// Small layout helpers
 // ---------------------------------------------------------------------------
 
 function Field({
@@ -174,12 +186,10 @@ function SelectInput({
   value,
   options,
   onChange,
-  placeholder,
 }: {
   value: string
   options: string[]
   onChange: (v: string) => void
-  placeholder?: string
 }) {
   return (
     <select
@@ -187,11 +197,6 @@ function SelectInput({
       onChange={(e) => onChange(e.target.value)}
       className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white"
     >
-      {placeholder && (
-        <option value="" disabled>
-          {placeholder}
-        </option>
-      )}
       {options.map((o) => (
         <option key={o} value={o}>
           {o}
@@ -245,6 +250,32 @@ function MultiSelectInput({
 }
 
 // ---------------------------------------------------------------------------
+// Sync helper: given original and desired parent ID sets, fire add/remove
+// API calls for the diff.  Returns an error string if any call fails.
+// ---------------------------------------------------------------------------
+
+async function syncParentLinks(
+  childId: string,
+  originalParentIds: string[],
+  desiredParentIds: string[],
+): Promise<string | null> {
+  const toAdd = desiredParentIds.filter((id) => !originalParentIds.includes(id))
+  const toRemove = originalParentIds.filter((id) => !desiredParentIds.includes(id))
+
+  try {
+    for (const parentId of toRemove) {
+      await removeLink(parentId, childId)
+    }
+    for (const parentId of toAdd) {
+      await addLink(parentId, childId)
+    }
+    return null
+  } catch (e) {
+    return e instanceof Error ? e.message : 'Link update failed'
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
 
@@ -252,13 +283,24 @@ export default function RequirementDetail({
   requirementId,
   hierarchyNodes,
   userName,
+  initialParentIds = [],
   onSaved,
   onCancel,
+  onViewInTree,
+  onAddChild,
 }: Props) {
   const isNew = requirementId === null
 
   const [form, setForm] = useState<FormState>(emptyForm(userName))
   const [existingReqId, setExistingReqId] = useState<string | null>(null)
+  const [savedDbId, setSavedDbId] = useState<string | null>(null)
+
+  // Parent link state: what the DB currently has vs what the user selected
+  const [originalParentIds, setOriginalParentIds] = useState<string[]>(initialParentIds)
+  const [selectedParentIds, setSelectedParentIds] = useState<string[]>(initialParentIds)
+  const [childRequirements, setChildRequirements] = useState<RequirementStub[]>([])
+
+  const [allRequirements, setAllRequirements] = useState<RequirementListItem[]>([])
   const [sites, setSites] = useState<Site[]>([])
   const [units, setUnits] = useState<Unit[]>([])
   const [loading, setLoading] = useState(!isNew)
@@ -266,28 +308,38 @@ export default function RequirementDetail({
   const [error, setError] = useState<string | null>(null)
 
   // -------------------------------------------------------------------------
-  // Load existing requirement + reference data
+  // Load on mount
   // -------------------------------------------------------------------------
 
   useEffect(() => {
-    const loadRef = async () => {
-      const [s, u] = await Promise.all([fetchSites(), fetchUnits()])
-      setSites(s)
-      setUnits(u)
-    }
-
     if (isNew) {
-      void loadRef()
+      // For a new requirement: just fetch reference data in parallel
+      void Promise.all([fetchAllRequirements(), fetchSites(), fetchUnits()]).then(
+        ([reqs, s, u]) => {
+          setAllRequirements(reqs)
+          setSites(s)
+          setUnits(u)
+        },
+      )
     } else {
       const loadAll = async () => {
         try {
-          const [req, s, u] = await Promise.all([
+          const [req, reqs, s, u] = await Promise.all([
             fetchRequirement(requirementId!),
+            fetchAllRequirements(),
             fetchSites(),
             fetchUnits(),
           ])
           setForm(formFromDetail(req))
           setExistingReqId(req.requirement_id)
+          setSavedDbId(req.id)
+
+          const parentIds = req.parent_requirements.map((p) => p.id)
+          setOriginalParentIds(parentIds)
+          setSelectedParentIds(parentIds)
+          setChildRequirements(req.child_requirements)
+
+          setAllRequirements(reqs)
           setSites(s)
           setUnits(u)
         } catch (e) {
@@ -301,7 +353,7 @@ export default function RequirementDetail({
   }, [isNew, requirementId])
 
   // -------------------------------------------------------------------------
-  // Field updater helper
+  // Field updater
   // -------------------------------------------------------------------------
 
   const set = <K extends keyof FormState>(key: K, value: FormState[K]) => {
@@ -309,7 +361,7 @@ export default function RequirementDetail({
   }
 
   // -------------------------------------------------------------------------
-  // Save
+  // Save: scalar fields first, then sync parent links
   // -------------------------------------------------------------------------
 
   const handleSave = async () => {
@@ -323,7 +375,6 @@ export default function RequirementDetail({
 
     const payload = {
       ...form,
-      // Convert empty strings back to undefined so the API omits them
       last_modified_by: form.last_modified_by || undefined,
       last_modified_date: form.last_modified_date || undefined,
       change_history: form.change_history || undefined,
@@ -332,17 +383,42 @@ export default function RequirementDetail({
     }
 
     try {
+      let savedId: string
       if (isNew) {
-        await createRequirement(payload)
+        const created = await createRequirement(payload)
+        savedId = created.id
       } else {
-        await updateRequirement(requirementId!, payload)
+        const updated = await updateRequirement(requirementId!, payload)
+        savedId = updated.id
       }
-      onSaved()
+
+      // Sync parent links against what was in the DB before this save
+      const linkError = await syncParentLinks(
+        savedId,
+        originalParentIds,
+        selectedParentIds,
+      )
+      if (linkError) {
+        setError(`Requirement saved, but link update failed: ${linkError}`)
+        setSaving(false)
+        return
+      }
+
+      onSaved(savedId)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Save failed')
       setSaving(false)
     }
   }
+
+  // -------------------------------------------------------------------------
+  // Build the options list for the parent search — exclude self and SELF-000
+  // (SELF-000 is already filtered out of allRequirements by the list endpoint)
+  // -------------------------------------------------------------------------
+
+  const parentOptions: RequirementStub[] = allRequirements
+    .filter((r) => r.id !== savedDbId)
+    .map((r) => ({ id: r.id, requirement_id: r.requirement_id, title: r.title }))
 
   // -------------------------------------------------------------------------
   // Render
@@ -359,20 +435,33 @@ export default function RequirementDetail({
   return (
     <div className="flex flex-col h-full">
       {/* Header / breadcrumb */}
-      <div className="flex items-center gap-3 px-4 py-3 bg-white border-b border-gray-200 shrink-0">
-        <button
-          onClick={onCancel}
-          className="text-sm text-blue-600 hover:underline"
-        >
+      <div className="flex items-center gap-3 px-4 py-3 bg-white border-b border-gray-200 shrink-0 flex-wrap">
+        <button onClick={onCancel} className="text-sm text-blue-600 hover:underline">
           ← Requirements
         </button>
         <span className="text-gray-400">/</span>
         <span className="text-sm font-medium text-gray-700">
-          {isNew
-            ? 'New Requirement'
-            : existingReqId ?? requirementId}
+          {isNew ? 'New Requirement' : (existingReqId ?? requirementId)}
         </span>
-        <div className="ml-auto flex gap-2">
+
+        <div className="ml-auto flex gap-2 flex-wrap">
+          {/* "View in Tree" only makes sense for saved requirements */}
+          {!isNew && savedDbId && (
+            <button
+              onClick={() => onViewInTree(savedDbId)}
+              className="px-3 py-1.5 text-sm border border-gray-300 text-gray-600 rounded hover:bg-gray-50"
+            >
+              View in Tree
+            </button>
+          )}
+          {!isNew && savedDbId && (
+            <button
+              onClick={() => onAddChild(savedDbId)}
+              className="px-3 py-1.5 text-sm border border-blue-300 text-blue-600 rounded hover:bg-blue-50"
+            >
+              + Add Child
+            </button>
+          )}
           <button
             onClick={onCancel}
             className="px-3 py-1.5 text-sm border border-gray-300 text-gray-600 rounded hover:bg-gray-50"
@@ -400,7 +489,7 @@ export default function RequirementDetail({
       <div className="flex-1 overflow-y-auto px-6 py-6">
         <div className="max-w-4xl space-y-6">
 
-          {/* Core identity */}
+          {/* Identity */}
           <section>
             <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4 pb-1 border-b border-gray-100">
               Identity
@@ -443,6 +532,48 @@ export default function RequirementDetail({
                   onChange={(v) => set('source_type', v)}
                 />
               </Field>
+            </div>
+          </section>
+
+          {/* Traceability */}
+          <section>
+            <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4 pb-1 border-b border-gray-100">
+              Traceability
+            </h2>
+            <div className="space-y-4">
+              <Field label="Parent Requirement(s)">
+                <p className="text-xs text-gray-400 mb-1.5">
+                  Leave blank to imply Self-Derived (no upstream source).
+                </p>
+                <RequirementSearch
+                  options={parentOptions}
+                  selectedIds={selectedParentIds}
+                  onChange={setSelectedParentIds}
+                  placeholder="Search requirements to set as parents…"
+                />
+              </Field>
+
+              {/* Child requirements: read-only list populated from the API */}
+              {childRequirements.length > 0 && (
+                <Field label="Child Requirements">
+                  <div className="flex flex-wrap gap-2">
+                    {childRequirements.map((child) => (
+                      <button
+                        key={child.id}
+                        type="button"
+                        onClick={() => onSaved(child.id)}
+                        className="px-2.5 py-1 bg-indigo-50 text-indigo-700 text-xs rounded border border-indigo-200 font-mono hover:bg-indigo-100 transition-colors"
+                        title={child.title}
+                      >
+                        {child.requirement_id}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-xs text-gray-400 mt-1.5">
+                    Click a child to open it. Use "Add Child" in the header to create a new one.
+                  </p>
+                </Field>
+              )}
             </div>
           </section>
 
@@ -537,16 +668,10 @@ export default function RequirementDetail({
             </h2>
             <div className="grid grid-cols-2 gap-4">
               <Field label="Owner" required>
-                <TextInput
-                  value={form.owner}
-                  onChange={(v) => set('owner', v)}
-                />
+                <TextInput value={form.owner} onChange={(v) => set('owner', v)} />
               </Field>
               <Field label="Created By" required>
-                <TextInput
-                  value={form.created_by}
-                  onChange={(v) => set('created_by', v)}
-                />
+                <TextInput value={form.created_by} onChange={(v) => set('created_by', v)} />
               </Field>
               <Field label="Created Date" required>
                 <input
@@ -580,10 +705,7 @@ export default function RequirementDetail({
             </h2>
             <div className="space-y-4">
               <Field label="Tags">
-                <TagInput
-                  tags={form.tags}
-                  onChange={(t) => set('tags', t)}
-                />
+                <TagInput tags={form.tags} onChange={(t) => set('tags', t)} />
               </Field>
               <Field label="Change History">
                 <textarea
