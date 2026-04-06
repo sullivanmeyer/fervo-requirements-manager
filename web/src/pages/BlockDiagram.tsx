@@ -164,41 +164,47 @@ export default function BlockDiagram({ hierarchyNodes, onOpenDetail }: Props) {
       for (const id of ids) nodeToModule.set(id, moduleId)
     }
 
-    // Map each requirement ID → which module it belongs to
-    // (a req may be linked to multiple hierarchy nodes; we assign it to the
-    //  first matching module we find — good enough for the visual)
-    const reqToModule = new Map<string, string>()
+    // Map each requirement ID → all modules it belongs to
+    // (a req linked to nodes in multiple modules appears in each of them)
+    const reqToModules = new Map<string, Set<string>>()
     for (const req of allRequirements) {
       for (const hn of req.hierarchy_nodes) {
         const modId = nodeToModule.get(hn.id)
         if (modId) {
-          reqToModule.set(req.id, modId)
-          break
+          if (!reqToModules.has(req.id)) reqToModules.set(req.id, new Set())
+          reqToModules.get(req.id)!.add(modId)
         }
       }
     }
 
-    // Group requirements by module
+    // Group requirements by module — a req can appear in multiple blocks
     const blockReqs = new Map<string, RequirementListItem[]>()
     for (const mod of modules) blockReqs.set(mod.id, [])
     for (const req of allRequirements) {
-      const modId = reqToModule.get(req.id)
-      if (modId && blockReqs.has(modId)) {
-        blockReqs.get(modId)!.push(req)
+      const modIds = reqToModules.get(req.id)
+      if (modIds) {
+        for (const modId of modIds) {
+          if (blockReqs.has(modId)) blockReqs.get(modId)!.push(req)
+        }
       }
     }
 
     // Compute inter-block arrows: link parent in module A → child in module B
+    // A req in multiple modules can generate arrows from each of those modules
     const arrowSet = new Set<string>()
     const arrows: Arrow[] = []
     for (const link of allLinks) {
-      const fromMod = reqToModule.get(link.parent_requirement_id)
-      const toMod = reqToModule.get(link.child_requirement_id)
-      if (fromMod && toMod && fromMod !== toMod) {
-        const key = `${fromMod}→${toMod}`
-        if (!arrowSet.has(key)) {
-          arrowSet.add(key)
-          arrows.push({ fromModuleId: fromMod, toModuleId: toMod })
+      const fromMods = reqToModules.get(link.parent_requirement_id) ?? new Set<string>()
+      const toMods = reqToModules.get(link.child_requirement_id) ?? new Set<string>()
+      for (const fromMod of fromMods) {
+        for (const toMod of toMods) {
+          if (fromMod !== toMod) {
+            const key = `${fromMod}→${toMod}`
+            if (!arrowSet.has(key)) {
+              arrowSet.add(key)
+              arrows.push({ fromModuleId: fromMod, toModuleId: toMod })
+            }
+          }
         }
       }
     }
