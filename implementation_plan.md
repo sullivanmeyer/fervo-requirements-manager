@@ -147,12 +147,12 @@ Refer to the PRD (v0.3) for full field definitions and business logic.
 - [x] Tree rooted at Self-Derived shows full derivation hierarchy
 
 ### Stage 3 Verification
-- [ ] Create three requirements forming a chain: plant-level → system-level → component-level
-- [ ] Set parent/child links between them
-- [ ] Open tree view — verify three-node chain is visible
-- [ ] Click component-level requirement — verify Parent Requirements shows system-level one
-- [ ] Click "View in Tree" — verify tree shows full chain from Self-Derived down
-- [ ] Attempt to create a cycle (make component-level a parent of plant-level) — verify app rejects it with clear error
+- [x] Create three requirements forming a chain: plant-level → system-level → component-level
+- [x] Set parent/child links between them
+- [x] Open tree view — verify three-node chain is visible
+- [x] Click component-level requirement — verify Parent Requirements shows system-level one
+- [x] Click "View in Tree" — verify tree shows full chain from Self-Derived down
+- [x] Attempt to create a cycle (make component-level a parent of plant-level) — verify app rejects it with clear error
 - [ ] Add a child from the detail view — verify new requirement is pre-linked
 
 ---

@@ -7,6 +7,7 @@ import UserIdentity from './components/UserIdentity'
 import RequirementsTable from './pages/RequirementsTable'
 import RequirementDetail from './pages/RequirementDetail'
 import DerivationTree from './pages/DerivationTree'
+import BlockDiagram from './pages/BlockDiagram'
 
 export function flattenTree(nodes: HierarchyNode[], depth = 0): FlatNode[] {
   const result: FlatNode[] = []
@@ -35,6 +36,7 @@ type AppView =
   | { page: 'requirements' }
   | { page: 'requirement-detail'; requirementId: string | null; initialParentIds?: string[] }
   | { page: 'derivation-tree'; focusId: string | null }
+  | { page: 'block-diagram' }
 
 export default function App() {
   const [view, setView] = useState<AppView>({ page: 'hierarchy' })
@@ -86,7 +88,9 @@ export default function App() {
       ? 'hierarchy'
       : view.page === 'derivation-tree'
         ? 'derivation-tree'
-        : 'requirements'
+        : view.page === 'block-diagram'
+          ? 'block-diagram'
+          : 'requirements'
 
   return (
     <div className="flex flex-col h-screen bg-gray-50">
@@ -104,6 +108,7 @@ export default function App() {
               { id: 'hierarchy', label: 'System Hierarchy' },
               { id: 'requirements', label: 'Requirements' },
               { id: 'derivation-tree', label: 'Derivation Tree' },
+              { id: 'block-diagram', label: 'Block Diagram' },
             ] as const
           ).map((tab) => (
             <button
@@ -111,7 +116,8 @@ export default function App() {
               onClick={() => {
                 if (tab.id === 'hierarchy') setView({ page: 'hierarchy' })
                 else if (tab.id === 'requirements') setView({ page: 'requirements' })
-                else setView({ page: 'derivation-tree', focusId: null })
+                else if (tab.id === 'derivation-tree') setView({ page: 'derivation-tree', focusId: null })
+                else setView({ page: 'block-diagram' })
               }}
               className={`px-3 py-1.5 text-sm rounded transition-colors ${
                 activeTab === tab.id
@@ -232,6 +238,20 @@ export default function App() {
             <DerivationTree
               focusId={view.focusId}
               onSelect={(id) =>
+                setView({ page: 'requirement-detail', requirementId: id })
+              }
+            />
+          </div>
+        )}
+
+        {/* ------------------------------------------------------------------ */}
+        {/* Block diagram                                                        */}
+        {/* ------------------------------------------------------------------ */}
+        {view.page === 'block-diagram' && (
+          <div className="flex-1 overflow-hidden flex flex-col">
+            <BlockDiagram
+              hierarchyNodes={nodes}
+              onOpenDetail={(id) =>
                 setView({ page: 'requirement-detail', requirementId: id })
               }
             />
