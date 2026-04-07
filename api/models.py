@@ -219,6 +219,27 @@ class SavedFilter(Base):
 
 
 # ---------------------------------------------------------------------------
+# Requirement attachments
+# ---------------------------------------------------------------------------
+
+class RequirementAttachment(Base):
+    __tablename__ = "requirement_attachments"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    requirement_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("requirements.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    file_name = Column(Text, nullable=False)
+    file_path = Column(Text, nullable=False)   # MinIO object key (UUID string)
+    file_size = Column(Integer, nullable=True)
+    content_type = Column(Text, nullable=True)
+    uploaded_by = Column(Text, nullable=True)
+    uploaded_at = Column(DateTime, nullable=False, default=datetime.utcnow)
+
+
+# ---------------------------------------------------------------------------
 # Requirement traceability links
 # ---------------------------------------------------------------------------
 

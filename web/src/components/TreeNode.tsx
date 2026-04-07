@@ -20,17 +20,20 @@ export default function TreeNode({
   const isExpanded = expandedIds.has(node.id)
   const isSelected = node.id === selectedId
   const hasChildren = node.children.length > 0
+  const isArchived = node.archived
 
   return (
     <div>
       <div
-        className={`flex items-center gap-1 py-1 pr-2 cursor-pointer select-none rounded mx-1 group ${
-          isSelected
-            ? 'bg-blue-50 text-blue-700'
-            : 'text-gray-700 hover:bg-gray-100'
+        className={`flex items-center gap-1 py-1 pr-2 select-none rounded mx-1 group ${
+          isArchived
+            ? 'cursor-default opacity-40'
+            : isSelected
+              ? 'bg-blue-50 text-blue-700 cursor-pointer'
+              : 'text-gray-700 hover:bg-gray-100 cursor-pointer'
         }`}
         style={{ paddingLeft: `${depth * 14 + 6}px` }}
-        onClick={() => onSelect(node)}
+        onClick={() => { if (!isArchived) onSelect(node) }}
       >
         {/* Expand / collapse toggle */}
         <button
@@ -51,7 +54,7 @@ export default function TreeNode({
         </button>
 
         {/* Node name */}
-        <span className="text-sm truncate flex-1">{node.name}</span>
+        <span className={`text-sm truncate flex-1 ${isArchived ? 'italic' : ''}`}>{node.name}</span>
 
         {/* Child count pill */}
         {hasChildren && (

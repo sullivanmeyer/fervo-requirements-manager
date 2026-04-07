@@ -28,11 +28,12 @@ function TreeRow({
   const [open, setOpen] = useState(depth < 2) // auto-expand top two levels
 
   const checked = selectedIds.includes(node.id)
+  const archived = node.archived
 
   return (
     <div>
       <div
-        className="flex items-center gap-1 px-2 py-1 rounded hover:bg-gray-100 cursor-pointer select-none"
+        className={`flex items-center gap-1 px-2 py-1 rounded select-none ${archived ? 'opacity-40' : 'hover:bg-gray-100 cursor-pointer'}`}
         style={{ paddingLeft: `${8 + depth * 16}px` }}
       >
         {/* Expand/collapse toggle — only shown when there are children */}
@@ -48,14 +49,17 @@ function TreeRow({
         </button>
 
         {/* Checkbox + label */}
-        <label className="flex items-center gap-1.5 flex-1 cursor-pointer">
+        <label className={`flex items-center gap-1.5 flex-1 ${archived ? 'cursor-not-allowed' : 'cursor-pointer'}`}>
           <input
             type="checkbox"
             checked={checked}
+            disabled={archived}
             onChange={() => onToggle(node.id)}
             className="rounded"
           />
-          <span className="text-sm text-gray-800">{node.name}</span>
+          <span className={`text-sm ${archived ? 'text-gray-400 italic' : 'text-gray-800'}`}>
+            {node.name}{archived ? ' (archived)' : ''}
+          </span>
         </label>
       </div>
 

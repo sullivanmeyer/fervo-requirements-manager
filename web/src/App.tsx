@@ -27,7 +27,7 @@ export function flattenTree(nodes: HierarchyNode[], depth = 0): FlatNode[] {
 type AppView =
   | { page: 'hierarchy' }
   | { page: 'requirements' }
-  | { page: 'requirement-detail'; requirementId: string | null; initialParentIds?: string[]; initialStatement?: string; initialSourceDocumentId?: string }
+  | { page: 'requirement-detail'; requirementId: string | null; initialParentIds?: string[]; initialStatement?: string; initialSourceDocumentId?: string; backFrom?: 'document-detail'; backDocumentId?: string }
   | { page: 'derivation-tree'; focusId: string | null }
   | { page: 'block-diagram' }
   | { page: 'documents' }
@@ -68,6 +68,18 @@ export default function App() {
   useEffect(() => {
     void loadHierarchy()
   }, [loadHierarchy])
+
+  // Ctrl+N — create a new requirement from anywhere in the app
+  useEffect(() => {
+    const handler = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'n') {
+        e.preventDefault()
+        setView({ page: 'requirement-detail', requirementId: null })
+      }
+    }
+    document.addEventListener('keydown', handler)
+    return () => document.removeEventListener('keydown', handler)
+  }, [])
 
   const handleUserNameChange = (name: string) => {
     setUserName(name)
@@ -207,10 +219,15 @@ export default function App() {
               initialParentIds={view.initialParentIds}
               initialStatement={view.initialStatement}
               initialSourceDocumentId={view.initialSourceDocumentId}
+              backLabel={view.backFrom === 'document-detail' ? 'Document' : 'Requirements'}
               onSaved={(savedId) => {
                 setView({ page: 'requirement-detail', requirementId: savedId })
               }}
-              onCancel={() => setView({ page: 'requirements' })}
+              onCancel={() =>
+                view.backFrom === 'document-detail' && view.backDocumentId
+                  ? setView({ page: 'document-detail', documentId: view.backDocumentId })
+                  : setView({ page: 'requirements' })
+              }
               onViewInTree={(id) =>
                 setView({ page: 'derivation-tree', focusId: id })
               }
@@ -290,10 +307,17 @@ export default function App() {
                   requirementId: null,
                   initialStatement,
                   initialSourceDocumentId: sourceDocumentId,
+                  backFrom: 'document-detail',
+                  backDocumentId: view.documentId ?? undefined,
                 })
               }
               onOpenRequirement={(id) =>
-                setView({ page: 'requirement-detail', requirementId: id })
+                setView({
+                  page: 'requirement-detail',
+                  requirementId: id,
+                  backFrom: 'document-detail',
+                  backDocumentId: view.documentId ?? undefined,
+                })
               }
             />
           </div>

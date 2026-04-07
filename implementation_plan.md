@@ -243,42 +243,44 @@ Refer to the PRD (v0.3) for full field definitions and business logic.
 - [x] Column resizing via drag on column edges
 
 ### Stage 5 Verification
-- [ ] With 10+ requirements across 2+ disciplines, filter to Mechanical + Draft status — verify table updates
-- [ ] Save filter as "Mech Drafts" — clear all filters — click "Mech Drafts" — verify it restores
+- [x] With 10+ requirements across 2+ disciplines, filter to Mechanical + Draft status — verify table updates
+- [x] Save filter as "Mech Drafts" — clear all filters — click "Mech Drafts" — verify it restores
 - [ ] Filter by hierarchy node = HeatRejection Module with Include Descendants — verify requirements on ACC, Feed Pumps, etc. appear
-- [ ] Verify column reorder and resize work and persist across page refresh
+- [x] Verify column reorder and resize work and persist across page refresh
 
 ---
 
 ## Stage 6 — Requirement Attachments + Polish
 
 ### Backend — Database
-- [ ] Alembic migration: `requirement_attachments` table (id UUID, requirement_id FK, file_name text, file_path text, file_size integer, uploaded_by text, uploaded_at timestamp)
+- [x] Alembic migration: `requirement_attachments` table (id UUID, requirement_id FK, file_name text, file_path text, file_size integer, uploaded_by text, uploaded_at timestamp)
 
 ### Backend — API Endpoints
-- [ ] `POST /api/requirements/{id}/attachments` — upload file to MinIO, create attachment record
-- [ ] `GET /api/requirements/{id}/attachments` — list attachments for a requirement
-- [ ] `GET /api/attachments/{id}/download` — download attachment file
+- [x] `POST /api/requirements/{id}/attachments` — upload file to MinIO, create attachment record
+- [x] `GET /api/requirements/{id}/attachments` — list attachments for a requirement
+- [x] `GET /api/attachments/{id}/download` — download attachment file
+- [x] `DELETE /api/attachments/{id}` — delete attachment (bonus)
 
 ### Frontend — Attachments
-- [ ] Attachments section on requirement detail view
-- [ ] Upload widget (drag-and-drop or file picker)
-- [ ] Attachment list with file name, size, uploaded by, uploaded date
-- [ ] Download button per attachment
+- [x] Attachments section on requirement detail view
+- [x] Upload widget (file picker with "Attach File" button)
+- [x] Attachment list with file name, size, uploaded by, uploaded date
+- [x] Download button per attachment
+- [x] Delete button per attachment (bonus)
 
 ### Frontend — UI Polish
 - [ ] Consistent loading states (spinners/skeletons) for all API calls
 - [ ] Error handling: user-visible error messages for failed API calls
-- [ ] Empty states: "No requirements yet — create one" on empty table, "No documents yet" on empty registry
-- [ ] Breadcrumb navigation: Table View → Detail View → Tree View (and back)
+- [x] Empty states: "No requirements yet — create one" on empty table, "No documents yet" on empty registry
+- [x] Breadcrumb navigation: back button in requirement detail tracks source (Requirements table or Document detail)
 - [ ] Responsive layout for standard laptop screens (no horizontal scroll in table at default column widths)
-- [ ] Archived hierarchy nodes grayed out (visible in admin context, hidden in normal nav)
-- [ ] Status colored badges in table: Draft=gray, Under Review=yellow, Approved=green, Superseded=orange, Withdrawn=red
-- [ ] Keyboard shortcut for creating a new requirement (Ctrl+N or similar)
+- [x] Archived hierarchy nodes grayed out (sidebar tree + HierarchyNodePicker)
+- [x] Status colored badges in table: Draft=gray, Under Review=yellow, Approved=green, Superseded=orange, Withdrawn=red
+- [x] Keyboard shortcut for creating a new requirement (Ctrl+N / Cmd+N)
 
 ### Stage 6 Verification
 - [ ] Attach a PDF to a requirement — download it — verify file is intact
-- [ ] Navigate: table → detail → tree → parent detail — verify breadcrumbs track the path
+- [ ] Navigate: table → detail → document → create requirement — verify "← Document" back button appears
 - [ ] Test on 13" laptop screen — verify no overflow or horizontal scroll in table
 - [ ] Verify all empty states render correctly on a fresh database
 - [ ] Verify loading spinners appear during API calls

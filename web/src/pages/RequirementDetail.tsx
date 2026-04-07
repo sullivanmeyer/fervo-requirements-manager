@@ -19,7 +19,14 @@ import {
   updateRequirement,
 } from '../api/requirements'
 import { fetchSourceDocuments } from '../api/sourceDocuments'
+import {
+  attachmentDownloadUrl,
+  deleteAttachment,
+  fetchAttachments,
+  uploadAttachment,
+} from '../api/attachments'
 import type {
+  Attachment,
   HierarchyNode,
   RequirementDetail as ReqDetail,
   RequirementListItem,
@@ -67,6 +74,7 @@ interface Props {
   initialParentIds?: string[]         // pre-link parents (used by "Add Child")
   initialStatement?: string           // pre-populate statement (from doc selection)
   initialSourceDocumentId?: string    // pre-link source document (from doc detail)
+  backLabel?: string                  // label for the back button (default: "Requirements")
   onSaved: (savedId: string) => void
   onCancel: () => void
   onViewInTree: (id: string) => void  // navigate to derivation tree tab
@@ -297,6 +305,7 @@ export default function RequirementDetail({
   initialParentIds = [],
   initialStatement = '',
   initialSourceDocumentId = '',
+  backLabel = 'Requirements',
   onSaved,
   onCancel,
   onViewInTree,
@@ -321,6 +330,11 @@ export default function RequirementDetail({
   const [loading, setLoading] = useState(!isNew)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  // Attachments (only available on saved requirements)
+  const [attachments, setAttachments] = useState<Attachment[]>([])
+  const [uploadingAttachment, setUploadingAttachment] = useState(false)
+  const [attachmentError, setAttachmentError] = useState<string | null>(null)
 
   // "Add Child" dropdown state
   const [showChildMenu, setShowChildMenu] = useState(false)
@@ -347,12 +361,13 @@ export default function RequirementDetail({
     } else {
       const loadAll = async () => {
         try {
-          const [req, reqs, docs, s, u] = await Promise.all([
+          const [req, reqs, docs, s, u, atts] = await Promise.all([
             fetchRequirement(requirementId!),
             fetchAllRequirements(),
             fetchSourceDocuments(),
             fetchSites(),
             fetchUnits(),
+            fetchAttachments(requirementId!),
           ])
           setForm(formFromDetail(req))
           setExistingReqId(req.requirement_id)
@@ -367,6 +382,7 @@ export default function RequirementDetail({
           setSourceDocs(docs)
           setSites(s)
           setUnits(u)
+          setAttachments(atts)
         } catch (e) {
           setError(e instanceof Error ? e.message : 'Failed to load requirement')
         } finally {
@@ -487,6 +503,34 @@ export default function RequirementDetail({
     .map((r) => ({ id: r.id, requirement_id: r.requirement_id, title: r.title }))
 
   // Options for "Link Existing" child picker — exclude self and already-linked children
+  // -------------------------------------------------------------------------
+  // Attachment handlers
+  // -------------------------------------------------------------------------
+
+  const handleUploadAttachment = async (file: File) => {
+    if (!savedDbId) return
+    setUploadingAttachment(true)
+    setAttachmentError(null)
+    try {
+      const att = await uploadAttachment(savedDbId, file, userName || undefined)
+      setAttachments((prev) => [...prev, att])
+    } catch (e) {
+      setAttachmentError(e instanceof Error ? e.message : 'Upload failed')
+    } finally {
+      setUploadingAttachment(false)
+    }
+  }
+
+  const handleDeleteAttachment = async (id: string) => {
+    setAttachmentError(null)
+    try {
+      await deleteAttachment(id)
+      setAttachments((prev) => prev.filter((a) => a.id !== id))
+    } catch (e) {
+      setAttachmentError(e instanceof Error ? e.message : 'Delete failed')
+    }
+  }
+
   const linkedChildIds = new Set(childRequirements.map((c: RequirementStub) => c.id))
   const childLinkOptions: RequirementStub[] = allRequirements
     .filter((r) => r.id !== savedDbId && !linkedChildIds.has(r.id))
@@ -509,7 +553,7 @@ export default function RequirementDetail({
       {/* Header / breadcrumb */}
       <div className="flex items-center gap-3 px-4 py-3 bg-white border-b border-gray-200 shrink-0 flex-wrap">
         <button onClick={onCancel} className="text-sm text-blue-600 hover:underline">
-          ← Requirements
+          ← {backLabel}
         </button>
         <span className="text-gray-400">/</span>
         <span className="text-sm font-medium text-gray-700">
@@ -890,8 +934,82 @@ export default function RequirementDetail({
             </div>
           </section>
 
+          {/* Attachments — only available on saved requirements */}
+          {savedDbId && (
+            <section>
+              <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4 pb-1 border-b border-gray-100">
+                Attachments
+              </h2>
+
+              {attachmentError && (
+                <p className="text-sm text-red-600 mb-3">{attachmentError}</p>
+              )}
+
+              {attachments.length === 0 && !uploadingAttachment && (
+                <p className="text-sm text-gray-400 italic mb-3">No attachments yet.</p>
+              )}
+
+              {attachments.length > 0 && (
+                <ul className="divide-y divide-gray-100 border border-gray-200 rounded mb-3">
+                  {attachments.map((att: Attachment) => (
+                    <li key={att.id} className="flex items-center gap-3 px-3 py-2 hover:bg-gray-50">
+                      <span className="text-gray-400 text-base">📎</span>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-sm text-gray-800 truncate font-medium">{att.file_name}</p>
+                        <p className="text-xs text-gray-400">
+                          {att.file_size != null ? formatBytes(att.file_size) : ''}
+                          {att.uploaded_by ? ` · ${att.uploaded_by}` : ''}
+                          {att.uploaded_at ? ` · ${new Date(att.uploaded_at).toLocaleDateString()}` : ''}
+                        </p>
+                      </div>
+                      <a
+                        href={attachmentDownloadUrl(att.id)}
+                        download={att.file_name}
+                        className="px-2.5 py-1 text-xs border border-gray-300 text-gray-600 rounded hover:bg-gray-50 shrink-0"
+                      >
+                        Download
+                      </a>
+                      <button
+                        type="button"
+                        onClick={() => void handleDeleteAttachment(att.id)}
+                        className="px-2 py-1 text-xs text-red-400 hover:text-red-600 shrink-0"
+                        title="Remove attachment"
+                      >
+                        ×
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+
+              <label className={`inline-flex items-center gap-2 px-3 py-1.5 text-sm border rounded cursor-pointer ${
+                uploadingAttachment
+                  ? 'border-gray-200 text-gray-400 bg-gray-50 cursor-not-allowed'
+                  : 'border-gray-300 text-gray-600 hover:bg-gray-50'
+              }`}>
+                <input
+                  type="file"
+                  className="sr-only"
+                  disabled={uploadingAttachment}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0]
+                    if (f) void handleUploadAttachment(f)
+                    e.target.value = ''
+                  }}
+                />
+                {uploadingAttachment ? 'Uploading…' : '+ Attach File'}
+              </label>
+            </section>
+          )}
+
         </div>
       </div>
     </div>
   )
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
 }

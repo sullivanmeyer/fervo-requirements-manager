@@ -160,3 +160,16 @@ export interface FlatHierarchyOption {
   name: string
   depth: number
 }
+
+// ---------------------------------------------------------------------------
+// Requirement attachments
+// ---------------------------------------------------------------------------
+
+export interface Attachment {
+  id: string
+  file_name: string
+  file_size: number | null
+  content_type: string | null
+  uploaded_by: string | null
+  uploaded_at: string | null
+}
