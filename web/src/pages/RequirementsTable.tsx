@@ -18,21 +18,51 @@ interface Column {
   key: string
   label: string
   visible: boolean
+  width: number
 }
 
 const DEFAULT_COLUMNS: Column[] = [
-  { key: 'requirement_id', label: 'ID', visible: true },
-  { key: 'title', label: 'Title', visible: true },
-  { key: 'classification', label: 'Classification', visible: true },
-  { key: 'owner', label: 'Owner', visible: true },
-  { key: 'status', label: 'Status', visible: true },
-  { key: 'discipline', label: 'Discipline', visible: true },
-  { key: 'hierarchy_nodes', label: 'Hierarchy Nodes', visible: true },
-  { key: 'sites', label: 'Site', visible: true },
-  { key: 'units', label: 'Applicable Units', visible: true },
-  { key: 'created_by', label: 'Created By', visible: true },
-  { key: 'created_date', label: 'Created Date', visible: true },
+  { key: 'requirement_id', label: 'ID', visible: true, width: 100 },
+  { key: 'title', label: 'Title', visible: true, width: 260 },
+  { key: 'classification', label: 'Classification', visible: true, width: 120 },
+  { key: 'owner', label: 'Owner', visible: true, width: 120 },
+  { key: 'status', label: 'Status', visible: true, width: 120 },
+  { key: 'discipline', label: 'Discipline', visible: true, width: 130 },
+  { key: 'hierarchy_nodes', label: 'Hierarchy Nodes', visible: true, width: 200 },
+  { key: 'sites', label: 'Site', visible: true, width: 120 },
+  { key: 'units', label: 'Applicable Units', visible: true, width: 150 },
+  { key: 'created_by', label: 'Created By', visible: true, width: 120 },
+  { key: 'created_date', label: 'Created Date', visible: true, width: 110 },
 ]
+
+const COLUMNS_STORAGE_KEY = 'req_table_columns_v1'
+
+function loadColumns(): Column[] {
+  try {
+    const raw = localStorage.getItem(COLUMNS_STORAGE_KEY)
+    if (raw) {
+      const saved = JSON.parse(raw) as { key: string; visible: boolean; width: number }[]
+      // Restore saved order + settings, add any new columns at the end
+      const result: Column[] = []
+      for (const s of saved) {
+        const def = DEFAULT_COLUMNS.find((d) => d.key === s.key)
+        if (def) result.push({ ...def, visible: s.visible, width: s.width })
+      }
+      for (const def of DEFAULT_COLUMNS) {
+        if (!result.find((c) => c.key === def.key)) result.push(def)
+      }
+      return result
+    }
+  } catch { /* ignore */ }
+  return DEFAULT_COLUMNS
+}
+
+function saveColumns(cols: Column[]) {
+  localStorage.setItem(
+    COLUMNS_STORAGE_KEY,
+    JSON.stringify(cols.map((c) => ({ key: c.key, visible: c.visible, width: c.width }))),
+  )
+}
 
 const STATUS_CLASSES: Record<string, string> = {
   Draft: 'bg-gray-100 text-gray-700',
@@ -305,8 +335,15 @@ export default function RequirementsTable({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  const [columns, setColumns] = useState<Column[]>(DEFAULT_COLUMNS)
+  const [columns, setColumns] = useState<Column[]>(loadColumns)
   const [showColMenu, setShowColMenu] = useState(false)
+
+  // Drag-and-drop column reorder state
+  const [dragColKey, setDragColKey] = useState<string | null>(null)
+  const [dropTargetKey, setDropTargetKey] = useState<string | null>(null)
+
+  // Resize tracking ref (avoids re-render per pixel)
+  const resizingRef = useRef<{ key: string; startX: number; startWidth: number } | null>(null)
 
   const [sortKey, setSortKey] = useState<string>('requirement_id')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
@@ -431,6 +468,66 @@ export default function RequirementsTable({
 
   const toggleColumn = (key: string) => {
     setColumns((cols) => cols.map((c) => (c.key === key ? { ...c, visible: !c.visible } : c)))
+  }
+
+  // Persist column state whenever it changes
+  useEffect(() => {
+    saveColumns(columns)
+  }, [columns])
+
+  // -------------------------------------------------------------------------
+  // Column drag-and-drop reorder
+  // -------------------------------------------------------------------------
+
+  const handleColDragStart = (key: string) => setDragColKey(key)
+  const handleColDragOver = (e: React.DragEvent, key: string) => {
+    e.preventDefault()
+    if (key !== dragColKey) setDropTargetKey(key)
+  }
+  const handleColDrop = (targetKey: string) => {
+    if (!dragColKey || dragColKey === targetKey) return
+    setColumns((cols) => {
+      const next = [...cols]
+      const from = next.findIndex((c) => c.key === dragColKey)
+      const to = next.findIndex((c) => c.key === targetKey)
+      const [moved] = next.splice(from, 1)
+      next.splice(to, 0, moved)
+      return next
+    })
+    setDragColKey(null)
+    setDropTargetKey(null)
+  }
+  const handleColDragEnd = () => {
+    setDragColKey(null)
+    setDropTargetKey(null)
+  }
+
+  // -------------------------------------------------------------------------
+  // Column resize
+  // -------------------------------------------------------------------------
+
+  const handleResizeMouseDown = (e: React.MouseEvent, key: string, currentWidth: number) => {
+    e.stopPropagation()  // don't trigger sort
+    e.preventDefault()
+    resizingRef.current = { key, startX: e.clientX, startWidth: currentWidth }
+
+    const onMouseMove = (ev: MouseEvent) => {
+      if (!resizingRef.current) return
+      const delta = ev.clientX - resizingRef.current.startX
+      const newWidth = Math.max(60, resizingRef.current.startWidth + delta)
+      setColumns((cols) =>
+        cols.map((c) => (c.key === resizingRef.current!.key ? { ...c, width: newWidth } : c)),
+      )
+    }
+
+    const onMouseUp = () => {
+      resizingRef.current = null
+      document.removeEventListener('mousemove', onMouseMove)
+      document.removeEventListener('mouseup', onMouseUp)
+    }
+
+    document.addEventListener('mousemove', onMouseMove)
+    document.addEventListener('mouseup', onMouseUp)
   }
 
   const visibleColumns = columns.filter((c) => c.visible)
@@ -710,19 +807,38 @@ export default function RequirementsTable({
             )}
           </div>
         ) : (
-          <table className="w-full text-left border-collapse">
+          <table className="text-left border-collapse" style={{ tableLayout: 'fixed', width: `${visibleColumns.reduce((s, c) => s + c.width, 0)}px`, minWidth: '100%' }}>
+            <colgroup>
+              {visibleColumns.map((col) => (
+                <col key={col.key} style={{ width: `${col.width}px` }} />
+              ))}
+            </colgroup>
             <thead>
               <tr className="bg-gray-50 border-b border-gray-200 sticky top-0">
                 {visibleColumns.map((col) => (
                   <th
                     key={col.key}
+                    draggable
+                    onDragStart={() => handleColDragStart(col.key)}
+                    onDragOver={(e) => handleColDragOver(e, col.key)}
+                    onDrop={() => handleColDrop(col.key)}
+                    onDragEnd={handleColDragEnd}
                     onClick={() => handleSort(col.key)}
-                    className="px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider cursor-pointer select-none whitespace-nowrap hover:bg-gray-100"
+                    className={`px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider cursor-pointer select-none whitespace-nowrap hover:bg-gray-100 relative ${
+                      dropTargetKey === col.key ? 'border-l-2 border-blue-400' : ''
+                    } ${dragColKey === col.key ? 'opacity-50' : ''}`}
+                    style={{ width: `${col.width}px` }}
                   >
                     {col.label}
                     {sortKey === col.key && (
                       <span className="ml-1 text-blue-500">{sortDir === 'asc' ? '↑' : '↓'}</span>
                     )}
+                    {/* Resize handle */}
+                    <div
+                      onMouseDown={(e) => handleResizeMouseDown(e, col.key, col.width)}
+                      className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize hover:bg-blue-300 opacity-0 hover:opacity-100"
+                      title="Drag to resize"
+                    />
                   </th>
                 ))}
               </tr>
@@ -737,7 +853,7 @@ export default function RequirementsTable({
                   }`}
                 >
                   {visibleColumns.map((col) => (
-                    <td key={col.key} className="px-3 py-2 align-top">{renderCell(col.key, req)}</td>
+                    <td key={col.key} className="px-3 py-2 align-top overflow-hidden" style={{ maxWidth: `${col.width}px` }}>{renderCell(col.key, req)}</td>
                   ))}
                 </tr>
               ))}
