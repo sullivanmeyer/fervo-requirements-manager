@@ -239,8 +239,8 @@ Refer to the PRD (v0.3) for full field definitions and business logic.
 - [x] Delete saved filter
 
 ### Frontend — Table Enhancements
-- [ ] Column reordering via drag-and-drop on column headers
-- [ ] Column resizing via drag on column edges
+- [x] Column reordering via drag-and-drop on column headers
+- [x] Column resizing via drag on column edges
 
 ### Stage 5 Verification
 - [ ] With 10+ requirements across 2+ disciplines, filter to Mechanical + Draft status — verify table updates
