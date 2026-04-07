@@ -153,43 +153,43 @@ Refer to the PRD (v0.3) for full field definitions and business logic.
 - [x] Click component-level requirement — verify Parent Requirements shows system-level one
 - [x] Click "View in Tree" — verify tree shows full chain from Self-Derived down
 - [x] Attempt to create a cycle (make component-level a parent of plant-level) — verify app rejects it with clear error
-- [ ] Add a child from the detail view — verify new requirement is pre-linked
+- [x] Add a child from the detail view — verify new requirement is pre-linked
 
 ---
 
 ## Stage 4 — Source Document Registry + PDF Upload
 
 ### Backend — Database
-- [ ] Alembic migration: `source_documents` table (id UUID, document_id text, title, document_type enum, revision text, issuing_organization text, disciplines text array, file_path text nullable, extracted_text text nullable, created_at, updated_at)
-- [ ] Alembic migration: add `source_document_id` (nullable FK) and `source_clause` (text nullable) columns to `requirements` table
+- [x] Alembic migration: `source_documents` table (id UUID, document_id text, title, document_type enum, revision text, issuing_organization text, disciplines text array, file_path text nullable, extracted_text text nullable, created_at, updated_at)
+- [x] Alembic migration: add `source_document_id` (nullable FK) and `source_clause` (text nullable) columns to `requirements` table
 
 ### Backend — File Storage
-- [ ] MinIO bucket creation on startup (e.g., bucket named "documents")
-- [ ] `POST /api/source-documents/{id}/upload` — accepts PDF, stores in MinIO, returns S3 key
-- [ ] `GET /api/source-documents/{id}/download` — returns the PDF file
-- [ ] PDF text extraction using pymupdf or pdfplumber — extracted text stored in source_documents.extracted_text
+- [x] MinIO bucket creation on startup (e.g., bucket named "documents")
+- [x] `POST /api/source-documents/{id}/upload` — accepts PDF, stores in MinIO, returns S3 key
+- [x] `GET /api/source-documents/{id}/download` — returns the PDF file
+- [x] PDF text extraction using pdfplumber — extracted text stored in source_documents.extracted_text
 
 ### Backend — API Endpoints
-- [ ] `GET /api/source-documents` — list all source documents
-- [ ] `GET /api/source-documents/{id}` — full detail including extracted text and list of linked requirements
-- [ ] `POST /api/source-documents` — create document record
-- [ ] `PUT /api/source-documents/{id}` — update document metadata
+- [x] `GET /api/source-documents` — list all source documents
+- [x] `GET /api/source-documents/{id}` — full detail including extracted text and list of linked requirements
+- [x] `POST /api/source-documents` — create document record
+- [x] `PUT /api/source-documents/{id}` — update document metadata
 
 ### Frontend — Source Document Registry
-- [ ] New page: table of all source documents (Document ID, Title, Type, Revision, Issuing Org)
-- [ ] "Create" button to add new document record
-- [ ] File upload widget to attach a PDF to a document record
+- [x] New page: table of all source documents (Document ID, Title, Type, Revision, Issuing Org)
+- [x] "Create" button to add new document record
+- [x] File upload widget to attach a PDF to a document record
 
 ### Frontend — Document Detail View
-- [ ] Shows document metadata
-- [ ] Embedded PDF viewer (iframe or react-pdf)
-- [ ] Extracted text display panel
-- [ ] List of all requirements derived from this document (filtered from requirements table)
-- [ ] "Create Requirement from Selection": user highlights text in extracted text panel, clicks button, new requirement form opens with Statement pre-populated, Source Type = Derived from Document, Source Document pre-linked
+- [x] Shows document metadata
+- [x] Embedded PDF viewer (iframe or react-pdf)
+- [x] Extracted text display panel
+- [x] List of all requirements derived from this document (filtered from requirements table)
+- [x] "Create Requirement from Selection": user highlights text in extracted text panel, clicks button, new requirement form opens with Statement pre-populated, Source Type = Derived from Document, Source Document pre-linked
 
 ### Frontend — Requirement Detail/Edit View Updates
-- [ ] Source Document field: searchable dropdown from document registry
-- [ ] Source Clause field: free text
+- [x] Source Document field: searchable dropdown from document registry
+- [x] Source Clause field: free text
 - [ ] Source Document required when Source Type = "Derived from Document"
 
 ### Stage 4 Verification
