@@ -186,10 +186,10 @@ def list_units(db: Session = Depends(get_db)):
 # ---------------------------------------------------------------------------
 
 
-def _collect_descendant_ids(node_id: str, db: Session) -> set[str]:
+def _collect_descendant_ids(node_id: str, db: Session) -> set[UUID]:
     """Return the UUID of node_id plus all its descendants via BFS."""
-    result: set[str] = set()
-    queue = [node_id]
+    result: set[UUID] = set()
+    queue: list[UUID] = [UUID(node_id)]
     while queue:
         current = queue.pop()
         result.add(current)
@@ -198,7 +198,7 @@ def _collect_descendant_ids(node_id: str, db: Session) -> set[str]:
             .filter(HierarchyNode.parent_id == current)
             .all()
         )
-        queue.extend(str(r.id) for r in children)
+        queue.extend(r.id for r in children)
     return result
 
 
@@ -261,7 +261,7 @@ def list_requirements(
         if include_descendants:
             node_ids = _collect_descendant_ids(hierarchy_node_id, db)
         else:
-            node_ids = {hierarchy_node_id}
+            node_ids = {UUID(hierarchy_node_id)}
         # Filter requirements that have at least one matching hierarchy node
         base_q = base_q.filter(
             Requirement.hierarchy_nodes.any(HierarchyNode.id.in_(node_ids))
