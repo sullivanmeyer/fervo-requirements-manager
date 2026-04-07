@@ -169,6 +169,12 @@ class RequirementCreate(BaseModel):
             )
         return v
 
+    def model_post_init(self, __context: object) -> None:
+        if self.source_type == "Derived from Document" and not self.source_document_id:
+            raise ValueError(
+                "source_document_id is required when source_type is 'Derived from Document'"
+            )
+
 
 class RequirementUpdate(BaseModel):
     title: Optional[str] = None

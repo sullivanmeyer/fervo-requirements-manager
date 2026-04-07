@@ -394,6 +394,10 @@ export default function RequirementDetail({
       setError('Title and Statement are required.')
       return
     }
+    if (form.source_type === 'Derived from Document' && !form.source_document_id) {
+      setError('Source Document is required when Source Type is "Derived from Document".')
+      return
+    }
 
     setSaving(true)
     setError(null)

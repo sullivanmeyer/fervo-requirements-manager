@@ -190,7 +190,7 @@ Refer to the PRD (v0.3) for full field definitions and business logic.
 ### Frontend — Requirement Detail/Edit View Updates
 - [x] Source Document field: searchable dropdown from document registry
 - [x] Source Clause field: free text
-- [ ] Source Document required when Source Type = "Derived from Document"
+- [x] Source Document required when Source Type = "Derived from Document"
 
 ### Stage 4 Verification
 - [ ] Register source document: "API 661, 7th Edition" — Type=Code/Standard, Issuing Org=API
