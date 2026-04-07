@@ -225,11 +225,15 @@ async def upload_pdf(
     except S3Error as e:
         raise HTTPException(status_code=500, detail=f"MinIO upload failed: {e}")
 
-    # Extract text with pdfplumber, then normalise line-wrapping
+    # Extract text with pdfplumber, then normalise line-wrapping.
+    # layout=True tells pdfplumber to infer spaces from character x-positions
+    # rather than relying on explicit space glyphs in the PDF — this fixes
+    # words-running-together in PDFs (common in scanned/typeset documents
+    # where spacing is positional rather than encoded as space characters).
     extracted = ""
     try:
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
-            pages = [page.extract_text() or "" for page in pdf.pages]
+            pages = [page.extract_text(layout=True) or "" for page in pdf.pages]
             raw = "\n\n".join(p for p in pages if p.strip())
             extracted = _normalise_extracted_text(raw)
     except Exception:
