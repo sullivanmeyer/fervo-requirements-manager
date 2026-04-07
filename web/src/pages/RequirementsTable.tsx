@@ -206,7 +206,7 @@ function MultiCheckDropdown({
         <span className="text-gray-400 text-xs">▾</span>
       </button>
       {open && (
-        <div className="absolute top-9 left-0 z-30 bg-white border border-gray-200 rounded shadow-lg min-w-44 py-1">
+        <div className="absolute top-9 left-0 z-30 bg-white border border-gray-200 rounded shadow-lg min-w-44 py-1 max-h-64 overflow-y-auto">
           {options.map((opt) => (
             <label key={opt} className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-50 cursor-pointer">
               <input type="checkbox" checked={selected.includes(opt)} onChange={() => toggle(opt)} className="rounded" />
@@ -264,31 +264,33 @@ function HierarchyFilterPicker({
         <span className="text-gray-400 text-xs">▾</span>
       </button>
       {open && (
-        <div className="absolute top-9 left-0 z-30 bg-white border border-gray-200 rounded shadow-lg w-64 py-1">
-          <label className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-50 cursor-pointer border-b border-gray-100">
-            <input
-              type="radio"
-              checked={!selectedId}
-              onChange={() => onChangeId('')}
-            />
-            <span className="text-sm text-gray-500 italic">Any node</span>
-          </label>
-          {flat.map((n) => (
-            <label
-              key={n.id}
-              className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-50 cursor-pointer"
-              style={{ paddingLeft: `${12 + n.depth * 14}px` }}
-            >
+        <div className="absolute top-9 left-0 z-30 bg-white border border-gray-200 rounded shadow-lg w-64 flex flex-col max-h-72">
+          <div className="overflow-y-auto flex-1 py-1">
+            <label className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-50 cursor-pointer border-b border-gray-100">
               <input
                 type="radio"
-                checked={selectedId === n.id}
-                onChange={() => onChangeId(n.id)}
+                checked={!selectedId}
+                onChange={() => onChangeId('')}
               />
-              <span className="text-sm text-gray-700">{n.name}</span>
+              <span className="text-sm text-gray-500 italic">Any node</span>
             </label>
-          ))}
+            {flat.map((n) => (
+              <label
+                key={n.id}
+                className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-50 cursor-pointer"
+                style={{ paddingLeft: `${12 + n.depth * 14}px` }}
+              >
+                <input
+                  type="radio"
+                  checked={selectedId === n.id}
+                  onChange={() => onChangeId(n.id)}
+                />
+                <span className="text-sm text-gray-700">{n.name}</span>
+              </label>
+            ))}
+          </div>
           {selectedId && (
-            <div className="border-t border-gray-100 px-3 py-2">
+            <div className="border-t border-gray-100 px-3 py-2 shrink-0 bg-white">
               <label className="flex items-center gap-2 cursor-pointer">
                 <input
                   type="checkbox"
