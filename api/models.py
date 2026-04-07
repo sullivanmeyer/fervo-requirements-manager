@@ -3,7 +3,7 @@ from datetime import datetime
 
 from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, Date, ForeignKey, Integer, Table, Text
 from sqlalchemy.dialects.postgresql import ARRAY, UUID
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import backref, relationship
 
 from database import Base
 
@@ -269,7 +269,7 @@ class DocumentBlock(Base):
     children = relationship(
         "DocumentBlock",
         foreign_keys=[parent_block_id],
-        backref="parent",
+        backref=backref("parent", remote_side="DocumentBlock.id"),
         lazy="select",
     )
 
