@@ -193,50 +193,50 @@ Refer to the PRD (v0.3) for full field definitions and business logic.
 - [x] Source Document required when Source Type = "Derived from Document"
 
 ### Stage 4 Verification
-- [ ] Register source document: "API 661, 7th Edition" — Type=Code/Standard, Issuing Org=API
-- [ ] Upload a test PDF — verify it renders in embedded viewer
-- [ ] Verify extracted text is visible in text panel
-- [ ] Highlight a passage, click "Create Requirement from Selection"
-- [ ] Verify new requirement form has Statement pre-populated, Source Type and Source Document pre-linked
-- [ ] Save requirement — verify it appears in the document's "derived requirements" list
-- [ ] Verify Source Document and Source Clause fields work on the requirement detail view
+- [x] Register source document: "API 661, 7th Edition" — Type=Code/Standard, Issuing Org=API
+- [x] Upload a test PDF — verify it renders in embedded viewer
+- [x] Verify extracted text is visible in text panel
+- [x] Highlight a passage, click "Create Requirement from Selection"
+- [x] Verify new requirement form has Statement pre-populated, Source Type and Source Document pre-linked
+- [x] Save requirement — verify it appears in the document's "derived requirements" list
+- [x] Verify Source Document and Source Clause fields work on the requirement detail view
 
 ---
 
 ## Stage 5 — Table Filtering + Saved Filters
 
 ### Backend — Database
-- [ ] Alembic migration: `saved_filters` table (id UUID, name text, filter_config JSONB, user_name text, created_at)
+- [x] Alembic migration: `saved_filters` table (id UUID, name text, filter_config JSONB, user_name text, created_at)
 
 ### Backend — API Endpoints
-- [ ] Extend `GET /api/requirements` to accept filter parameters:
-  - [ ] status (multi-select)
-  - [ ] classification (single select)
-  - [ ] discipline (multi-select)
-  - [ ] owner (text search / partial match)
-  - [ ] hierarchy_node_id with include_descendants boolean
-  - [ ] site (multi-select)
-  - [ ] units (multi-select)
-  - [ ] source_type (single select)
-  - [ ] source_document_id (single select)
-  - [ ] tags (multi-select / partial match)
-  - [ ] created_date range (from/to)
-  - [ ] modified_date range (from/to)
-- [ ] `POST /api/saved-filters` — create saved filter
-- [ ] `GET /api/saved-filters` — list saved filters (optionally filtered by user_name)
-- [ ] `DELETE /api/saved-filters/{id}` — delete saved filter
+- [x] Extend `GET /api/requirements` to accept filter parameters:
+  - [x] status (multi-select)
+  - [x] classification (single select)
+  - [x] discipline (multi-select)
+  - [x] owner (text search / partial match)
+  - [x] hierarchy_node_id with include_descendants boolean
+  - [x] site (multi-select)
+  - [x] units (multi-select)
+  - [x] source_type (single select)
+  - [x] source_document_id (single select)
+  - [x] tags (multi-select / partial match)
+  - [x] created_date range (from/to)
+  - [x] modified_date range (from/to)
+- [x] `POST /api/saved-filters` — create saved filter
+- [x] `GET /api/saved-filters` — list saved filters (optionally filtered by user_name)
+- [x] `DELETE /api/saved-filters/{id}` — delete saved filter
 
 ### Frontend — Filter Bar
-- [ ] Filter bar above requirements table with dropdowns/multi-selects for each filterable field
-- [ ] Hierarchy Node filter shows mini tree picker with "Include descendants" checkbox
-- [ ] Filters apply and update the table (immediate or on "Apply" click)
-- [ ] Clear all filters button
+- [x] Filter bar above requirements table with dropdowns/multi-selects for each filterable field
+- [x] Hierarchy Node filter shows mini tree picker with "Include descendants" checkbox
+- [x] Filters apply and update the table (immediate on change)
+- [x] Clear all filters button
 
 ### Frontend — Saved Filters
-- [ ] "Save Filter" button: prompts for name, saves current filter config
-- [ ] Saved filters displayed as quick-access tabs or dropdown above table
-- [ ] Click saved filter to restore that filter configuration
-- [ ] Delete saved filter
+- [x] "Save Filter" button: prompts for name, saves current filter config
+- [x] Saved filters displayed as quick-access bar above table
+- [x] Click saved filter to restore that filter configuration
+- [x] Delete saved filter
 
 ### Frontend — Table Enhancements
 - [ ] Column reordering via drag-and-drop on column headers

@@ -150,3 +150,13 @@ export interface RequirementCreatePayload {
 }
 
 export type RequirementUpdatePayload = Partial<RequirementCreatePayload>
+
+// ---------------------------------------------------------------------------
+// Hierarchy node picker helper (flat list with depth for indentation)
+// ---------------------------------------------------------------------------
+
+export interface FlatHierarchyOption {
+  id: string
+  name: string
+  depth: number
+}

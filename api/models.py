@@ -205,6 +205,20 @@ class Requirement(Base):
 
 
 # ---------------------------------------------------------------------------
+# Saved filters
+# ---------------------------------------------------------------------------
+
+class SavedFilter(Base):
+    __tablename__ = "saved_filters"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    name = Column(Text, nullable=False)
+    filter_config = Column(Text, nullable=False, default="{}")  # stored as JSON string
+    user_name = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+# ---------------------------------------------------------------------------
 # Requirement traceability links
 # ---------------------------------------------------------------------------
 

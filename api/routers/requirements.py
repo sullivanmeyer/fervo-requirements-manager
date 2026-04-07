@@ -4,6 +4,8 @@ from datetime import datetime
 from typing import Any, Optional
 from uuid import UUID
 
+from typing import List, Optional
+
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
@@ -184,21 +186,110 @@ def list_units(db: Session = Depends(get_db)):
 # ---------------------------------------------------------------------------
 
 
+def _collect_descendant_ids(node_id: str, db: Session) -> set[str]:
+    """Return the UUID of node_id plus all its descendants via BFS."""
+    result: set[str] = set()
+    queue = [node_id]
+    while queue:
+        current = queue.pop()
+        result.add(current)
+        children = (
+            db.query(HierarchyNode.id)
+            .filter(HierarchyNode.parent_id == current)
+            .all()
+        )
+        queue.extend(str(r.id) for r in children)
+    return result
+
+
 @router.get("/requirements")
 def list_requirements(
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
+    # Filters — all optional; multi-value params accepted as repeated keys
+    status: Optional[List[str]] = Query(None),
+    classification: Optional[str] = Query(None),
+    discipline: Optional[List[str]] = Query(None),
+    owner: Optional[str] = Query(None),
+    source_type: Optional[str] = Query(None),
+    source_document_id: Optional[str] = Query(None),
+    hierarchy_node_id: Optional[str] = Query(None),
+    include_descendants: bool = Query(False),
+    site_id: Optional[List[str]] = Query(None),
+    unit_id: Optional[List[str]] = Query(None),
+    tags: Optional[List[str]] = Query(None),
+    created_date_from: Optional[str] = Query(None),
+    created_date_to: Optional[str] = Query(None),
+    modified_date_from: Optional[str] = Query(None),
+    modified_date_to: Optional[str] = Query(None),
     db: Session = Depends(get_db),
 ):
     """
-    Paginated list of requirements — lightweight records for the table view.
-    Returns total count alongside the page of items so the frontend can
-    render a page indicator without a second request.
+    Paginated, filterable list of requirements.
+    All filter params are optional and additive (AND logic).
+    Multi-value params (status, discipline, site_id, unit_id, tags) are
+    passed as repeated query string keys: ?status=Draft&status=Approved
     """
-    offset = (page - 1) * page_size
+    from datetime import date as date_type
+    from sqlalchemy import or_
+
     base_q = db.query(Requirement).filter(
         Requirement.requirement_id != SELF_DERIVED_ID
     )
+
+    if status:
+        base_q = base_q.filter(Requirement.status.in_(status))
+
+    if classification:
+        base_q = base_q.filter(Requirement.classification == classification)
+
+    if discipline:
+        base_q = base_q.filter(Requirement.discipline.in_(discipline))
+
+    if owner:
+        base_q = base_q.filter(Requirement.owner.ilike(f"%{owner}%"))
+
+    if source_type:
+        base_q = base_q.filter(Requirement.source_type == source_type)
+
+    if source_document_id:
+        base_q = base_q.filter(
+            Requirement.source_document_id == source_document_id
+        )
+
+    if hierarchy_node_id:
+        if include_descendants:
+            node_ids = _collect_descendant_ids(hierarchy_node_id, db)
+        else:
+            node_ids = {hierarchy_node_id}
+        # Filter requirements that have at least one matching hierarchy node
+        base_q = base_q.filter(
+            Requirement.hierarchy_nodes.any(HierarchyNode.id.in_(node_ids))
+        )
+
+    if site_id:
+        base_q = base_q.filter(Requirement.sites.any(Site.id.in_(site_id)))
+
+    if unit_id:
+        base_q = base_q.filter(Requirement.units.any(Unit.id.in_(unit_id)))
+
+    if tags:
+        # Requirement must have ALL of the requested tags
+        from sqlalchemy import cast
+        from sqlalchemy.dialects.postgresql import ARRAY, TEXT
+        for tag in tags:
+            base_q = base_q.filter(Requirement.tags.contains(cast([tag], ARRAY(TEXT))))
+
+    if created_date_from:
+        base_q = base_q.filter(Requirement.created_date >= created_date_from)
+    if created_date_to:
+        base_q = base_q.filter(Requirement.created_date <= created_date_to)
+    if modified_date_from:
+        base_q = base_q.filter(Requirement.last_modified_date >= modified_date_from)
+    if modified_date_to:
+        base_q = base_q.filter(Requirement.last_modified_date <= modified_date_to)
+
+    offset = (page - 1) * page_size
     total = base_q.count()
     reqs = (
         base_q

@@ -76,6 +76,56 @@ export async function fetchAllRequirements(): Promise<RequirementListItem[]> {
   return data.items
 }
 
+export type FilterConfig = {
+  status?: string[]
+  classification?: string
+  discipline?: string[]
+  owner?: string
+  source_type?: string
+  source_document_id?: string
+  hierarchy_node_id?: string
+  include_descendants?: boolean
+  site_id?: string[]
+  unit_id?: string[]
+  tags?: string[]
+  created_date_from?: string
+  created_date_to?: string
+  modified_date_from?: string
+  modified_date_to?: string
+}
+
+export async function fetchRequirementsFiltered(
+  page = 1,
+  pageSize = 50,
+  filters: FilterConfig = {},
+): Promise<RequirementListResponse> {
+  const params = new URLSearchParams()
+  params.set('page', String(page))
+  params.set('page_size', String(pageSize))
+
+  if (filters.status?.length) filters.status.forEach((v) => params.append('status', v))
+  if (filters.classification) params.set('classification', filters.classification)
+  if (filters.discipline?.length) filters.discipline.forEach((v) => params.append('discipline', v))
+  if (filters.owner) params.set('owner', filters.owner)
+  if (filters.source_type) params.set('source_type', filters.source_type)
+  if (filters.source_document_id) params.set('source_document_id', filters.source_document_id)
+  if (filters.hierarchy_node_id) {
+    params.set('hierarchy_node_id', filters.hierarchy_node_id)
+    params.set('include_descendants', String(filters.include_descendants ?? false))
+  }
+  if (filters.site_id?.length) filters.site_id.forEach((v) => params.append('site_id', v))
+  if (filters.unit_id?.length) filters.unit_id.forEach((v) => params.append('unit_id', v))
+  if (filters.tags?.length) filters.tags.forEach((v) => params.append('tags', v))
+  if (filters.created_date_from) params.set('created_date_from', filters.created_date_from)
+  if (filters.created_date_to) params.set('created_date_to', filters.created_date_to)
+  if (filters.modified_date_from) params.set('modified_date_from', filters.modified_date_from)
+  if (filters.modified_date_to) params.set('modified_date_to', filters.modified_date_to)
+
+  const res = await fetch(`${BASE}/requirements?${params.toString()}`)
+  if (!res.ok) throw new Error(`Failed to load requirements (${res.status})`)
+  return res.json() as Promise<RequirementListResponse>
+}
+
 export async function fetchAllLinks(): Promise<RequirementLink[]> {
   const res = await fetch(`${BASE}/requirement-links`)
   if (!res.ok) throw new Error(`Failed to load links (${res.status})`)

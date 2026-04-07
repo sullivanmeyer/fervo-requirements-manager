@@ -3,7 +3,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from routers import hierarchy, requirement_links, requirements
+from routers import hierarchy, requirement_links, requirements, saved_filters
 from routers.source_documents import ensure_bucket
 import routers.source_documents as source_documents
 
@@ -34,6 +34,7 @@ app.include_router(hierarchy.router, prefix="/api", tags=["hierarchy"])
 app.include_router(requirements.router, prefix="/api", tags=["requirements"])
 app.include_router(requirement_links.router, prefix="/api", tags=["requirement-links"])
 app.include_router(source_documents.router, prefix="/api", tags=["source-documents"])
+app.include_router(saved_filters.router, prefix="/api", tags=["saved-filters"])
 
 
 @app.get("/health")
