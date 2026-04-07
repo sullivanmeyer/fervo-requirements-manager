@@ -33,7 +33,7 @@ from models import (
     RequirementLink,
     SourceDocument,
 )
-from routers.source_documents import _get_minio_client, BUCKET
+from routers.source_documents import _minio_client, BUCKET
 from services.extraction import decompose_document, extract_requirements
 
 router = APIRouter()
@@ -200,7 +200,7 @@ def decompose(doc_id: str, db: Session = Depends(get_db)):
         )
 
     # Fetch PDF bytes from MinIO
-    minio = _get_minio_client()
+    minio = _minio_client()
     try:
         response = minio.get_object(BUCKET, doc.file_path)
         pdf_bytes = response.read()
