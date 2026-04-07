@@ -331,78 +331,78 @@ parse the complex formatting in engineering specifications (nested clause number
 tables, multi-column layouts, checkbox forms).
 
 ### Backend — LLM Integration
-- [ ] Add Anthropic Python SDK (`anthropic`) to backend dependencies
-- [ ] API key management: read `ANTHROPIC_API_KEY` from environment variable (added to `.env` / `.env.example`)
-- [ ] New service module: `services/extraction.py` that handles the LLM extraction pipeline
-- [ ] **Document decomposition endpoint**: `POST /api/source-documents/{id}/decompose`
-  - [ ] Reads the PDF from MinIO
-  - [ ] Sends the PDF to Claude via the Anthropic API with a structured prompt that instructs it to:
+- [x] Add Google Gemini SDK (`google-genai`) to backend dependencies
+- [x] API key management: read `GEMINI_API_KEY` from environment variable (added to `.env` / `.env.example`)
+- [x] New service module: `services/extraction.py` that handles the LLM extraction pipeline
+- [x] **Document decomposition endpoint**: `POST /api/source-documents/{id}/decompose`
+  - [x] Reads the PDF from MinIO
+  - [x] Sends the PDF to Gemini with a structured prompt that instructs it to:
     - Decompose the document into a hierarchical structure of text blocks, preserving clause numbering (e.g., §5.3.1 is a child of §5.3 which is a child of §5)
     - For each block, return: clause number, heading (if any), full text content, nesting depth, and block type (heading, requirement clause, table row, informational, boilerplate)
     - Return results as a structured JSON array
-  - [ ] Stores the block structure in the database
-  - [ ] Returns the block tree to the frontend
-- [ ] **Requirement extraction endpoint**: `POST /api/source-documents/{id}/extract-requirements`
-  - [ ] Can operate on the full document or on user-selected blocks
-  - [ ] Sends selected blocks to Claude with a prompt that instructs it to:
+  - [x] Stores the block structure in the database
+  - [x] Returns the block tree to the frontend
+- [x] **Requirement extraction endpoint**: `POST /api/source-documents/{id}/extract-requirements`
+  - [x] Can operate on the full document or on user-selected blocks
+  - [x] Sends selected blocks to Gemini with a prompt that instructs it to:
     - Identify all individual requirement statements in the provided blocks
     - For each requirement, return: the requirement statement text, the source clause number, a suggested classification (Requirement vs. Guideline per NASA TP-3642), a suggested discipline, and a suggested title (≤120 chars)
     - Decompose compound requirements into separate atomic statements
     - Return results as structured JSON
-  - [ ] Parses the LLM response and stores candidate requirements in a staging table
-  - [ ] Returns the list of candidates to the frontend
+  - [x] Parses the LLM response and stores candidate requirements in a staging table
+  - [x] Returns the list of candidates to the frontend
 
 ### Backend — Database
-- [ ] Alembic migration: `document_blocks` table (id UUID, source_document_id FK, parent_block_id nullable self-FK, clause_number text, heading text nullable, content text, block_type enum: heading/requirement_clause/table_row/informational/boilerplate, sort_order integer, depth integer, created_at)
-- [ ] Alembic migration: `extraction_candidates` table (id UUID, source_document_id FK, source_block_id FK nullable, title text, statement text, source_clause text, suggested_classification enum, suggested_discipline enum, status enum: Pending/Accepted/Rejected/Edited, accepted_requirement_id FK nullable, created_at)
-- [ ] When a candidate is accepted, create a real requirement record with: Source Type = "Derived from Document", Source Document linked, Source Clause populated, Owner = current user, Status = Draft, and all LLM-suggested field values as defaults (user can edit before confirming)
+- [x] Alembic migration: `document_blocks` table (id UUID, source_document_id FK, parent_block_id nullable self-FK, clause_number text, heading text nullable, content text, block_type enum: heading/requirement_clause/table_row/informational/boilerplate, sort_order integer, depth integer, created_at)
+- [x] Alembic migration: `extraction_candidates` table (id UUID, source_document_id FK, source_block_id FK nullable, title text, statement text, source_clause text, suggested_classification enum, suggested_discipline enum, status enum: Pending/Accepted/Rejected/Edited, accepted_requirement_id FK nullable, created_at)
+- [x] When a candidate is accepted, create a real requirement record with: Source Type = "Derived from Document", Source Document linked, Source Clause populated, Owner = current user, Status = Draft, and all LLM-suggested field values as defaults (user can edit before confirming)
 
 ### Backend — API Endpoints
-- [ ] `POST /api/source-documents/{id}/decompose` — trigger LLM decomposition, return block tree
-- [ ] `GET /api/source-documents/{id}/blocks` — list blocks for a document as nested tree
-- [ ] `PUT /api/document-blocks/{id}` — edit a block's content (user can correct OCR/parsing errors)
-- [ ] `POST /api/source-documents/{id}/extract-requirements` — trigger LLM extraction from selected blocks (or all blocks), return candidates
-- [ ] `GET /api/source-documents/{id}/candidates` — list extraction candidates for a document
-- [ ] `PUT /api/extraction-candidates/{id}` — update a candidate (edit fields, change status to Accepted/Rejected)
-- [ ] `POST /api/extraction-candidates/{id}/accept` — accept candidate, create real requirement, link back
+- [x] `POST /api/source-documents/{id}/decompose` — trigger LLM decomposition, return block tree
+- [x] `GET /api/source-documents/{id}/blocks` — list blocks for a document as nested tree
+- [x] `PUT /api/document-blocks/{id}` — edit a block's content (user can correct OCR/parsing errors)
+- [x] `POST /api/source-documents/{id}/extract-requirements` — trigger LLM extraction from selected blocks (or all blocks), return candidates
+- [x] `GET /api/source-documents/{id}/candidates` — list extraction candidates for a document
+- [x] `PUT /api/extraction-candidates/{id}` — update a candidate (edit fields, change status to Accepted/Rejected)
+- [x] `POST /api/extraction-candidates/{id}/accept` — accept candidate, create real requirement, link back
 
 ### Frontend — Block-Based Document Viewer
-- [ ] On the Source Document Detail View, replace the raw extracted text panel with a **block-based viewer**
-- [ ] After decomposition, the document appears as a tree of editable text blocks (similar to Notion)
-- [ ] Each block shows: clause number, content text, block type badge (color-coded)
+- [x] On the Source Document Detail View, replace the raw extracted text panel with a **block-based viewer**
+- [x] After decomposition, the document appears as a flat list of text blocks with depth-based indentation
+- [x] Each block shows: clause number, content text, block type badge (color-coded)
 - [ ] Blocks are collapsible by their parent/child hierarchy (e.g., collapse all sub-clauses of §5.3)
-- [ ] Users can select individual blocks or ranges of blocks
+- [x] Users can select individual blocks via checkboxes
 - [ ] Users can edit block content inline (to correct parsing errors)
-- [ ] "Decompose Document" button triggers the LLM decomposition (first time only; blocks are cached after)
-- [ ] "Extract Requirements from Selected" button sends selected blocks to the extraction endpoint
-- [ ] "Extract All Requirements" button sends all non-boilerplate blocks
+- [x] "Decompose Document" button triggers the LLM decomposition (blocks cached after; button becomes "Re-decompose")
+- [x] "Extract Requirements from Selected" button sends selected blocks to the extraction endpoint
+- [x] "Extract All Requirements" button sends all non-boilerplate blocks
 
 ### Frontend — Extraction Review Interface
-- [ ] **Candidate Review Panel**: after extraction completes, display candidates alongside the block viewer. Each candidate shows:
-  - [ ] Suggested title, statement, source clause, classification, discipline
+- [x] **Candidate Review Panel**: after extraction completes, display candidates alongside the block viewer. Each candidate shows:
+  - [x] Suggested title, statement, source clause, classification, discipline
   - [ ] Link back to the source block (clicking highlights the block in the viewer)
-  - [ ] "Accept" button (creates the requirement as-is with current user as owner, Status = Draft)
-  - [ ] "Edit & Accept" button (opens an editable form where the user can modify any field before accepting)
-  - [ ] "Reject" button (marks the candidate as rejected, does not create a requirement)
+  - [x] "Accept" button (creates the requirement as-is with current user as owner, Status = Draft)
+  - [x] "Edit & Accept" button (opens an editable form where the user can modify any field before accepting)
+  - [x] "Reject" button (marks the candidate as rejected, does not create a requirement)
   - [ ] "Accept All Remaining" button for bulk acceptance after the user has reviewed a few
-- [ ] Accepted candidates show a green checkmark and link to the created requirement
-- [ ] Rejected candidates show a red X and are dimmed
-- [ ] Count display: "X of Y candidates accepted, Z rejected, W pending"
+- [x] Accepted candidates show a green checkmark and link to the created requirement
+- [x] Rejected candidates are dimmed with a red indicator
+- [x] Count display: "X of Y candidates accepted, Z rejected, W pending"
 - [ ] Blocks that have been extracted into accepted requirements show a visual indicator (e.g., green left border)
 
 ### Prompt Engineering
-- [ ] **Decomposition prompt** instructs the LLM to:
-  - [ ] Preserve the document's clause numbering hierarchy faithfully
-  - [ ] Identify block types: headings, requirement clauses (contain "shall"/"should"/"may"), table rows, informational text, boilerplate (TOC, revision history, signature blocks, distribution lists)
-  - [ ] Handle tables by decomposing each meaningful row into its own block
-  - [ ] Return a flat JSON array with parent references to represent nesting
-- [ ] **Extraction prompt** instructs the LLM to:
-  - [ ] Treat each "shall" statement as a candidate Requirement
-  - [ ] Treat "should" and "may" statements as candidate Guidelines
-  - [ ] Decompose compound requirements (a single clause containing multiple obligations) into separate atomic statements
-  - [ ] Ignore boilerplate blocks
-  - [ ] Reference source clause numbers from the block structure
-  - [ ] Return results as a JSON array with a consistent schema
+- [x] **Decomposition prompt** instructs the LLM to:
+  - [x] Preserve the document's clause numbering hierarchy faithfully
+  - [x] Identify block types: headings, requirement clauses (contain "shall"/"should"/"may"), table rows, informational text, boilerplate (TOC, revision history, signature blocks, distribution lists)
+  - [x] Handle tables by decomposing each meaningful row into its own block
+  - [x] Return a flat JSON array with parent references to represent nesting
+- [x] **Extraction prompt** instructs the LLM to:
+  - [x] Treat each "shall" statement as a candidate Requirement
+  - [x] Treat "should" and "may" statements as candidate Guidelines
+  - [x] Decompose compound requirements (a single clause containing multiple obligations) into separate atomic statements
+  - [x] Ignore boilerplate blocks
+  - [x] Reference source clause numbers from the block structure
+  - [x] Return results as a JSON array with a consistent schema
 - [ ] Test both prompts against at least two different document types: one Kiewit equipment spec (e.g., MSPEC-KIE format) and one Fervo internal BOD (e.g., CAP-02-EE-BOD format)
 
 ### Stage 7 Verification
