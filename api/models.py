@@ -240,6 +240,74 @@ class RequirementAttachment(Base):
 
 
 # ---------------------------------------------------------------------------
+# Document blocks (LLM decomposition of source document PDF)
+# ---------------------------------------------------------------------------
+
+class DocumentBlock(Base):
+    __tablename__ = "document_blocks"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source_document_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("source_documents.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    parent_block_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("document_blocks.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    clause_number = Column(Text, nullable=True)
+    heading = Column(Text, nullable=True)
+    content = Column(Text, nullable=False)
+    # heading / requirement_clause / table_row / informational / boilerplate
+    block_type = Column(Text, nullable=False)
+    sort_order = Column(Integer, default=0, nullable=False)
+    depth = Column(Integer, default=0, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    children = relationship(
+        "DocumentBlock",
+        foreign_keys=[parent_block_id],
+        backref="parent",
+        lazy="select",
+    )
+
+
+# ---------------------------------------------------------------------------
+# Extraction candidates (LLM-proposed requirements pending user review)
+# ---------------------------------------------------------------------------
+
+class ExtractionCandidate(Base):
+    __tablename__ = "extraction_candidates"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source_document_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("source_documents.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    source_block_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("document_blocks.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    title = Column(Text, nullable=False)
+    statement = Column(Text, nullable=False)
+    source_clause = Column(Text, nullable=True)
+    suggested_classification = Column(Text, nullable=True)   # Requirement / Guideline
+    suggested_discipline = Column(Text, nullable=True)
+    # Pending / Accepted / Rejected / Edited
+    status = Column(Text, nullable=False, default="Pending")
+    accepted_requirement_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("requirements.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+# ---------------------------------------------------------------------------
 # Requirement traceability links
 # ---------------------------------------------------------------------------
 

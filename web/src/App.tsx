@@ -319,6 +319,7 @@ export default function App() {
                   backDocumentId: view.documentId ?? undefined,
                 })
               }
+              userName={userName}
             />
           </div>
         )}

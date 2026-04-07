@@ -1,15 +1,21 @@
 /**
- * SourceDocumentDetail
+ * SourceDocumentDetail — Stage 7 update
  *
- * Create / edit form for a source document.  For an existing document it also
- * shows:
- *   - An embedded PDF viewer (iframe) if a file has been uploaded
- *   - The extracted text panel with "Create Requirement from Selection"
- *   - The list of requirements already derived from this document
+ * Right-panel tabs:
+ *   PDF Viewer     — iframe, unchanged from Phase 1
+ *   Document Blocks — LLM-decomposed clause tree with extract controls
+ *   Extracted Text  — legacy raw text panel (kept for reference)
  *
- * The PDF viewer uses a plain <iframe> — modern browsers render PDFs natively.
- * The Vite dev-server proxies /api/* to the API container, so the iframe src
- * can just use a relative /api path.
+ * Document Blocks tab:
+ *   • "Decompose Document" triggers Claude decomposition and stores blocks in DB
+ *   • Each block shows clause number, type badge, and content
+ *   • Blocks can be checked for selective extraction
+ *   • "Extract from Selected" / "Extract All" trigger LLM requirement extraction
+ *
+ * Extraction Candidates panel (below blocks):
+ *   • Lists all LLM-proposed requirements for this document
+ *   • Accept (one-click), Edit & Accept (inline form), Reject
+ *   • Accepted candidates display a link to the created requirement
  */
 import { useEffect, useRef, useState } from 'react'
 import {
@@ -19,7 +25,19 @@ import {
   updateSourceDocument,
   uploadPdf,
 } from '../api/sourceDocuments'
-import type { SourceDocumentDetail as DocDetail } from '../types'
+import {
+  acceptCandidate,
+  decomposeDocument,
+  extractRequirements,
+  fetchBlocks,
+  fetchCandidates,
+  updateCandidate,
+} from '../api/extraction'
+import type {
+  DocumentBlock,
+  ExtractionCandidate,
+  SourceDocumentDetail as DocDetail,
+} from '../types'
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -43,6 +61,22 @@ const DISCIPLINES = [
   'Fire Protection',
   'General',
 ]
+
+const BLOCK_TYPE_STYLES: Record<string, string> = {
+  heading: 'bg-blue-100 text-blue-700',
+  requirement_clause: 'bg-green-100 text-green-700',
+  table_row: 'bg-purple-100 text-purple-700',
+  informational: 'bg-gray-100 text-gray-600',
+  boilerplate: 'bg-gray-50 text-gray-400',
+}
+
+const BLOCK_TYPE_LABELS: Record<string, string> = {
+  heading: 'Heading',
+  requirement_clause: 'Requirement',
+  table_row: 'Table',
+  informational: 'Info',
+  boilerplate: 'Boilerplate',
+}
 
 // ---------------------------------------------------------------------------
 // Form state
@@ -94,12 +128,30 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   )
 }
 
+function BlockTypeBadge({ type }: { type: string }) {
+  const cls = BLOCK_TYPE_STYLES[type] ?? 'bg-gray-100 text-gray-500'
+  const label = BLOCK_TYPE_LABELS[type] ?? type
+  return (
+    <span className={`text-xs font-medium px-1.5 py-0.5 rounded shrink-0 ${cls}`}>
+      {label}
+    </span>
+  )
+}
+
+// Candidate status colours
+function candidateBorderClass(status: string): string {
+  if (status === 'Accepted') return 'border-l-4 border-l-green-400'
+  if (status === 'Rejected') return 'border-l-4 border-l-gray-300'
+  return 'border-l-4 border-l-blue-300'
+}
+
 // ---------------------------------------------------------------------------
 // Props
 // ---------------------------------------------------------------------------
 
 interface Props {
-  documentId: string | null    // null = creating new
+  documentId: string | null
+  userName?: string
   onSaved: (savedId: string) => void
   onCancel: () => void
   onCreateRequirement: (sourceDocumentId: string, initialStatement: string) => void
@@ -112,6 +164,7 @@ interface Props {
 
 export default function SourceDocumentDetail({
   documentId,
+  userName = '',
   onSaved,
   onCancel,
   onCreateRequirement,
@@ -119,18 +172,39 @@ export default function SourceDocumentDetail({
 }: Props) {
   const isNew = documentId === null
 
+  // Core document state
   const [doc, setDoc] = useState<DocDetail | null>(null)
   const [form, setForm] = useState<FormState>(emptyForm())
   const [loading, setLoading] = useState(!isNew)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  // PDF upload state
+  // PDF upload
   const fileInputRef = useRef<HTMLInputElement>(null)
   const [uploading, setUploading] = useState(false)
 
-  // Which panel is showing: 'viewer' or 'text'
-  const [activePanel, setActivePanel] = useState<'viewer' | 'text'>('viewer')
+  // Panel
+  const [activePanel, setActivePanel] = useState<'viewer' | 'blocks' | 'text'>('viewer')
+
+  // Document blocks
+  const [blocks, setBlocks] = useState<DocumentBlock[]>([])
+  const [selectedBlockIds, setSelectedBlockIds] = useState<Set<string>>(new Set())
+  const [decomposing, setDecomposing] = useState(false)
+  const [blockError, setBlockError] = useState<string | null>(null)
+
+  // Extraction candidates
+  const [candidates, setCandidates] = useState<ExtractionCandidate[]>([])
+  const [extracting, setExtracting] = useState(false)
+  const [candidateError, setCandidateError] = useState<string | null>(null)
+
+  // Inline edit state for "Edit & Accept"
+  const [editingCandidateId, setEditingCandidateId] = useState<string | null>(null)
+  const [editForm, setEditForm] = useState<{
+    title: string
+    statement: string
+    classification: string
+    discipline: string
+  } | null>(null)
 
   // -------------------------------------------------------------------------
   // Load on mount
@@ -140,9 +214,15 @@ export default function SourceDocumentDetail({
     if (isNew) return
     const doLoad = async () => {
       try {
-        const d = await fetchSourceDocument(documentId!)
+        const [d, blks, cands] = await Promise.all([
+          fetchSourceDocument(documentId!),
+          fetchBlocks(documentId!).catch(() => [] as DocumentBlock[]),
+          fetchCandidates(documentId!).catch(() => [] as ExtractionCandidate[]),
+        ])
         setDoc(d)
         setForm(formFromDetail(d))
+        setBlocks(blks)
+        setCandidates(cands)
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Failed to load document')
       } finally {
@@ -153,35 +233,27 @@ export default function SourceDocumentDetail({
   }, [isNew, documentId])
 
   // -------------------------------------------------------------------------
-  // Field updater
+  // Form helpers
   // -------------------------------------------------------------------------
 
-  const set = <K extends keyof FormState>(key: K, value: FormState[K]) => {
+  const set = <K extends keyof FormState>(key: K, value: FormState[K]) =>
     setForm((f) => ({ ...f, [key]: value }))
-  }
 
-  const toggleDiscipline = (d: string) => {
+  const toggleDiscipline = (d: string) =>
     setForm((f) => ({
       ...f,
       disciplines: f.disciplines.includes(d)
         ? f.disciplines.filter((x) => x !== d)
         : [...f.disciplines, d],
     }))
-  }
 
   // -------------------------------------------------------------------------
   // Save metadata
   // -------------------------------------------------------------------------
 
   const handleSave = async () => {
-    if (!form.document_id.trim()) {
-      setError('Document ID is required.')
-      return
-    }
-    if (!form.title.trim()) {
-      setError('Title is required.')
-      return
-    }
+    if (!form.document_id.trim()) { setError('Document ID is required.'); return }
+    if (!form.title.trim()) { setError('Title is required.'); return }
     setSaving(true)
     setError(null)
     try {
@@ -193,12 +265,9 @@ export default function SourceDocumentDetail({
         issuing_organization: form.issuing_organization || undefined,
         disciplines: form.disciplines.length > 0 ? form.disciplines : undefined,
       }
-      let saved: DocDetail
-      if (isNew) {
-        saved = await createSourceDocument(payload)
-      } else {
-        saved = await updateSourceDocument(documentId!, payload)
-      }
+      const saved = isNew
+        ? await createSourceDocument(payload)
+        : await updateSourceDocument(documentId!, payload)
       setDoc(saved)
       setSaving(false)
       onSaved(saved.id)
@@ -229,7 +298,123 @@ export default function SourceDocumentDetail({
   }
 
   // -------------------------------------------------------------------------
-  // "Create Requirement from Selection"
+  // Decomposition
+  // -------------------------------------------------------------------------
+
+  const handleDecompose = async () => {
+    if (!documentId) return
+    setDecomposing(true)
+    setBlockError(null)
+    try {
+      const blks = await decomposeDocument(documentId)
+      setBlocks(blks)
+      setSelectedBlockIds(new Set())
+    } catch (e) {
+      setBlockError(e instanceof Error ? e.message : 'Decomposition failed')
+    } finally {
+      setDecomposing(false)
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Block selection
+  // -------------------------------------------------------------------------
+
+  const toggleBlock = (id: string) =>
+    setSelectedBlockIds((prev) => {
+      const next = new Set(prev)
+      next.has(id) ? next.delete(id) : next.add(id)
+      return next
+    })
+
+  const selectAllBlocks = () =>
+    setSelectedBlockIds(new Set(blocks.map((b) => b.id)))
+
+  const clearSelection = () => setSelectedBlockIds(new Set())
+
+  // -------------------------------------------------------------------------
+  // Extraction
+  // -------------------------------------------------------------------------
+
+  const handleExtract = async (selectedOnly: boolean) => {
+    if (!documentId) return
+    setExtracting(true)
+    setCandidateError(null)
+    try {
+      const blockIds = selectedOnly ? Array.from(selectedBlockIds) : undefined
+      const newCands = await extractRequirements(documentId, blockIds)
+      setCandidates((prev) => [...prev, ...newCands])
+    } catch (e) {
+      setCandidateError(e instanceof Error ? e.message : 'Extraction failed')
+    } finally {
+      setExtracting(false)
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Candidate actions
+  // -------------------------------------------------------------------------
+
+  const handleReject = async (id: string) => {
+    setCandidateError(null)
+    try {
+      const updated = await updateCandidate(id, { status: 'Rejected' })
+      setCandidates((prev) => prev.map((c) => (c.id === id ? updated : c)))
+    } catch (e) {
+      setCandidateError(e instanceof Error ? e.message : 'Failed to reject')
+    }
+  }
+
+  const handleRestorePending = async (id: string) => {
+    setCandidateError(null)
+    try {
+      const updated = await updateCandidate(id, { status: 'Pending' })
+      setCandidates((prev) => prev.map((c) => (c.id === id ? updated : c)))
+    } catch (e) {
+      setCandidateError(e instanceof Error ? e.message : 'Failed to restore')
+    }
+  }
+
+  const startEdit = (c: ExtractionCandidate) => {
+    setEditingCandidateId(c.id)
+    setEditForm({
+      title: c.title,
+      statement: c.statement,
+      classification: c.suggested_classification ?? 'Requirement',
+      discipline: c.suggested_discipline ?? 'General',
+    })
+  }
+
+  const handleAccept = async (c: ExtractionCandidate, overrides?: {
+    title?: string; statement?: string; classification?: string; discipline?: string
+  }) => {
+    setCandidateError(null)
+    try {
+      const result = await acceptCandidate(c.id, {
+        owner: userName || 'Unknown',
+        title: overrides?.title,
+        statement: overrides?.statement,
+        classification: overrides?.classification,
+        discipline: overrides?.discipline,
+      })
+      setCandidates((prev) =>
+        prev.map((x) => (x.id === c.id ? result.candidate : x))
+      )
+      setEditingCandidateId(null)
+      setEditForm(null)
+      // Refresh linked requirements list
+      if (documentId) {
+        fetchSourceDocument(documentId)
+          .then(setDoc)
+          .catch(() => null)
+      }
+    } catch (e) {
+      setCandidateError(e instanceof Error ? e.message : 'Failed to accept')
+    }
+  }
+
+  // -------------------------------------------------------------------------
+  // Legacy: "Create Requirement from Selection"
   // -------------------------------------------------------------------------
 
   const handleCreateFromSelection = () => {
@@ -237,6 +422,14 @@ export default function SourceDocumentDetail({
     const selection = window.getSelection()?.toString().trim() ?? ''
     onCreateRequirement(documentId, selection)
   }
+
+  // -------------------------------------------------------------------------
+  // Derived values
+  // -------------------------------------------------------------------------
+
+  const pendingCount = candidates.filter((c) => c.status === 'Pending').length
+  const acceptedCount = candidates.filter((c) => c.status === 'Accepted').length
+  const rejectedCount = candidates.filter((c) => c.status === 'Rejected').length
 
   // -------------------------------------------------------------------------
   // Render
@@ -284,7 +477,7 @@ export default function SourceDocumentDetail({
         </div>
       )}
 
-      {/* Body: metadata form on left, PDF/text panel on right */}
+      {/* Body */}
       <div className="flex-1 overflow-hidden flex">
 
         {/* ---------------------------------------------------------------- */}
@@ -328,9 +521,7 @@ export default function SourceDocumentDetail({
               onChange={(e) => set('document_type', e.target.value)}
               className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white"
             >
-              {DOCUMENT_TYPES.map((t) => (
-                <option key={t} value={t}>{t}</option>
-              ))}
+              {DOCUMENT_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
             </select>
           </Field>
 
@@ -373,16 +564,14 @@ export default function SourceDocumentDetail({
             </div>
           </Field>
 
-          {/* PDF upload — only available after the document is saved */}
+          {/* PDF upload */}
           {!isNew && (
             <div className="pt-2 border-t border-gray-100">
               <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
                 PDF File
               </p>
               {doc?.has_file ? (
-                <p className="text-xs text-green-700 mb-2">
-                  PDF uploaded — {doc.document_id}.pdf
-                </p>
+                <p className="text-xs text-green-700 mb-2">PDF uploaded</p>
               ) : (
                 <p className="text-xs text-gray-400 italic mb-2">No file uploaded yet.</p>
               )}
@@ -431,47 +620,55 @@ export default function SourceDocumentDetail({
         </div>
 
         {/* ---------------------------------------------------------------- */}
-        {/* Right: PDF viewer / extracted text (only for existing docs)       */}
+        {/* Right: tab panel (existing docs only)                             */}
         {/* ---------------------------------------------------------------- */}
         {!isNew && (
           <div className="flex-1 flex flex-col overflow-hidden bg-gray-100">
-            {/* Panel switcher tabs */}
+
+            {/* Tab bar */}
             <div className="flex border-b border-gray-200 bg-white shrink-0">
-              <button
-                onClick={() => setActivePanel('viewer')}
-                className={`px-4 py-2 text-sm border-b-2 transition-colors ${
-                  activePanel === 'viewer'
-                    ? 'border-blue-500 text-blue-600 font-medium'
-                    : 'border-transparent text-gray-500 hover:text-gray-700'
-                }`}
-              >
-                PDF Viewer
-              </button>
-              <button
-                onClick={() => setActivePanel('text')}
-                className={`px-4 py-2 text-sm border-b-2 transition-colors ${
-                  activePanel === 'text'
-                    ? 'border-blue-500 text-blue-600 font-medium'
-                    : 'border-transparent text-gray-500 hover:text-gray-700'
-                }`}
-              >
-                Extracted Text
-              </button>
+              {(['viewer', 'blocks', 'text'] as const).map((panel) => {
+                const labels = { viewer: 'PDF Viewer', blocks: 'Document Blocks', text: 'Extracted Text' }
+                return (
+                  <button
+                    key={panel}
+                    onClick={() => setActivePanel(panel)}
+                    className={`px-4 py-2 text-sm border-b-2 transition-colors ${
+                      activePanel === panel
+                        ? 'border-blue-500 text-blue-600 font-medium'
+                        : 'border-transparent text-gray-500 hover:text-gray-700'
+                    }`}
+                  >
+                    {labels[panel]}
+                    {panel === 'blocks' && blocks.length > 0 && (
+                      <span className="ml-1.5 px-1.5 py-0.5 text-xs bg-blue-100 text-blue-700 rounded-full">
+                        {blocks.length}
+                      </span>
+                    )}
+                    {panel === 'blocks' && candidates.length > 0 && (
+                      <span className="ml-1 px-1.5 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">
+                        {acceptedCount}/{candidates.length}
+                      </span>
+                    )}
+                  </button>
+                )
+              })}
+              {/* Legacy quick action on Extracted Text tab */}
               {activePanel === 'text' && doc?.extracted_text && (
                 <button
                   onClick={handleCreateFromSelection}
                   className="ml-auto mr-3 my-1.5 px-3 py-1 text-xs bg-indigo-600 text-white rounded hover:bg-indigo-700"
-                  title="Highlight text above, then click to pre-populate a new requirement's statement"
+                  title="Highlight text above, then click"
                 >
-                  Create Requirement from Selection
+                  Create from Selection
                 </button>
               )}
             </div>
 
-            {/* Panel content */}
-            <div className="flex-1 overflow-hidden">
-              {activePanel === 'viewer' ? (
-                doc?.has_file ? (
+            {/* ---- PDF Viewer ---- */}
+            {activePanel === 'viewer' && (
+              <div className="flex-1 overflow-hidden">
+                {doc?.has_file ? (
                   <iframe
                     src={pdfDownloadUrl(documentId!)}
                     className="w-full h-full border-0"
@@ -481,10 +678,316 @@ export default function SourceDocumentDetail({
                   <div className="flex items-center justify-center h-full text-gray-400 text-sm">
                     No PDF uploaded yet. Use "Upload PDF" in the panel on the left.
                   </div>
-                )
-              ) : (
-                /* Extracted text panel */
-                doc?.extracted_text ? (
+                )}
+              </div>
+            )}
+
+            {/* ---- Document Blocks ---- */}
+            {activePanel === 'blocks' && (
+              <div className="flex-1 flex flex-col overflow-hidden">
+
+                {/* Blocks section */}
+                <div className={`flex flex-col overflow-hidden ${candidates.length > 0 ? 'flex-[3]' : 'flex-1'}`}>
+
+                  {/* Blocks toolbar */}
+                  <div className="bg-white border-b border-gray-200 px-4 py-2 flex items-center gap-2 shrink-0 flex-wrap">
+                    {blocks.length === 0 ? (
+                      <>
+                        <p className="text-sm text-gray-500 flex-1">
+                          {doc?.has_file
+                            ? 'Decompose this document into structured blocks for AI extraction.'
+                            : 'Upload a PDF first, then decompose it into blocks.'}
+                        </p>
+                        <button
+                          onClick={() => void handleDecompose()}
+                          disabled={decomposing || !doc?.has_file}
+                          className="px-4 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+                        >
+                          {decomposing ? 'Decomposing…' : 'Decompose Document'}
+                        </button>
+                      </>
+                    ) : (
+                      <>
+                        <span className="text-xs text-gray-500">
+                          {blocks.length} blocks
+                          {selectedBlockIds.size > 0 && ` · ${selectedBlockIds.size} selected`}
+                        </span>
+                        <button
+                          onClick={selectedBlockIds.size > 0 ? clearSelection : selectAllBlocks}
+                          className="text-xs text-blue-600 hover:underline"
+                        >
+                          {selectedBlockIds.size > 0 ? 'Clear selection' : 'Select all'}
+                        </button>
+                        <div className="flex-1" />
+                        <button
+                          onClick={() => void handleExtract(true)}
+                          disabled={extracting || selectedBlockIds.size === 0}
+                          className="px-3 py-1.5 text-xs border border-blue-300 text-blue-700 rounded hover:bg-blue-50 disabled:opacity-40"
+                        >
+                          {extracting ? 'Extracting…' : `Extract from Selected (${selectedBlockIds.size})`}
+                        </button>
+                        <button
+                          onClick={() => void handleExtract(false)}
+                          disabled={extracting}
+                          className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-40"
+                        >
+                          {extracting ? 'Extracting…' : 'Extract All'}
+                        </button>
+                        <button
+                          onClick={() => void handleDecompose()}
+                          disabled={decomposing}
+                          className="px-3 py-1.5 text-xs border border-gray-300 text-gray-600 rounded hover:bg-gray-50 disabled:opacity-40"
+                          title="Re-run decomposition (replaces existing blocks)"
+                        >
+                          {decomposing ? 'Decomposing…' : 'Re-decompose'}
+                        </button>
+                      </>
+                    )}
+                  </div>
+
+                  {blockError && (
+                    <div className="px-4 py-2 bg-red-50 border-b border-red-200 text-xs text-red-700 shrink-0">
+                      {blockError}
+                    </div>
+                  )}
+
+                  {/* Block list */}
+                  <div className="flex-1 overflow-y-auto">
+                    {decomposing ? (
+                      <div className="flex flex-col items-center justify-center h-full text-gray-400 text-sm gap-2">
+                        <svg className="animate-spin h-5 w-5 text-blue-500" viewBox="0 0 24 24" fill="none">
+                          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                        </svg>
+                        <span>Sending PDF to Claude for decomposition…</span>
+                        <span className="text-xs text-gray-400">This may take 30–90 seconds.</span>
+                      </div>
+                    ) : blocks.length === 0 ? (
+                      <div className="flex items-center justify-center h-full text-gray-400 text-sm">
+                        {doc?.has_file
+                          ? 'Click "Decompose Document" to begin.'
+                          : 'Upload a PDF first.'}
+                      </div>
+                    ) : (
+                      <div className="divide-y divide-gray-100">
+                        {blocks.map((block) => {
+                          const isSelected = selectedBlockIds.has(block.id)
+                          const isBoilerplate = block.block_type === 'boilerplate'
+                          return (
+                            <div
+                              key={block.id}
+                              className={`flex items-start gap-2 px-3 py-2 hover:bg-white cursor-pointer transition-colors ${
+                                isSelected ? 'bg-blue-50' : ''
+                              } ${isBoilerplate ? 'opacity-50' : ''}`}
+                              style={{ paddingLeft: `${12 + block.depth * 16}px` }}
+                              onClick={() => toggleBlock(block.id)}
+                            >
+                              <input
+                                type="checkbox"
+                                checked={isSelected}
+                                onChange={() => toggleBlock(block.id)}
+                                onClick={(e) => e.stopPropagation()}
+                                className="mt-0.5 shrink-0"
+                              />
+                              <div className="flex-1 min-w-0">
+                                <div className="flex items-center gap-1.5 mb-0.5 flex-wrap">
+                                  {block.clause_number && (
+                                    <span className="text-xs font-mono text-gray-500 shrink-0">
+                                      {block.clause_number}
+                                    </span>
+                                  )}
+                                  <BlockTypeBadge type={block.block_type} />
+                                </div>
+                                <p className={`text-xs leading-relaxed line-clamp-2 ${
+                                  block.block_type === 'heading'
+                                    ? 'font-semibold text-gray-800'
+                                    : 'text-gray-700'
+                                }`}>
+                                  {block.heading ?? block.content}
+                                </p>
+                              </div>
+                            </div>
+                          )
+                        })}
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* ---- Extraction Candidates panel ---- */}
+                {candidates.length > 0 && (
+                  <div className="flex-[2] flex flex-col overflow-hidden border-t-2 border-gray-300">
+                    {/* Candidates header */}
+                    <div className="bg-white border-b border-gray-200 px-4 py-2 flex items-center gap-3 shrink-0 flex-wrap">
+                      <span className="text-sm font-semibold text-gray-700">
+                        Extraction Candidates
+                      </span>
+                      <span className="text-xs text-gray-500">
+                        {acceptedCount} accepted · {rejectedCount} rejected · {pendingCount} pending
+                      </span>
+                      {candidateError && (
+                        <span className="text-xs text-red-600 ml-2">{candidateError}</span>
+                      )}
+                    </div>
+
+                    {/* Candidates list */}
+                    <div className="flex-1 overflow-y-auto divide-y divide-gray-100 bg-gray-50">
+                      {candidates.map((c) => {
+                        const isEditing = editingCandidateId === c.id
+                        return (
+                          <div
+                            key={c.id}
+                            className={`bg-white p-3 ${candidateBorderClass(c.status)} ${
+                              c.status === 'Rejected' ? 'opacity-50' : ''
+                            }`}
+                          >
+                            {/* Accepted state */}
+                            {c.status === 'Accepted' && (
+                              <div className="flex items-center gap-2">
+                                <span className="text-green-600 text-sm">✓</span>
+                                <div className="flex-1 min-w-0">
+                                  <p className="text-xs font-semibold text-gray-800 truncate">{c.title}</p>
+                                  <p className="text-xs text-gray-500">{c.source_clause && `§${c.source_clause} · `}{c.suggested_discipline}</p>
+                                </div>
+                                {c.accepted_requirement_id && (
+                                  <button
+                                    onClick={() => onOpenRequirement(c.accepted_requirement_id!)}
+                                    className="text-xs text-blue-600 hover:underline shrink-0"
+                                  >
+                                    Open →
+                                  </button>
+                                )}
+                              </div>
+                            )}
+
+                            {/* Rejected state */}
+                            {c.status === 'Rejected' && (
+                              <div className="flex items-center gap-2">
+                                <span className="text-gray-400 text-sm">✕</span>
+                                <p className="text-xs text-gray-500 flex-1 truncate">{c.title}</p>
+                                <button
+                                  onClick={() => void handleRestorePending(c.id)}
+                                  className="text-xs text-blue-500 hover:underline shrink-0"
+                                >
+                                  Restore
+                                </button>
+                              </div>
+                            )}
+
+                            {/* Pending / Edited state */}
+                            {(c.status === 'Pending' || c.status === 'Edited') && !isEditing && (
+                              <>
+                                <div className="flex items-start gap-2 mb-2">
+                                  <div className="flex-1 min-w-0">
+                                    <p className="text-xs font-semibold text-gray-800 mb-0.5">{c.title}</p>
+                                    <p className="text-xs text-gray-600 line-clamp-2">{c.statement}</p>
+                                    <div className="flex items-center gap-1.5 mt-1 flex-wrap">
+                                      {c.source_clause && (
+                                        <span className="text-xs font-mono text-gray-500">§{c.source_clause}</span>
+                                      )}
+                                      {c.suggested_classification && (
+                                        <span className={`text-xs px-1.5 py-0.5 rounded ${
+                                          c.suggested_classification === 'Requirement'
+                                            ? 'bg-green-100 text-green-700'
+                                            : 'bg-yellow-100 text-yellow-700'
+                                        }`}>
+                                          {c.suggested_classification}
+                                        </span>
+                                      )}
+                                      {c.suggested_discipline && (
+                                        <span className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">
+                                          {c.suggested_discipline}
+                                        </span>
+                                      )}
+                                    </div>
+                                  </div>
+                                </div>
+                                <div className="flex gap-1.5">
+                                  <button
+                                    onClick={() => void handleAccept(c)}
+                                    className="px-2.5 py-1 text-xs bg-green-600 text-white rounded hover:bg-green-700"
+                                  >
+                                    Accept
+                                  </button>
+                                  <button
+                                    onClick={() => startEdit(c)}
+                                    className="px-2.5 py-1 text-xs border border-blue-300 text-blue-700 rounded hover:bg-blue-50"
+                                  >
+                                    Edit & Accept
+                                  </button>
+                                  <button
+                                    onClick={() => void handleReject(c.id)}
+                                    className="px-2.5 py-1 text-xs border border-gray-300 text-gray-500 rounded hover:bg-gray-50"
+                                  >
+                                    Reject
+                                  </button>
+                                </div>
+                              </>
+                            )}
+
+                            {/* Edit & Accept inline form */}
+                            {isEditing && editForm && (
+                              <div className="space-y-2">
+                                <input
+                                  type="text"
+                                  value={editForm.title}
+                                  onChange={(e) => setEditForm((f) => f ? { ...f, title: e.target.value } : f)}
+                                  placeholder="Title"
+                                  className="w-full border border-gray-300 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400"
+                                />
+                                <textarea
+                                  value={editForm.statement}
+                                  onChange={(e) => setEditForm((f) => f ? { ...f, statement: e.target.value } : f)}
+                                  placeholder="Statement"
+                                  rows={3}
+                                  className="w-full border border-gray-300 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400 resize-none"
+                                />
+                                <div className="flex gap-2">
+                                  <select
+                                    value={editForm.classification}
+                                    onChange={(e) => setEditForm((f) => f ? { ...f, classification: e.target.value } : f)}
+                                    className="flex-1 border border-gray-300 rounded px-2 py-1 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-blue-400"
+                                  >
+                                    <option>Requirement</option>
+                                    <option>Guideline</option>
+                                  </select>
+                                  <select
+                                    value={editForm.discipline}
+                                    onChange={(e) => setEditForm((f) => f ? { ...f, discipline: e.target.value } : f)}
+                                    className="flex-1 border border-gray-300 rounded px-2 py-1 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-blue-400"
+                                  >
+                                    {DISCIPLINES.map((d) => <option key={d}>{d}</option>)}
+                                  </select>
+                                </div>
+                                <div className="flex gap-1.5">
+                                  <button
+                                    onClick={() => void handleAccept(c, editForm)}
+                                    className="px-2.5 py-1 text-xs bg-green-600 text-white rounded hover:bg-green-700"
+                                  >
+                                    Accept
+                                  </button>
+                                  <button
+                                    onClick={() => { setEditingCandidateId(null); setEditForm(null) }}
+                                    className="px-2.5 py-1 text-xs border border-gray-300 text-gray-500 rounded hover:bg-gray-50"
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        )
+                      })}
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ---- Extracted Text (legacy) ---- */}
+            {activePanel === 'text' && (
+              <div className="flex-1 overflow-hidden">
+                {doc?.extracted_text ? (
                   <div className="h-full overflow-y-auto p-4">
                     <pre className="whitespace-pre-wrap text-xs text-gray-700 font-mono leading-relaxed select-text">
                       {doc.extracted_text}
@@ -496,13 +999,14 @@ export default function SourceDocumentDetail({
                       ? 'No text could be extracted from this PDF (it may be a scanned image).'
                       : 'Upload a PDF to extract its text.'}
                   </div>
-                )
-              )}
-            </div>
+                )}
+              </div>
+            )}
+
           </div>
         )}
 
-        {/* For a new document that hasn't been saved yet, show a prompt */}
+        {/* For new documents not yet saved */}
         {isNew && (
           <div className="flex-1 flex items-center justify-center bg-gray-50 text-gray-400 text-sm">
             Fill in the metadata and save — then you can upload a PDF.

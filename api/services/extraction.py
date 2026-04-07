@@ -1,0 +1,236 @@
+"""
+LLM-powered document extraction service — Google Gemini backend.
+
+Two-step pipeline:
+  1. decompose_document  — sends the PDF to Gemini and returns a flat list of
+                           structured text blocks preserving clause hierarchy.
+  2. extract_requirements — sends a list of block texts to Gemini and returns
+                            candidate requirement statements with metadata.
+
+JSON output is requested via explicit prompting; a regex fallback strips
+markdown code fences if the model adds them.
+"""
+
+from __future__ import annotations
+
+import base64
+import json
+import os
+import re
+from typing import Any
+
+from google import genai
+from google.genai import types
+
+# ---------------------------------------------------------------------------
+# Model config
+# ---------------------------------------------------------------------------
+
+MODEL = "gemini-3.0-pro"
+
+# ---------------------------------------------------------------------------
+# Prompt templates
+# ---------------------------------------------------------------------------
+
+DECOMPOSE_SYSTEM = """\
+You are an expert at analyzing engineering specification documents.
+Your output must be valid JSON — no prose before or after the JSON array.
+"""
+
+DECOMPOSE_USER = """\
+Decompose this engineering specification PDF into a flat list of structured text blocks.
+
+Rules:
+- Preserve the document's clause/section numbering hierarchy faithfully.
+- For each block include:
+    clause_number   : string like "5.3.1" or "Table 4", or null if none
+    heading         : the heading/title text if this block IS a heading, else null
+    content         : the full verbatim text of this block (including the heading line)
+    block_type      : one of:
+                        "heading"            – section title, no substantive content
+                        "requirement_clause" – contains SHALL / SHOULD / MAY obligations
+                        "table_row"          – a meaningful table row
+                        "informational"      – explanatory or descriptive text
+                        "boilerplate"        – TOC, revision history, signatures,
+                                               distribution lists, legal notices
+    parent_clause_number : clause_number of the immediate parent block, or null
+    depth           : nesting depth (0 = top-level section, 1 = sub-section, etc.)
+- Order blocks in document reading order.
+- Decompose multi-row tables so each meaningful row is its own block.
+- Ignore page headers/footers that repeat on every page.
+
+Return ONLY a JSON array of objects matching the schema above.
+Example of one element:
+{
+  "clause_number": "5.3.1",
+  "heading": null,
+  "content": "The pressure vessel shall be designed for a minimum design pressure of 150 psig.",
+  "block_type": "requirement_clause",
+  "parent_clause_number": "5.3",
+  "depth": 2
+}
+"""
+
+EXTRACT_SYSTEM = """\
+You are an expert at extracting engineering requirements from specification text.
+Your output must be valid JSON — no prose before or after the JSON array.
+"""
+
+EXTRACT_USER_TEMPLATE = """\
+Extract all engineering requirement statements from the following document blocks.
+
+Rules:
+- Each "shall" statement is a Requirement (classification = "Requirement").
+- Each "should" or "may" statement is a Guideline (classification = "Guideline").
+- Decompose compound clauses (one clause with multiple "shall"s) into separate
+  atomic statements — one per output object.
+- Ignore boilerplate blocks entirely.
+- For each extracted requirement include:
+    title                   : concise human-readable summary (≤120 characters)
+    statement               : the full, verbatim or lightly cleaned requirement text,
+                              beginning with the subject ("The [subject] shall …")
+    source_clause           : clause_number of the source block, or null
+    suggested_classification: "Requirement" or "Guideline"
+    suggested_discipline    : one of Mechanical / Electrical / I&C /
+                              Civil/Structural / Process / Fire Protection / General
+    source_block_index      : 0-based index of the block in the list below
+
+Return ONLY a JSON array.  If no requirements are found, return [].
+
+=== BLOCKS ===
+{blocks_json}
+"""
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _get_client() -> genai.Client:
+    api_key = os.environ.get("GEMINI_API_KEY", "")
+    if not api_key:
+        raise RuntimeError(
+            "GEMINI_API_KEY environment variable is not set. "
+            "Add it to your .env file and rebuild the API container."
+        )
+    return genai.Client(api_key=api_key)
+
+
+def _parse_json_response(text: str) -> Any:
+    """Extract a JSON array from the model's response, handling markdown fences."""
+    # Strip markdown code fences (```json ... ``` or ``` ... ```)
+    fenced = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", text)
+    raw = fenced.group(1) if fenced else text.strip()
+
+    # Find the outermost JSON array
+    start = raw.find("[")
+    end = raw.rfind("]")
+    if start == -1 or end == -1:
+        raise ValueError(f"No JSON array found in LLM response. Response was:\n{text[:500]}")
+    return json.loads(raw[start : end + 1])
+
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
+
+def decompose_document(pdf_bytes: bytes) -> list[dict]:
+    """
+    Send the PDF to Gemini and return a list of block dicts.
+
+    Each dict has the keys defined in DECOMPOSE_USER:
+      clause_number, heading, content, block_type,
+      parent_clause_number, depth
+    """
+    client = _get_client()
+    pdf_b64 = base64.standard_b64encode(pdf_bytes).decode("utf-8")
+
+    response = client.models.generate_content(
+        model=MODEL,
+        contents=[
+            types.Content(
+                role="user",
+                parts=[
+                    types.Part(
+                        inline_data=types.Blob(
+                            mime_type="application/pdf",
+                            data=pdf_b64,
+                        )
+                    ),
+                    types.Part(text=DECOMPOSE_USER),
+                ],
+            )
+        ],
+        config=types.GenerateContentConfig(
+            system_instruction=DECOMPOSE_SYSTEM,
+        ),
+    )
+
+    raw_text = response.text
+    blocks = _parse_json_response(raw_text)
+
+    # Normalise: ensure required keys exist with sensible defaults
+    normalised = []
+    for i, b in enumerate(blocks):
+        normalised.append({
+            "clause_number": b.get("clause_number"),
+            "heading": b.get("heading"),
+            "content": b.get("content", ""),
+            "block_type": b.get("block_type", "informational"),
+            "parent_clause_number": b.get("parent_clause_number"),
+            "depth": int(b.get("depth", 0)),
+            "sort_order": i,
+        })
+    return normalised
+
+
+def extract_requirements(blocks: list[dict]) -> list[dict]:
+    """
+    Send a list of block dicts to Gemini and return extraction candidates.
+
+    Each returned dict has:
+      title, statement, source_clause, suggested_classification,
+      suggested_discipline, source_block_index
+    """
+    client = _get_client()
+
+    # Build a compact representation for the prompt
+    blocks_for_prompt = [
+        {
+            "index": i,
+            "clause_number": b.get("clause_number"),
+            "block_type": b.get("block_type"),
+            "content": b.get("content", ""),
+        }
+        for i, b in enumerate(blocks)
+    ]
+    blocks_json = json.dumps(blocks_for_prompt, indent=2)
+    prompt = EXTRACT_USER_TEMPLATE.format(blocks_json=blocks_json)
+
+    response = client.models.generate_content(
+        model=MODEL,
+        contents=[
+            types.Content(
+                role="user",
+                parts=[types.Part(text=prompt)],
+            )
+        ],
+        config=types.GenerateContentConfig(
+            system_instruction=EXTRACT_SYSTEM,
+        ),
+    )
+
+    raw_text = response.text
+    candidates = _parse_json_response(raw_text)
+
+    # Normalise
+    normalised = []
+    for c in candidates:
+        normalised.append({
+            "title": str(c.get("title", ""))[:120],
+            "statement": c.get("statement", ""),
+            "source_clause": c.get("source_clause"),
+            "suggested_classification": c.get("suggested_classification", "Requirement"),
+            "suggested_discipline": c.get("suggested_discipline", "General"),
+            "source_block_index": int(c.get("source_block_index", 0)),
+        })
+    return normalised

@@ -173,3 +173,38 @@ export interface Attachment {
   uploaded_by: string | null
   uploaded_at: string | null
 }
+
+// ---------------------------------------------------------------------------
+// Document blocks (LLM decomposition)
+// ---------------------------------------------------------------------------
+
+export interface DocumentBlock {
+  id: string
+  source_document_id: string
+  parent_block_id: string | null
+  clause_number: string | null
+  heading: string | null
+  content: string
+  block_type: 'heading' | 'requirement_clause' | 'table_row' | 'informational' | 'boilerplate'
+  sort_order: number
+  depth: number
+  children: DocumentBlock[]
+}
+
+// ---------------------------------------------------------------------------
+// Extraction candidates
+// ---------------------------------------------------------------------------
+
+export interface ExtractionCandidate {
+  id: string
+  source_document_id: string
+  source_block_id: string | null
+  title: string
+  statement: string
+  source_clause: string | null
+  suggested_classification: string | null
+  suggested_discipline: string | null
+  status: 'Pending' | 'Accepted' | 'Rejected' | 'Edited'
+  accepted_requirement_id: string | null
+  created_at: string
+}
