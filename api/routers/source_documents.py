@@ -1,9 +1,10 @@
 """Source document registry — CRUD, PDF upload, and PDF download.
 
 Design notes:
-- document_id is auto-generated as DOC-NNN (sequential, like requirement IDs).
-- PDFs are stored in MinIO under the "documents" bucket using the document_id
-  as the object key (e.g., "DOC-001.pdf").
+- document_id is user-supplied (e.g. "ASME B31.3", "API 661 7th Ed").
+  The DB enforces uniqueness; duplicate submissions get a 409 response.
+- PDFs are stored in MinIO under the "documents" bucket.  The object key
+  is the document UUID to avoid any special-character issues in user IDs.
 - Text extraction runs synchronously on upload using pdfplumber.  For very
   large PDFs this could be made async, but it's fine for Phase 1.
 - The download endpoint streams the file back from MinIO so we never buffer
@@ -17,11 +18,14 @@ from datetime import datetime
 from typing import Any
 from uuid import UUID
 
+import re
+
 import pdfplumber
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from minio import Minio
 from minio.error import S3Error
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from database import get_db
@@ -76,12 +80,31 @@ def _doc_to_dict(doc: SourceDocument, include_text: bool = False) -> dict[str, A
 
 
 # ---------------------------------------------------------------------------
-# document_id generator
+# Text normalisation
 # ---------------------------------------------------------------------------
 
-def _generate_document_id(db: Session) -> str:
-    count = db.query(SourceDocument).count()
-    return f"DOC-{str(count + 1).zfill(3)}"
+def _normalise_extracted_text(raw: str) -> str:
+    """Collapse PDF line-wrapping into readable paragraphs.
+
+    pdfplumber preserves every line break from the PDF layout, so a single
+    wrapped paragraph arrives as many short lines.  The heuristic here:
+    - A blank line (two or more consecutive newlines) signals a real paragraph
+      break — keep it as a double newline.
+    - A single newline that is NOT preceded by a sentence-ending character
+      (period, colon, question mark, exclamation mark, or closing bracket/paren)
+      is just word-wrap — replace it with a space.
+    - A single newline that IS preceded by a sentence-ending character is kept
+      as a newline (handles bullet lists, numbered clauses, etc.).
+    """
+    # Normalise Windows-style line endings
+    text = raw.replace("\r\n", "\n").replace("\r", "\n")
+    # Collapse 3+ consecutive newlines to exactly two (one blank line)
+    text = re.sub(r"\n{3,}", "\n\n", text)
+    # Single newline not preceded by sentence-ending punctuation → space
+    text = re.sub(r"(?<![.!?:\]\)])\n(?!\n)", " ", text)
+    # Clean up any double-spaces introduced by the above
+    text = re.sub(r" {2,}", " ", text)
+    return text.strip()
 
 
 # ---------------------------------------------------------------------------
@@ -125,9 +148,8 @@ def get_source_document(doc_id: UUID, db: Session = Depends(get_db)):
 
 @router.post("/source-documents", status_code=201)
 def create_source_document(data: SourceDocumentCreate, db: Session = Depends(get_db)):
-    doc_id = _generate_document_id(db)
     doc = SourceDocument(
-        document_id=doc_id,
+        document_id=data.document_id,
         title=data.title,
         document_type=data.document_type,
         revision=data.revision,
@@ -135,7 +157,14 @@ def create_source_document(data: SourceDocumentCreate, db: Session = Depends(get
         disciplines=data.disciplines,
     )
     db.add(doc)
-    db.commit()
+    try:
+        db.commit()
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=f"A document with ID '{data.document_id}' already exists.",
+        )
     db.refresh(doc)
     return _doc_to_dict(doc, include_text=True)
 
@@ -179,7 +208,9 @@ async def upload_pdf(
         raise HTTPException(status_code=400, detail="Only PDF files are accepted")
 
     pdf_bytes = await file.read()
-    object_key = f"{doc.document_id}.pdf"
+    # Use the UUID as the object key — avoids any issues with slashes or
+    # special characters that might appear in user-defined document IDs.
+    object_key = f"{doc_id}.pdf"
 
     # Upload to MinIO
     client = _minio_client()
@@ -194,12 +225,13 @@ async def upload_pdf(
     except S3Error as e:
         raise HTTPException(status_code=500, detail=f"MinIO upload failed: {e}")
 
-    # Extract text with pdfplumber
+    # Extract text with pdfplumber, then normalise line-wrapping
     extracted = ""
     try:
         with pdfplumber.open(io.BytesIO(pdf_bytes)) as pdf:
             pages = [page.extract_text() or "" for page in pdf.pages]
-            extracted = "\n\n".join(p for p in pages if p.strip())
+            raw = "\n\n".join(p for p in pages if p.strip())
+            extracted = _normalise_extracted_text(raw)
     except Exception:
         # Text extraction is best-effort — don't fail the upload
         extracted = ""

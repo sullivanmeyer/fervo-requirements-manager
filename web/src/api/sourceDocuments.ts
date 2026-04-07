@@ -22,6 +22,7 @@ export async function fetchSourceDocument(id: string): Promise<SourceDocumentDet
 }
 
 export async function createSourceDocument(data: {
+  document_id: string
   title: string
   document_type: string
   revision?: string

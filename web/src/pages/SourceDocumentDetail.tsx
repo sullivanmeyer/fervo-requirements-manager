@@ -49,6 +49,7 @@ const DISCIPLINES = [
 // ---------------------------------------------------------------------------
 
 interface FormState {
+  document_id: string
   title: string
   document_type: string
   revision: string
@@ -58,6 +59,7 @@ interface FormState {
 
 function emptyForm(): FormState {
   return {
+    document_id: '',
     title: '',
     document_type: 'Code/Standard',
     revision: '',
@@ -68,6 +70,7 @@ function emptyForm(): FormState {
 
 function formFromDetail(doc: DocDetail): FormState {
   return {
+    document_id: doc.document_id,
     title: doc.title,
     document_type: doc.document_type,
     revision: doc.revision ?? '',
@@ -171,6 +174,10 @@ export default function SourceDocumentDetail({
   // -------------------------------------------------------------------------
 
   const handleSave = async () => {
+    if (!form.document_id.trim()) {
+      setError('Document ID is required.')
+      return
+    }
     if (!form.title.trim()) {
       setError('Title is required.')
       return
@@ -179,6 +186,7 @@ export default function SourceDocumentDetail({
     setError(null)
     try {
       const payload = {
+        document_id: form.document_id.trim(),
         title: form.title,
         document_type: form.document_type,
         revision: form.revision || undefined,
@@ -283,12 +291,33 @@ export default function SourceDocumentDetail({
         {/* Left: metadata form                                               */}
         {/* ---------------------------------------------------------------- */}
         <div className="w-80 shrink-0 border-r border-gray-200 overflow-y-auto bg-white px-5 py-5 space-y-4">
+          <Field label="Document ID *">
+            {isNew ? (
+              <input
+                type="text"
+                value={form.document_id}
+                onChange={(e) => set('document_id', e.target.value)}
+                placeholder="ASME B31.3, API 661 7th Ed, etc."
+                className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
+              />
+            ) : (
+              <p className="px-3 py-2 text-sm font-mono text-gray-700 bg-gray-50 border border-gray-200 rounded">
+                {form.document_id}
+              </p>
+            )}
+            <p className="text-xs text-gray-400 mt-1">
+              {isNew
+                ? 'The canonical identifier for this document — must be unique.'
+                : 'Document ID cannot be changed after creation.'}
+            </p>
+          </Field>
+
           <Field label="Title *">
             <input
               type="text"
               value={form.title}
               onChange={(e) => set('title', e.target.value)}
-              placeholder="API 661, 7th Edition"
+              placeholder="Air-Cooled Heat Exchangers for General Refinery Service"
               className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
             />
           </Field>

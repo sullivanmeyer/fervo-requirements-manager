@@ -45,6 +45,7 @@ VERIFICATION_METHODS = {
 # ---------------------------------------------------------------------------
 
 class SourceDocumentCreate(BaseModel):
+    document_id: str
     title: str
     document_type: str
     revision: Optional[str] = None
