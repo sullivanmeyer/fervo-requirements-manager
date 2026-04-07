@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from database import get_db
-from models import HierarchyNode, Requirement, RequirementLink, Site, Unit
+from models import HierarchyNode, Requirement, RequirementLink, Site, SourceDocument, Unit
 from schemas import RequirementCreate, RequirementUpdate
 
 router = APIRouter()
@@ -105,10 +105,23 @@ def _requirement_to_dict(
                 if child:
                     child_reqs.append(_req_stub(child))
 
+        source_doc = None
+        if req.source_document_id and db is not None:
+            sd = db.get(SourceDocument, req.source_document_id)
+            if sd:
+                source_doc = {
+                    "id": str(sd.id),
+                    "document_id": sd.document_id,
+                    "title": sd.title,
+                }
+
         base.update(
             {
                 "statement": req.statement,
                 "source_type": req.source_type,
+                "source_document_id": str(req.source_document_id) if req.source_document_id else None,
+                "source_document": source_doc,
+                "source_clause": req.source_clause,
                 "last_modified_by": req.last_modified_by,
                 "last_modified_date": (
                     req.last_modified_date.isoformat()
@@ -221,6 +234,11 @@ def create_requirement(data: RequirementCreate, db: Session = Depends(get_db)):
     scalar_fields = data.model_dump(
         exclude={"hierarchy_node_ids", "site_ids", "unit_ids"}
     )
+    # Resolve source_document_id UUID → actual FK value (or None)
+    if scalar_fields.get("source_document_id") is not None:
+        sd = db.get(SourceDocument, scalar_fields["source_document_id"])
+        if not sd:
+            raise HTTPException(status_code=400, detail="source_document_id not found")
     req_id = _generate_requirement_id(data.discipline, db)
 
     req = Requirement(requirement_id=req_id, **scalar_fields)

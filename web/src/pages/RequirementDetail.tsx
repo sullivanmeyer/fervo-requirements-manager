@@ -7,7 +7,7 @@
  * Pass requirementId=null to create a new requirement.
  * Pass initialParentIds to pre-populate parents (used by "Add Child").
  */
-import { useEffect, useRef, useState } from 'react'
+import { type ChangeEvent, useEffect, useRef, useState } from 'react'
 import {
   addLink,
   createRequirement,
@@ -18,12 +18,14 @@ import {
   removeLink,
   updateRequirement,
 } from '../api/requirements'
+import { fetchSourceDocuments } from '../api/sourceDocuments'
 import type {
   HierarchyNode,
   RequirementDetail as ReqDetail,
   RequirementListItem,
   RequirementStub,
   Site,
+  SourceDocumentListItem,
   Unit,
 } from '../types'
 import HierarchyNodePicker from '../components/HierarchyNodePicker'
@@ -63,10 +65,13 @@ interface Props {
   hierarchyNodes: HierarchyNode[]
   userName: string
   initialParentIds?: string[]         // pre-link parents (used by "Add Child")
+  initialStatement?: string           // pre-populate statement (from doc selection)
+  initialSourceDocumentId?: string    // pre-link source document (from doc detail)
   onSaved: (savedId: string) => void
   onCancel: () => void
   onViewInTree: (id: string) => void  // navigate to derivation tree tab
   onAddChild: (parentId: string) => void
+  onOpenDocument?: (docId: string) => void
 }
 
 interface FormState {
@@ -85,6 +90,8 @@ interface FormState {
   rationale: string
   verification_method: string
   tags: string[]
+  source_document_id: string
+  source_clause: string
   hierarchy_node_ids: string[]
   site_ids: string[]
   unit_ids: string[]
@@ -92,13 +99,13 @@ interface FormState {
 
 const today = () => new Date().toISOString().slice(0, 10)
 
-function emptyForm(userName: string): FormState {
+function emptyForm(userName: string, initialStatement = '', initialSourceDocumentId = ''): FormState {
   return {
     title: '',
-    statement: '',
+    statement: initialStatement,
     classification: 'Requirement',
     owner: userName,
-    source_type: 'Manual Entry',
+    source_type: initialSourceDocumentId ? 'Derived from Document' : 'Manual Entry',
     status: 'Draft',
     discipline: 'Mechanical',
     created_by: userName,
@@ -109,6 +116,8 @@ function emptyForm(userName: string): FormState {
     rationale: '',
     verification_method: '',
     tags: [],
+    source_document_id: initialSourceDocumentId,
+    source_clause: '',
     hierarchy_node_ids: [],
     site_ids: [],
     unit_ids: [],
@@ -132,6 +141,8 @@ function formFromDetail(req: ReqDetail): FormState {
     rationale: req.rationale ?? '',
     verification_method: req.verification_method ?? '',
     tags: req.tags ?? [],
+    source_document_id: req.source_document_id ?? '',
+    source_clause: req.source_clause ?? '',
     hierarchy_node_ids: req.hierarchy_nodes.map((n) => n.id),
     site_ids: req.sites.map((s) => s.id),
     unit_ids: req.units.map((u) => u.id),
@@ -284,14 +295,17 @@ export default function RequirementDetail({
   hierarchyNodes,
   userName,
   initialParentIds = [],
+  initialStatement = '',
+  initialSourceDocumentId = '',
   onSaved,
   onCancel,
   onViewInTree,
   onAddChild,
+  onOpenDocument,
 }: Props) {
   const isNew = requirementId === null
 
-  const [form, setForm] = useState<FormState>(emptyForm(userName))
+  const [form, setForm] = useState<FormState>(emptyForm(userName, initialStatement, initialSourceDocumentId))
   const [existingReqId, setExistingReqId] = useState<string | null>(null)
   const [savedDbId, setSavedDbId] = useState<string | null>(null)
 
@@ -301,6 +315,7 @@ export default function RequirementDetail({
   const [childRequirements, setChildRequirements] = useState<RequirementStub[]>([])
 
   const [allRequirements, setAllRequirements] = useState<RequirementListItem[]>([])
+  const [sourceDocs, setSourceDocs] = useState<SourceDocumentListItem[]>([])
   const [sites, setSites] = useState<Site[]>([])
   const [units, setUnits] = useState<Unit[]>([])
   const [loading, setLoading] = useState(!isNew)
@@ -321,10 +336,10 @@ export default function RequirementDetail({
 
   useEffect(() => {
     if (isNew) {
-      // For a new requirement: just fetch reference data in parallel
-      void Promise.all([fetchAllRequirements(), fetchSites(), fetchUnits()]).then(
-        ([reqs, s, u]) => {
+      void Promise.all([fetchAllRequirements(), fetchSourceDocuments(), fetchSites(), fetchUnits()]).then(
+        ([reqs, docs, s, u]) => {
           setAllRequirements(reqs)
+          setSourceDocs(docs)
           setSites(s)
           setUnits(u)
         },
@@ -332,9 +347,10 @@ export default function RequirementDetail({
     } else {
       const loadAll = async () => {
         try {
-          const [req, reqs, s, u] = await Promise.all([
+          const [req, reqs, docs, s, u] = await Promise.all([
             fetchRequirement(requirementId!),
             fetchAllRequirements(),
+            fetchSourceDocuments(),
             fetchSites(),
             fetchUnits(),
           ])
@@ -348,6 +364,7 @@ export default function RequirementDetail({
           setChildRequirements(req.child_requirements)
 
           setAllRequirements(reqs)
+          setSourceDocs(docs)
           setSites(s)
           setUnits(u)
         } catch (e) {
@@ -609,6 +626,46 @@ export default function RequirementDetail({
                   onChange={(v) => set('source_type', v)}
                 />
               </Field>
+
+              {/* Source document fields — shown for all requirements but
+                  required when source_type = "Derived from Document" */}
+              <div className="col-span-2">
+                <Field label={`Source Document${form.source_type === 'Derived from Document' ? ' *' : ''}`}>
+                  <div className="flex gap-2">
+                    <select
+                      value={form.source_document_id}
+                      onChange={(e: ChangeEvent<HTMLSelectElement>) => set('source_document_id', e.target.value)}
+                      className="flex-1 border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white"
+                    >
+                      <option value="">— None —</option>
+                      {sourceDocs.map((d: SourceDocumentListItem) => (
+                        <option key={d.id} value={d.id}>
+                          {d.document_id} — {d.title}
+                        </option>
+                      ))}
+                    </select>
+                    {form.source_document_id && onOpenDocument && (
+                      <button
+                        type="button"
+                        onClick={() => onOpenDocument(form.source_document_id)}
+                        className="px-3 py-2 text-xs border border-gray-300 text-gray-600 rounded hover:bg-gray-50 shrink-0"
+                        title="Open document"
+                      >
+                        Open
+                      </button>
+                    )}
+                  </div>
+                </Field>
+              </div>
+              <div className="col-span-2">
+                <Field label="Source Clause">
+                  <TextInput
+                    value={form.source_clause}
+                    onChange={(v) => set('source_clause', v)}
+                    placeholder="§ 4.3.1, Table 2, etc."
+                  />
+                </Field>
+              </div>
             </div>
           </section>
 

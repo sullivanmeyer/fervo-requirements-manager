@@ -9,6 +9,31 @@ from database import Base
 
 
 # ---------------------------------------------------------------------------
+# Source documents
+# ---------------------------------------------------------------------------
+
+class SourceDocument(Base):
+    __tablename__ = "source_documents"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    document_id = Column(Text, nullable=False, unique=True)
+    title = Column(Text, nullable=False)
+    document_type = Column(Text, nullable=False)
+    revision = Column(Text, nullable=True)
+    issuing_organization = Column(Text, nullable=True)
+    disciplines = Column(ARRAY(Text), nullable=True)
+    file_path = Column(Text, nullable=True)       # MinIO object key
+    extracted_text = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+
+# ---------------------------------------------------------------------------
 # Hierarchy
 # ---------------------------------------------------------------------------
 
@@ -146,6 +171,12 @@ class Requirement(Base):
     rationale = Column(Text, nullable=True)
     verification_method = Column(Text, nullable=True)
     tags = Column(ARRAY(Text), nullable=True)
+    source_document_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("source_documents.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    source_clause = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(
         DateTime,
@@ -153,6 +184,8 @@ class Requirement(Base):
         onupdate=datetime.utcnow,
         nullable=False,
     )
+
+    source_document = relationship("SourceDocument", lazy="joined")
 
     hierarchy_nodes = relationship(
         "HierarchyNode",

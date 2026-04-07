@@ -61,6 +61,9 @@ export interface RequirementStub {
 export interface RequirementDetail extends RequirementListItem {
   statement: string
   source_type: string
+  source_document_id: string | null
+  source_document: SourceDocumentStub | null
+  source_clause: string | null
   last_modified_by: string | null
   last_modified_date: string | null
   change_history: string | null
@@ -80,6 +83,42 @@ export interface RequirementDetail extends RequirementListItem {
 export interface RequirementLink {
   parent_requirement_id: string
   child_requirement_id: string
+}
+
+// ---------------------------------------------------------------------------
+// Source documents
+// ---------------------------------------------------------------------------
+
+export interface SourceDocumentListItem {
+  id: string
+  document_id: string
+  title: string
+  document_type: string
+  revision: string | null
+  issuing_organization: string | null
+  disciplines: string[]
+  has_file: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface LinkedRequirementStub {
+  id: string
+  requirement_id: string
+  title: string
+  status: string
+  source_clause: string | null
+}
+
+export interface SourceDocumentDetail extends SourceDocumentListItem {
+  extracted_text: string | null
+  linked_requirements: LinkedRequirementStub[]
+}
+
+export interface SourceDocumentStub {
+  id: string
+  document_id: string
+  title: string
 }
 
 export interface RequirementListResponse {

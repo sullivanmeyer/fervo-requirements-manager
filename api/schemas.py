@@ -10,6 +10,15 @@ from pydantic import BaseModel, field_validator
 # Allowed values for enum fields
 # ---------------------------------------------------------------------------
 
+DOCUMENT_TYPES = {
+    "Code/Standard",
+    "Specification",
+    "Technical Report",
+    "Drawing",
+    "Datasheet",
+    "Other",
+}
+
 CLASSIFICATIONS = {"Requirement", "Guideline"}
 SOURCE_TYPES = {"Manual Entry", "Derived from Document"}
 STATUSES = {"Draft", "Under Review", "Approved", "Superseded", "Withdrawn"}
@@ -29,6 +38,40 @@ VERIFICATION_METHODS = {
     "Demonstration",
     "Review of Record",
 }
+
+
+# ---------------------------------------------------------------------------
+# Source document schemas
+# ---------------------------------------------------------------------------
+
+class SourceDocumentCreate(BaseModel):
+    title: str
+    document_type: str
+    revision: Optional[str] = None
+    issuing_organization: Optional[str] = None
+    disciplines: Optional[List[str]] = None
+
+    @field_validator("document_type")
+    @classmethod
+    def validate_document_type(cls, v: str) -> str:
+        if v not in DOCUMENT_TYPES:
+            raise ValueError(f"Must be one of: {', '.join(sorted(DOCUMENT_TYPES))}")
+        return v
+
+
+class SourceDocumentUpdate(BaseModel):
+    title: Optional[str] = None
+    document_type: Optional[str] = None
+    revision: Optional[str] = None
+    issuing_organization: Optional[str] = None
+    disciplines: Optional[List[str]] = None
+
+    @field_validator("document_type")
+    @classmethod
+    def validate_document_type(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in DOCUMENT_TYPES:
+            raise ValueError(f"Must be one of: {', '.join(sorted(DOCUMENT_TYPES))}")
+        return v
 
 
 # ---------------------------------------------------------------------------
@@ -83,6 +126,8 @@ class RequirementCreate(BaseModel):
     rationale: Optional[str] = None
     verification_method: Optional[str] = None
     tags: Optional[List[str]] = None
+    source_document_id: Optional[UUID] = None
+    source_clause: Optional[str] = None
     hierarchy_node_ids: List[UUID] = []
     site_ids: List[UUID] = []
     unit_ids: List[UUID] = []
@@ -141,6 +186,8 @@ class RequirementUpdate(BaseModel):
     rationale: Optional[str] = None
     verification_method: Optional[str] = None
     tags: Optional[List[str]] = None
+    source_document_id: Optional[UUID] = None
+    source_clause: Optional[str] = None
     hierarchy_node_ids: Optional[List[UUID]] = None
     site_ids: Optional[List[UUID]] = None
     unit_ids: Optional[List[UUID]] = None

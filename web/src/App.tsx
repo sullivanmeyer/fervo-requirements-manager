@@ -8,6 +8,8 @@ import RequirementsTable from './pages/RequirementsTable'
 import RequirementDetail from './pages/RequirementDetail'
 import DerivationTree from './pages/DerivationTree'
 import BlockDiagram from './pages/BlockDiagram'
+import SourceDocumentRegistry from './pages/SourceDocumentRegistry'
+import SourceDocumentDetail from './pages/SourceDocumentDetail'
 
 export function flattenTree(nodes: HierarchyNode[], depth = 0): FlatNode[] {
   const result: FlatNode[] = []
@@ -20,28 +22,20 @@ export function flattenTree(nodes: HierarchyNode[], depth = 0): FlatNode[] {
 
 // ---------------------------------------------------------------------------
 // Navigation state
-//
-// Rather than a single flat "activeTab" string, we use a discriminated union.
-// Each variant carries the data needed to render that view — e.g. the detail
-// view needs to know which requirement to show, and whether it's being
-// created fresh with a pre-set parent.
-//
-// A discriminated union is like a tagged enum: the `page` field tells you
-// which variant you have, and TypeScript can then narrow the type to know
-// exactly what other fields are available.
 // ---------------------------------------------------------------------------
 
 type AppView =
   | { page: 'hierarchy' }
   | { page: 'requirements' }
-  | { page: 'requirement-detail'; requirementId: string | null; initialParentIds?: string[] }
+  | { page: 'requirement-detail'; requirementId: string | null; initialParentIds?: string[]; initialStatement?: string; initialSourceDocumentId?: string }
   | { page: 'derivation-tree'; focusId: string | null }
   | { page: 'block-diagram' }
+  | { page: 'documents' }
+  | { page: 'document-detail'; documentId: string | null }
 
 export default function App() {
   const [view, setView] = useState<AppView>({ page: 'hierarchy' })
 
-  // Hierarchy state (used by the Hierarchy tab)
   const [nodes, setNodes] = useState<HierarchyNode[]>([])
   const [selectedNode, setSelectedNode] = useState<HierarchyNode | null>(null)
   const [hierarchyLoading, setHierarchyLoading] = useState(true)
@@ -82,7 +76,6 @@ export default function App() {
 
   const flatNodes = flattenTree(nodes)
 
-  // Convenience: which top-level tab is visually active?
   const activeTab =
     view.page === 'hierarchy'
       ? 'hierarchy'
@@ -90,7 +83,9 @@ export default function App() {
         ? 'derivation-tree'
         : view.page === 'block-diagram'
           ? 'block-diagram'
-          : 'requirements'
+          : view.page === 'documents' || view.page === 'document-detail'
+            ? 'documents'
+            : 'requirements'
 
   return (
     <div className="flex flex-col h-screen bg-gray-50">
@@ -101,12 +96,12 @@ export default function App() {
         </h1>
         <div className="w-px h-5 bg-gray-200" />
 
-        {/* Tab navigation */}
         <nav className="flex gap-1">
           {(
             [
               { id: 'hierarchy', label: 'System Hierarchy' },
               { id: 'requirements', label: 'Requirements' },
+              { id: 'documents', label: 'Documents' },
               { id: 'derivation-tree', label: 'Derivation Tree' },
               { id: 'block-diagram', label: 'Block Diagram' },
             ] as const
@@ -116,6 +111,7 @@ export default function App() {
               onClick={() => {
                 if (tab.id === 'hierarchy') setView({ page: 'hierarchy' })
                 else if (tab.id === 'requirements') setView({ page: 'requirements' })
+                else if (tab.id === 'documents') setView({ page: 'documents' })
                 else if (tab.id === 'derivation-tree') setView({ page: 'derivation-tree', focusId: null })
                 else setView({ page: 'block-diagram' })
               }}
@@ -200,18 +196,17 @@ export default function App() {
         {/* ------------------------------------------------------------------ */}
         {view.page === 'requirement-detail' && (
           <div className="flex-1 overflow-hidden flex flex-col">
-            {/*
-              key forces a full unmount+remount whenever we navigate to a
-              different requirement or switch from editing to creating new.
-              Without it, React reuses the same component instance and the
-              form state (field values, saving flag, etc.) doesn't reset.
-            */}
             <RequirementDetail
-              key={view.requirementId ?? `new-${(view.initialParentIds ?? []).join('-')}`}
+              key={
+                view.requirementId
+                  ?? `new-${(view.initialParentIds ?? []).join('-')}-${view.initialSourceDocumentId ?? ''}`
+              }
               requirementId={view.requirementId}
               hierarchyNodes={nodes}
               userName={userName}
               initialParentIds={view.initialParentIds}
+              initialStatement={view.initialStatement}
+              initialSourceDocumentId={view.initialSourceDocumentId}
               onSaved={(savedId) => {
                 setView({ page: 'requirement-detail', requirementId: savedId })
               }}
@@ -225,6 +220,9 @@ export default function App() {
                   requirementId: null,
                   initialParentIds: [parentId],
                 })
+              }
+              onOpenDocument={(docId) =>
+                setView({ page: 'document-detail', documentId: docId })
               }
             />
           </div>
@@ -252,6 +250,49 @@ export default function App() {
             <BlockDiagram
               hierarchyNodes={nodes}
               onOpenDetail={(id) =>
+                setView({ page: 'requirement-detail', requirementId: id })
+              }
+            />
+          </div>
+        )}
+
+        {/* ------------------------------------------------------------------ */}
+        {/* Source document registry                                             */}
+        {/* ------------------------------------------------------------------ */}
+        {view.page === 'documents' && (
+          <div className="flex-1 overflow-hidden flex flex-col">
+            <SourceDocumentRegistry
+              onOpenDetail={(id) =>
+                setView({ page: 'document-detail', documentId: id })
+              }
+              onCreateNew={() =>
+                setView({ page: 'document-detail', documentId: null })
+              }
+            />
+          </div>
+        )}
+
+        {/* ------------------------------------------------------------------ */}
+        {/* Source document detail / create                                      */}
+        {/* ------------------------------------------------------------------ */}
+        {view.page === 'document-detail' && (
+          <div className="flex-1 overflow-hidden flex flex-col">
+            <SourceDocumentDetail
+              key={view.documentId ?? 'new-document'}
+              documentId={view.documentId}
+              onSaved={(savedId) =>
+                setView({ page: 'document-detail', documentId: savedId })
+              }
+              onCancel={() => setView({ page: 'documents' })}
+              onCreateRequirement={(sourceDocumentId, initialStatement) =>
+                setView({
+                  page: 'requirement-detail',
+                  requirementId: null,
+                  initialStatement,
+                  initialSourceDocumentId: sourceDocumentId,
+                })
+              }
+              onOpenRequirement={(id) =>
                 setView({ page: 'requirement-detail', requirementId: id })
               }
             />
