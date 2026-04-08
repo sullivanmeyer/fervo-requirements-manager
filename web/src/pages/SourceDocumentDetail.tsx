@@ -191,6 +191,8 @@ export default function SourceDocumentDetail({
   const [selectedBlockIds, setSelectedBlockIds] = useState<Set<string>>(new Set())
   const [decomposing, setDecomposing] = useState(false)
   const [blockError, setBlockError] = useState<string | null>(null)
+  const [highlightedBlockId, setHighlightedBlockId] = useState<string | null>(null)
+  const blockListRef = useRef<HTMLDivElement>(null)
 
   // Extraction candidates
   const [candidates, setCandidates] = useState<ExtractionCandidate[]>([])
@@ -351,6 +353,18 @@ export default function SourceDocumentDetail({
     setSelectedBlockIds(new Set(blocks.map((b) => b.id)))
 
   const clearSelection = () => setSelectedBlockIds(new Set())
+
+  const scrollToBlock = (blockId: string) => {
+    setActivePanel('blocks')
+    setHighlightedBlockId(blockId)
+    // Wait a tick for the panel to render, then scroll the block into view
+    setTimeout(() => {
+      const el = blockListRef.current?.querySelector(`[data-block-id="${blockId}"]`)
+      el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+      // Clear highlight after 2 seconds
+      setTimeout(() => setHighlightedBlockId(null), 2000)
+    }, 50)
+  }
 
   // -------------------------------------------------------------------------
   // Extraction
@@ -772,7 +786,7 @@ export default function SourceDocumentDetail({
                   )}
 
                   {/* Block list */}
-                  <div className="flex-1 overflow-y-auto">
+                  <div className="flex-1 overflow-y-auto" ref={blockListRef}>
                     {decomposing ? (
                       <div className="flex flex-col items-center justify-center h-full text-gray-400 text-sm gap-2">
                         <svg className="animate-spin h-5 w-5 text-blue-500" viewBox="0 0 24 24" fill="none">
@@ -796,8 +810,11 @@ export default function SourceDocumentDetail({
                           return (
                             <div
                               key={block.id}
+                              data-block-id={block.id}
                               className={`flex items-start gap-2 px-3 py-2 hover:bg-white cursor-pointer transition-colors ${
-                                isSelected ? 'bg-blue-50' : ''
+                                highlightedBlockId === block.id
+                                  ? 'bg-yellow-100 ring-2 ring-inset ring-yellow-400'
+                                  : isSelected ? 'bg-blue-50' : ''
                               } ${isBoilerplate ? 'opacity-50' : ''}`}
                               style={{ paddingLeft: `${12 + block.depth * 16}px` }}
                               onClick={() => toggleBlock(block.id)}
@@ -903,7 +920,14 @@ export default function SourceDocumentDetail({
                                     <p className="text-xs text-gray-600 line-clamp-2">{c.statement}</p>
                                     <div className="flex items-center gap-1.5 mt-1 flex-wrap">
                                       {c.source_clause && (
-                                        <span className="text-xs font-mono text-gray-500">§{c.source_clause}</span>
+                                        <button
+                                          onClick={() => c.source_block_id && scrollToBlock(c.source_block_id)}
+                                          disabled={!c.source_block_id}
+                                          className="text-xs font-mono bg-yellow-100 text-yellow-800 px-1.5 py-0.5 rounded hover:bg-yellow-200 disabled:cursor-default disabled:hover:bg-yellow-100 transition-colors"
+                                          title={c.source_block_id ? 'Click to highlight source block' : 'No block reference'}
+                                        >
+                                          §{c.source_clause}
+                                        </button>
                                       )}
                                       {c.suggested_classification && (
                                         <span className={`text-xs px-1.5 py-0.5 rounded ${
