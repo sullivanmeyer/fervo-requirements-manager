@@ -13,7 +13,6 @@ markdown code fences if the model adds them.
 
 from __future__ import annotations
 
-import base64
 import json
 import os
 import re
@@ -26,7 +25,7 @@ from google.genai import types
 # Model config
 # ---------------------------------------------------------------------------
 
-MODEL = "gemini-3.0-pro"
+MODEL = "gemini-2.5-pro"
 
 # ---------------------------------------------------------------------------
 # Prompt templates
@@ -142,7 +141,6 @@ def decompose_document(pdf_bytes: bytes) -> list[dict]:
       parent_clause_number, depth
     """
     client = _get_client()
-    pdf_b64 = base64.standard_b64encode(pdf_bytes).decode("utf-8")
 
     response = client.models.generate_content(
         model=MODEL,
@@ -153,7 +151,7 @@ def decompose_document(pdf_bytes: bytes) -> list[dict]:
                     types.Part(
                         inline_data=types.Blob(
                             mime_type="application/pdf",
-                            data=pdf_b64,
+                            data=pdf_bytes,
                         )
                     ),
                     types.Part(text=DECOMPOSE_USER),
