@@ -423,7 +423,7 @@ tables, multi-column layouts, checkbox forms).
 
 ---
 
-## Stage 8 — Source Document Dependency Graph
+## Stage 8 — Source Document Dependency Graph ✓ COMPLETE
 
 ### Goal
 Build an interactive, force-directed network visualization showing all source
@@ -461,15 +461,15 @@ and "If API 661 is revised, which of our specs are affected?"
 - [~] "Impact Analysis" mode — deferred to a later pass.
 
 ### Stage 8 Verification
-- [ ] Register 5+ source documents with cross-references between them (e.g., ACC spec references API 661, ASME Sec VIII, ASME B31.3; Electrical BOD references NFPA 70, IEEE 841)
-- [ ] Open Document Network view — verify all documents appear as nodes with edges between them
-- [ ] Verify node sizes reflect connection counts
-- [ ] Verify node colors match document types
-- [ ] Hover a node — verify connected nodes highlight and tooltip shows metadata
-- [ ] Click a node — verify detail panel shows outgoing/incoming references
-- [ ] Click "Open Document" — verify navigation to document detail view
-- [ ] On a document detail view, click "Add Reference" — add a reference to another document — verify it appears in the graph
-- [ ] On a document detail view, click "View in Network" — verify graph opens centered on that document
+- [x] Register 5+ source documents with cross-references between them (e.g., ACC spec references API 661, ASME Sec VIII, ASME B31.3; Electrical BOD references NFPA 70, IEEE 841)
+- [x] Open Document Network view — verify all documents appear as nodes with edges between them
+- [x] Verify node sizes reflect connection counts
+- [x] Verify node colors match document types
+- [x] Hover a node — verify connected nodes highlight and tooltip shows metadata
+- [x] Click a node — verify detail panel shows outgoing/incoming references
+- [x] Click "Open Document" — verify navigation to document detail view
+- [x] On a document detail view, click "Add Reference" — add a reference to another document — verify it appears in the graph
+- [x] On a document detail view, click "View in Network" — verify graph opens centered on that document
 
 ---
 
