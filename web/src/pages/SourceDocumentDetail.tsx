@@ -306,12 +306,32 @@ export default function SourceDocumentDetail({
     setDecomposing(true)
     setBlockError(null)
     try {
-      const blks = await decomposeDocument(documentId)
-      setBlocks(blks)
-      setSelectedBlockIds(new Set())
+      // Kick off decomposition — returns 202 immediately, work runs in background
+      await decomposeDocument(documentId)
+
+      // Poll GET /blocks every 5s until blocks appear (Gemini takes 60–120s).
+      // Times out after 5 minutes (60 attempts × 5s).
+      let attempts = 0
+      const MAX_ATTEMPTS = 60
+      const poll = async (): Promise<void> => {
+        attempts++
+        if (attempts > MAX_ATTEMPTS) {
+          setBlockError('Decomposition timed out after 5 minutes. Check the server logs and try again.')
+          setDecomposing(false)
+          return
+        }
+        const blks = await fetchBlocks(documentId)
+        if (blks.length > 0) {
+          setBlocks(blks)
+          setSelectedBlockIds(new Set())
+          setDecomposing(false)
+        } else {
+          setTimeout(() => void poll(), 5000)
+        }
+      }
+      setTimeout(() => void poll(), 5000)
     } catch (e) {
       setBlockError(e instanceof Error ? e.message : 'Decomposition failed')
-    } finally {
       setDecomposing(false)
     }
   }

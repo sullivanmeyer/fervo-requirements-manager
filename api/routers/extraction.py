@@ -21,7 +21,7 @@ from datetime import date, datetime
 from typing import List, Optional
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
@@ -184,12 +184,79 @@ def _next_requirement_id(discipline: str, db: Session) -> str:
 # Endpoints
 # ---------------------------------------------------------------------------
 
-@router.post("/source-documents/{doc_id}/decompose")
-def decompose(doc_id: str, db: Session = Depends(get_db)):
+def _run_decomposition(doc_id: str, file_path: str):
     """
-    Trigger LLM decomposition of a source document PDF into structured blocks.
-    Idempotent: re-running deletes existing blocks and re-creates them.
-    Returns the block tree.
+    Background task: fetch PDF from MinIO, call Gemini, persist blocks.
+    Runs after the HTTP response has already been sent (no timeout risk).
+    """
+    from database import SessionLocal  # local import to avoid circular deps
+
+    db = SessionLocal()
+    try:
+        minio = _minio_client()
+        try:
+            response = minio.get_object(BUCKET, file_path)
+            pdf_bytes = response.read()
+        finally:
+            try:
+                response.close()
+                response.release_conn()
+            except Exception:
+                pass
+
+        raw_blocks = decompose_document(pdf_bytes)
+
+        doc_uuid = UUID(doc_id)
+
+        # Delete existing blocks
+        db.query(DocumentBlock).filter(
+            DocumentBlock.source_document_id == doc_uuid
+        ).delete(synchronize_session=False)
+        db.flush()
+
+        clause_to_id: dict[str, UUID] = {}
+        new_blocks: list[DocumentBlock] = []
+
+        for raw in raw_blocks:
+            block = DocumentBlock(
+                id=uuid.uuid4(),
+                source_document_id=doc_uuid,
+                parent_block_id=None,
+                clause_number=raw.get("clause_number"),
+                heading=raw.get("heading"),
+                content=raw.get("content", ""),
+                block_type=raw.get("block_type", "informational"),
+                sort_order=raw.get("sort_order", 0),
+                depth=raw.get("depth", 0),
+                created_at=datetime.utcnow(),
+            )
+            db.add(block)
+            new_blocks.append(block)
+            if block.clause_number:
+                clause_to_id[block.clause_number] = block.id
+
+        db.flush()
+
+        for block, raw in zip(new_blocks, raw_blocks):
+            parent_clause = raw.get("parent_clause_number")
+            if parent_clause and parent_clause in clause_to_id:
+                block.parent_block_id = clause_to_id[parent_clause]
+
+        db.commit()
+        print(f"[decompose] {len(new_blocks)} blocks written for doc {doc_id}")
+
+    except Exception as e:
+        db.rollback()
+        print(f"[decompose] ERROR for doc {doc_id}: {e}")
+    finally:
+        db.close()
+
+
+@router.post("/source-documents/{doc_id}/decompose", status_code=202)
+def decompose(doc_id: str, background_tasks: BackgroundTasks, db: Session = Depends(get_db)):
+    """
+    Trigger LLM decomposition in the background and return 202 immediately.
+    The frontend should poll GET /blocks until results appear.
     """
     doc = _get_doc_or_404(doc_id, db)
 
@@ -199,76 +266,8 @@ def decompose(doc_id: str, db: Session = Depends(get_db)):
             detail="No PDF uploaded for this document. Upload a PDF first.",
         )
 
-    # Fetch PDF bytes from MinIO
-    minio = _minio_client()
-    try:
-        response = minio.get_object(BUCKET, doc.file_path)
-        pdf_bytes = response.read()
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Could not read PDF from storage: {e}")
-    finally:
-        try:
-            response.close()
-            response.release_conn()
-        except Exception:
-            pass
-
-    # Call LLM
-    try:
-        raw_blocks = decompose_document(pdf_bytes)
-    except RuntimeError as e:
-        raise HTTPException(status_code=503, detail=str(e))
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"LLM decomposition failed: {e}")
-
-    # Delete existing blocks (cascade will also remove their children)
-    db.query(DocumentBlock).filter(
-        DocumentBlock.source_document_id == doc.id
-    ).delete(synchronize_session=False)
-    db.flush()
-
-    # Build clause_number → block_id map so we can resolve parent_block_id
-    # We do a two-pass insert: first create all blocks without parents,
-    # then update parent_block_id references.
-    clause_to_id: dict[str, UUID] = {}
-    new_blocks: list[DocumentBlock] = []
-
-    for raw in raw_blocks:
-        block = DocumentBlock(
-            id=uuid.uuid4(),
-            source_document_id=doc.id,
-            parent_block_id=None,   # resolved in second pass
-            clause_number=raw.get("clause_number"),
-            heading=raw.get("heading"),
-            content=raw.get("content", ""),
-            block_type=raw.get("block_type", "informational"),
-            sort_order=raw.get("sort_order", 0),
-            depth=raw.get("depth", 0),
-            created_at=datetime.utcnow(),
-        )
-        db.add(block)
-        new_blocks.append(block)
-        if block.clause_number:
-            clause_to_id[block.clause_number] = block.id
-
-    db.flush()
-
-    # Second pass: wire up parent references
-    for block, raw in zip(new_blocks, raw_blocks):
-        parent_clause = raw.get("parent_clause_number")
-        if parent_clause and parent_clause in clause_to_id:
-            block.parent_block_id = clause_to_id[parent_clause]
-
-    db.commit()
-
-    # Return flat list (frontend builds tree via sort_order / depth)
-    all_blocks = (
-        db.query(DocumentBlock)
-        .filter(DocumentBlock.source_document_id == doc.id)
-        .order_by(DocumentBlock.sort_order)
-        .all()
-    )
-    return {"blocks": [_block_to_dict(b) for b in all_blocks]}
+    background_tasks.add_task(_run_decomposition, doc_id, doc.file_path)
+    return {"status": "processing"}
 
 
 @router.get("/source-documents/{doc_id}/blocks")

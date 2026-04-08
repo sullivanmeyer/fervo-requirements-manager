@@ -6,16 +6,15 @@ const BASE = '/api'
 // Blocks
 // ---------------------------------------------------------------------------
 
-export async function decomposeDocument(documentId: string): Promise<DocumentBlock[]> {
+export async function decomposeDocument(documentId: string): Promise<void> {
   const res = await fetch(`${BASE}/source-documents/${documentId}/decompose`, {
     method: 'POST',
   })
+  // 202 Accepted = background task started successfully
   if (!res.ok) {
     const err = await res.json().catch(() => ({})) as { detail?: string }
     throw new Error(err.detail ?? `Decomposition failed (${res.status})`)
   }
-  const data = await res.json()
-  return data.blocks as DocumentBlock[]
 }
 
 export async function fetchBlocks(documentId: string): Promise<DocumentBlock[]> {
