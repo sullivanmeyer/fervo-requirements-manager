@@ -370,9 +370,9 @@ tables, multi-column layouts, checkbox forms).
 - [x] On the Source Document Detail View, replace the raw extracted text panel with a **block-based viewer**
 - [x] After decomposition, the document appears as a flat list of text blocks with depth-based indentation
 - [x] Each block shows: clause number, content text, block type badge (color-coded)
-- [ ] Blocks are collapsible by their parent/child hierarchy (e.g., collapse all sub-clauses of §5.3)
+- [~] Blocks are collapsible by their parent/child hierarchy — deferred, flat list with depth indentation used instead
 - [x] Users can select individual blocks via checkboxes
-- [ ] Users can edit block content inline (to correct parsing errors)
+- [x] Users can edit block content inline (to correct parsing errors)
 - [x] "Decompose Document" button triggers the LLM decomposition (blocks cached after; button becomes "Re-decompose")
 - [x] "Extract Requirements from Selected" button sends selected blocks to the extraction endpoint
 - [x] "Extract All Requirements" button sends all non-boilerplate blocks
@@ -380,15 +380,15 @@ tables, multi-column layouts, checkbox forms).
 ### Frontend — Extraction Review Interface
 - [x] **Candidate Review Panel**: after extraction completes, display candidates alongside the block viewer. Each candidate shows:
   - [x] Suggested title, statement, source clause, classification, discipline
-  - [ ] Link back to the source block (clicking highlights the block in the viewer)
+  - [x] Link back to the source block (clicking highlights the block in the viewer)
   - [x] "Accept" button (creates the requirement as-is with current user as owner, Status = Draft)
   - [x] "Edit & Accept" button (opens an editable form where the user can modify any field before accepting)
   - [x] "Reject" button (marks the candidate as rejected, does not create a requirement)
-  - [ ] "Accept All Remaining" button for bulk acceptance after the user has reviewed a few
+  - [~] "Accept All Remaining" button — intentionally omitted; reviewers must own each accepted requirement individually
 - [x] Accepted candidates show a green checkmark and link to the created requirement
 - [x] Rejected candidates are dimmed with a red indicator
 - [x] Count display: "X of Y candidates accepted, Z rejected, W pending"
-- [ ] Blocks that have been extracted into accepted requirements show a visual indicator (e.g., green left border)
+- [x] Blocks that have been extracted into accepted requirements show a visual indicator (e.g., green left border)
 
 ### Prompt Engineering
 - [x] **Decomposition prompt** instructs the LLM to:
@@ -403,23 +403,23 @@ tables, multi-column layouts, checkbox forms).
   - [x] Ignore boilerplate blocks
   - [x] Reference source clause numbers from the block structure
   - [x] Return results as a JSON array with a consistent schema
-- [ ] Test both prompts against at least two different document types: one Kiewit equipment spec (e.g., MSPEC-KIE format) and one Fervo internal BOD (e.g., CAP-02-EE-BOD format)
+- [x] Test both prompts against at least two different document types: one Kiewit equipment spec (e.g., MSPEC-KIE format) and one Fervo internal BOD (e.g., CAP-02-EE-BOD format)
 
 ### Stage 7 Verification
-- [ ] Upload a real engineering specification PDF (or representative test document)
-- [ ] Click "Decompose Document" — verify blocks appear in the block viewer within ~60 seconds
-- [ ] Verify block hierarchy reflects the document's clause structure (e.g., §5.3.1 nested under §5.3)
-- [ ] Verify block types are correctly identified (requirement clauses, tables, boilerplate)
-- [ ] Edit a block's content — verify the edit persists
-- [ ] Select a range of blocks, click "Extract Requirements from Selected" — verify candidates appear
-- [ ] Verify each candidate has a title, statement, source clause, classification, and discipline
-- [ ] Verify clicking a candidate's source clause highlights the corresponding block in the viewer
-- [ ] Accept one candidate — verify a real requirement is created with Source Type = Derived from Document, source document linked, owner = current user, status = Draft
-- [ ] Edit & Accept another candidate — modify the title — verify the created requirement has the edited title
-- [ ] Reject a candidate — verify it is marked rejected and no requirement is created
-- [ ] Verify the source block of an accepted requirement shows a green indicator
-- [ ] Verify accepted requirements appear in the requirements table view and document's "derived requirements" list
-- [ ] Re-run extraction on the same document — verify previously extracted candidates are shown alongside new ones (no duplicates created)
+- [x] Upload a real engineering specification PDF (or representative test document)
+- [x] Click "Decompose Document" — verify blocks appear in the block viewer within ~60 seconds
+- [x] Verify block hierarchy reflects the document's clause structure (e.g., §5.3.1 nested under §5.3)
+- [x] Verify block types are correctly identified (requirement clauses, tables, boilerplate)
+- [x] Edit a block's content — verify the edit persists
+- [x] Select a range of blocks, click "Extract Requirements from Selected" — verify candidates appear
+- [x] Verify each candidate has a title, statement, source clause, classification, and discipline
+- [x] Verify clicking a candidate's source clause highlights the corresponding block in the viewer
+- [x] Accept one candidate — verify a real requirement is created with Source Type = Derived from Document, source document linked, owner = current user, status = Draft
+- [x] Edit & Accept another candidate — modify the title — verify the created requirement has the edited title
+- [x] Reject a candidate — verify it is marked rejected and no requirement is created
+- [x] Verify the source block of an accepted requirement shows a green indicator
+- [x] Verify accepted requirements appear in the requirements table view and document's "derived requirements" list
+- [x] Re-run extraction on the same document — verify previously extracted candidates are shown alongside new ones (no duplicates created)
 
 ---
 
