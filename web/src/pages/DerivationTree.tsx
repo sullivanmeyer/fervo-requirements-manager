@@ -9,8 +9,11 @@
  * Edges are drawn as SVG cubic-bezier curves with arrowheads.
  *
  * All data loading and tree-building logic is unchanged from the list view.
+ *
+ * Interactions: scroll to zoom, drag to pan, hover to highlight connected
+ * nodes, click to open detail — matching the feel of DocumentNetwork.tsx.
  */
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import {
   fetchAllLinks,
   fetchAllRequirements,
@@ -224,8 +227,45 @@ export default function DerivationTree({ focusId, onSelect }: Props) {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
 
-  // We scroll the focused node into view after the canvas renders
-  const focusRef = useRef<HTMLDivElement>(null)
+  // Hover highlighting state (drives React re-renders for dimming/highlighting)
+  const [hoveredId, setHoveredId] = useState<string | null>(null)
+
+  // Cursor state — refs alone won't trigger re-renders, so we use a boolean state
+  const [isDragging, setIsDragging] = useState(false)
+
+  // Pan/zoom state — stored in a ref so mutations don't trigger re-renders
+  const transformRef = useRef({ tx: 0, ty: 0, scale: 1 })
+
+  // DOM refs for the outer container and the inner canvas div
+  const containerRef = useRef<HTMLDivElement>(null)
+  const canvasRef = useRef<HTMLDivElement>(null)
+
+  // Pan drag tracking
+  const dragRef = useRef<{
+    startX: number
+    startY: number
+    startTx: number
+    startTy: number
+  } | null>(null)
+
+  // Set to true once the mouse has moved >3px during a drag — prevents
+  // a pan gesture from also firing a node click
+  const didPanRef = useRef(false)
+
+  // ---------------------------------------------------------------------------
+  // applyTransform — directly mutates the inner canvas div's CSS transform.
+  // Bypasses React's render cycle entirely (same pattern as DocumentNetwork).
+  // ---------------------------------------------------------------------------
+
+  function applyTransform() {
+    if (!canvasRef.current) return
+    const { tx, ty, scale } = transformRef.current
+    canvasRef.current.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`
+  }
+
+  // ---------------------------------------------------------------------------
+  // Data loading
+  // ---------------------------------------------------------------------------
 
   const load = async () => {
     setLoading(true)
@@ -265,12 +305,141 @@ export default function DerivationTree({ focusId, onSelect }: Props) {
     void load()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Scroll the focused node into view when the layout is ready
+  // ---------------------------------------------------------------------------
+  // Wheel zoom — must be registered as a non-passive listener so we can call
+  // preventDefault() and stop the page from scrolling while zooming.
+  //
+  // NOTE: `loading` is a dependency here on purpose.  The container div is
+  // only in the DOM after loading completes (early returns replace the JSX).
+  // Running with [] means this effect fires while containerRef.current is
+  // still null, the guard bails, and the listener is never attached.
+  // ---------------------------------------------------------------------------
+
   useEffect(() => {
-    if (focusRef.current) {
-      focusRef.current.scrollIntoView({ block: 'center', inline: 'center', behavior: 'smooth' })
+    if (loading) return
+    const container = containerRef.current
+    if (!container) return
+
+    const handleWheel = (e: WheelEvent) => {
+      e.preventDefault()
+
+      const rect = container.getBoundingClientRect()
+      // Cursor position relative to the container
+      const cx = e.clientX - rect.left
+      const cy = e.clientY - rect.top
+
+      const { tx, ty, scale } = transformRef.current
+      const factor = e.deltaY < 0 ? 1.1 : 0.91
+      const newScale = Math.min(Math.max(scale * factor, 0.1), 5)
+
+      // Keep the world point under the cursor fixed in screen space
+      transformRef.current = {
+        tx: cx - (cx - tx) * (newScale / scale),
+        ty: cy - (cy - ty) * (newScale / scale),
+        scale: newScale,
+      }
+      applyTransform()
     }
-  }, [layout, focusId])
+
+    container.addEventListener('wheel', handleWheel, { passive: false })
+    return () => container.removeEventListener('wheel', handleWheel)
+  }, [loading]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ---------------------------------------------------------------------------
+  // Focus centering — when layout is ready and a focusId is set, pan so that
+  // the focused node is centered in the container.
+  //
+  // Replaces the old scrollIntoView approach. Same `loading` dep note applies.
+  // ---------------------------------------------------------------------------
+
+  useEffect(() => {
+    if (loading || !layout || !focusId) return
+    const container = containerRef.current
+    if (!container) return
+
+    const node = layout.nodes.find((n) => n.id === focusId)
+    if (!node) return
+
+    const containerW = container.clientWidth
+    const containerH = container.clientHeight
+
+    // Center of the focused card in canvas-space
+    const nodeCx = node.x + NODE_W / 2
+    const nodeCy = node.y + NODE_H / 2
+
+    // Translate so that canvas-space point (nodeCx, nodeCy) maps to the
+    // center of the container in screen-space
+    transformRef.current = {
+      tx: containerW / 2 - nodeCx,
+      ty: containerH / 2 - nodeCy,
+      scale: 1,
+    }
+    applyTransform()
+  }, [layout, focusId, loading]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  // ---------------------------------------------------------------------------
+  // Hover highlighting — compute the set of ids that are "connected" to the
+  // hovered node (the node itself + all direct edge neighbours in either
+  // direction). When nothing is hovered, returns null (nothing is dimmed).
+  // ---------------------------------------------------------------------------
+
+  const connectedIds = useMemo<Set<string> | null>(() => {
+    if (!hoveredId || !layout) return null
+    const ids = new Set<string>()
+    ids.add(hoveredId)
+    for (const edge of layout.edges) {
+      if (edge.fromId === hoveredId) ids.add(edge.toId)
+      if (edge.toId === hoveredId) ids.add(edge.fromId)
+    }
+    return ids
+  }, [hoveredId, layout])
+
+  // ---------------------------------------------------------------------------
+  // Mouse event handlers
+  // ---------------------------------------------------------------------------
+
+  const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (e.button !== 0) return
+    didPanRef.current = false
+    dragRef.current = {
+      startX: e.clientX,
+      startY: e.clientY,
+      startTx: transformRef.current.tx,
+      startTy: transformRef.current.ty,
+    }
+    setIsDragging(true)
+  }
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!dragRef.current) return
+    const dx = e.clientX - dragRef.current.startX
+    const dy = e.clientY - dragRef.current.startY
+
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+      didPanRef.current = true
+    }
+
+    transformRef.current = {
+      ...transformRef.current,
+      tx: dragRef.current.startTx + dx,
+      ty: dragRef.current.startTy + dy,
+    }
+    applyTransform()
+  }
+
+  const handleMouseUp = () => {
+    dragRef.current = null
+    setIsDragging(false)
+  }
+
+  const handleMouseLeave = () => {
+    dragRef.current = null
+    setIsDragging(false)
+  }
+
+  // ---------------------------------------------------------------------------
+  // Early returns for loading / error states
+  // ---------------------------------------------------------------------------
 
   if (loading) {
     return (
@@ -307,7 +476,7 @@ export default function DerivationTree({ focusId, onSelect }: Props) {
             Requirement Derivation Tree
           </h2>
           <p className="text-xs text-gray-400 mt-0.5">
-            Click a node to open its detail view. Arrows show derivation flow (parent → child).
+            Scroll to zoom · drag to pan · click a node to open it. Arrows show derivation flow (parent → child).
           </p>
         </div>
         <button
@@ -318,19 +487,36 @@ export default function DerivationTree({ focusId, onSelect }: Props) {
         </button>
       </div>
 
-      {/* Scrollable canvas */}
-      <div className="flex-1 overflow-auto bg-gray-50">
+      {/* Pan/zoom canvas container — overflow-hidden clips the canvas during pan */}
+      <div
+        ref={containerRef}
+        className="flex-1 overflow-hidden bg-gray-50 relative"
+        style={{ cursor: isDragging ? 'grabbing' : 'grab' }}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUp}
+        onMouseLeave={handleMouseLeave}
+      >
         {/*
-          The canvas uses position:relative so we can absolutely position
-          node cards on top of it.  The SVG sits behind the cards (z-index 0)
-          and the cards sit on top (z-index 10).
+          The inner div is the actual "canvas" that gets CSS-transformed.
+          transformOrigin: '0 0' means translations and scales are anchored
+          to the top-left corner of this div, which matches the math in
+          applyTransform() and the wheel zoom calculation.
+          willChange: 'transform' hints to the browser to promote this layer
+          to the GPU for smooth animation.
         */}
         <div
+          ref={canvasRef}
           className="relative"
-          style={{ width: canvasW, height: canvasH, minWidth: '100%' }}
+          style={{
+            width: canvasW,
+            height: canvasH,
+            transformOrigin: '0 0',
+            willChange: 'transform',
+          }}
         >
           {/* ---------------------------------------------------------------- */}
-          {/* SVG layer: arrowhead marker + edge curves                         */}
+          {/* SVG layer: arrowhead markers + edge curves                        */}
           {/* ---------------------------------------------------------------- */}
           <svg
             className="absolute inset-0 pointer-events-none"
@@ -339,6 +525,7 @@ export default function DerivationTree({ focusId, onSelect }: Props) {
             style={{ zIndex: 0 }}
           >
             <defs>
+              {/* Default arrowhead — slate gray */}
               <marker
                 id="arrowhead"
                 markerWidth="8"
@@ -349,20 +536,44 @@ export default function DerivationTree({ focusId, onSelect }: Props) {
               >
                 <polygon points="0 0, 8 3, 0 6" fill="#94a3b8" />
               </marker>
+              {/* Highlighted arrowhead — blue, used when both endpoints are in the hover set */}
+              <marker
+                id="arrowhead-active"
+                markerWidth="8"
+                markerHeight="6"
+                refX="8"
+                refY="3"
+                orient="auto"
+              >
+                <polygon points="0 0, 8 3, 0 6" fill="#3b82f6" />
+              </marker>
             </defs>
 
             {edges.map(({ fromId, toId }) => {
               const from = posById.get(fromId)
               const to = posById.get(toId)
               if (!from || !to) return null
+
+              // Determine edge visual state:
+              //   - connectedIds null  → no hover active, render at default style
+              //   - both endpoints in connectedIds → highlighted (blue)
+              //   - otherwise → dimmed
+              const isHighlighted =
+                connectedIds !== null &&
+                connectedIds.has(fromId) &&
+                connectedIds.has(toId)
+              const isDimmed =
+                connectedIds !== null && (!connectedIds.has(fromId) || !connectedIds.has(toId))
+
               return (
                 <path
                   key={`${fromId}-${toId}`}
                   d={edgePath(from, to)}
                   fill="none"
-                  stroke="#94a3b8"
-                  strokeWidth={1.5}
-                  markerEnd="url(#arrowhead)"
+                  stroke={isHighlighted ? '#3b82f6' : '#94a3b8'}
+                  strokeWidth={isHighlighted ? 2 : 1.5}
+                  opacity={isDimmed ? 0.15 : 1}
+                  markerEnd={isHighlighted ? 'url(#arrowhead-active)' : 'url(#arrowhead)'}
                 />
               )
             })}
@@ -376,11 +587,22 @@ export default function DerivationTree({ focusId, onSelect }: Props) {
             const isSelf = node.req.requirement_id === 'SELF-000'
             const statusCls = STATUS_CLASSES[node.req.status] ?? 'bg-gray-100 text-gray-600'
 
+            // Dim this card if something is hovered AND this node is not in
+            // the connected set. SELF-000 retains its existing reduced opacity.
+            const isDimmedByHover =
+              connectedIds !== null && !connectedIds.has(node.id)
+
             return (
               <div
                 key={node.id}
-                ref={isFocused ? focusRef : undefined}
-                onClick={() => { if (!isSelf) onSelect(node.id) }}
+                onMouseEnter={() => setHoveredId(node.id)}
+                onMouseLeave={() => setHoveredId(null)}
+                onClick={() => {
+                  // Guard: if the mouse moved during this press it was a pan,
+                  // not a click — don't navigate
+                  if (didPanRef.current) return
+                  if (!isSelf) onSelect(node.id)
+                }}
                 style={{
                   position: 'absolute',
                   left: node.x,
@@ -390,11 +612,13 @@ export default function DerivationTree({ focusId, onSelect }: Props) {
                   zIndex: 10,
                 }}
                 className={[
-                  'rounded-lg border bg-white p-3 flex flex-col justify-between select-none',
+                  'rounded-lg border bg-white p-3 flex flex-col justify-between select-none transition-opacity',
                   isSelf
                     ? 'border-dashed border-gray-300 cursor-default opacity-60'
                     : 'border-gray-200 cursor-pointer hover:border-blue-400 hover:shadow-md transition-all',
                   isFocused ? 'ring-2 ring-blue-500 border-blue-400 shadow-md' : '',
+                  // Apply hover-dim only to non-SELF nodes (SELF is already opacity-60)
+                  !isSelf && isDimmedByHover ? 'opacity-20' : '',
                 ].join(' ')}
               >
                 {/* Top row: ID + status badge */}
@@ -424,6 +648,17 @@ export default function DerivationTree({ focusId, onSelect }: Props) {
               </div>
             )
           })}
+        </div>
+
+        {/* Controls hint overlay — sits in screen-space (outside the transformed
+            canvas div) so it doesn't move or scale with pan/zoom */}
+        <div
+          className="absolute bottom-4 right-4 text-gray-400 text-[10px] text-right space-y-0.5 pointer-events-none select-none"
+          style={{ zIndex: 20 }}
+        >
+          <p>Scroll — zoom</p>
+          <p>Drag — pan</p>
+          <p>Click node — open detail</p>
         </div>
       </div>
     </div>
