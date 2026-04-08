@@ -308,6 +308,44 @@ class ExtractionCandidate(Base):
 
 
 # ---------------------------------------------------------------------------
+# Document references (inter-document dependency graph)
+# ---------------------------------------------------------------------------
+
+class DocumentReference(Base):
+    """
+    A directed edge: source_document references referenced_document.
+    One row means: "source_document cites / depends on referenced_document."
+    """
+    __tablename__ = "document_references"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    source_document_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("source_documents.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    referenced_document_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("source_documents.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    # Optional phrase that triggered this reference, e.g. "per API 661 §5.1"
+    reference_context = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+    source_document = relationship(
+        "SourceDocument",
+        foreign_keys=[source_document_id],
+        backref=backref("outgoing_references", cascade="all, delete-orphan"),
+    )
+    referenced_document = relationship(
+        "SourceDocument",
+        foreign_keys=[referenced_document_id],
+        backref=backref("incoming_references", cascade="all, delete-orphan"),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Requirement traceability links
 # ---------------------------------------------------------------------------
 

@@ -10,6 +10,7 @@ import DerivationTree from './pages/DerivationTree'
 import BlockDiagram from './pages/BlockDiagram'
 import SourceDocumentRegistry from './pages/SourceDocumentRegistry'
 import SourceDocumentDetail from './pages/SourceDocumentDetail'
+import DocumentNetwork from './pages/DocumentNetwork'
 
 export function flattenTree(nodes: HierarchyNode[], depth = 0): FlatNode[] {
   const result: FlatNode[] = []
@@ -29,9 +30,9 @@ type AppView =
   | { page: 'requirements' }
   | { page: 'requirement-detail'; requirementId: string | null; initialParentIds?: string[]; initialStatement?: string; initialSourceDocumentId?: string; backFrom?: 'document-detail'; backDocumentId?: string }
   | { page: 'derivation-tree'; focusId: string | null }
-  | { page: 'block-diagram' }
   | { page: 'documents' }
   | { page: 'document-detail'; documentId: string | null }
+  | { page: 'document-network'; focusDocumentId?: string | null }
 
 export default function App() {
   const [view, setView] = useState<AppView>({ page: 'hierarchy' })
@@ -93,10 +94,10 @@ export default function App() {
       ? 'hierarchy'
       : view.page === 'derivation-tree'
         ? 'derivation-tree'
-        : view.page === 'block-diagram'
-          ? 'block-diagram'
-          : view.page === 'documents' || view.page === 'document-detail'
-            ? 'documents'
+        : view.page === 'documents' || view.page === 'document-detail'
+          ? 'documents'
+          : view.page === 'document-network'
+            ? 'document-network'
             : 'requirements'
 
   return (
@@ -114,8 +115,8 @@ export default function App() {
               { id: 'hierarchy', label: 'System Hierarchy' },
               { id: 'requirements', label: 'Requirements' },
               { id: 'documents', label: 'Documents' },
+              { id: 'document-network', label: 'Doc Network' },
               { id: 'derivation-tree', label: 'Derivation Tree' },
-              { id: 'block-diagram', label: 'Block Diagram' },
             ] as const
           ).map((tab) => (
             <button
@@ -124,8 +125,8 @@ export default function App() {
                 if (tab.id === 'hierarchy') setView({ page: 'hierarchy' })
                 else if (tab.id === 'requirements') setView({ page: 'requirements' })
                 else if (tab.id === 'documents') setView({ page: 'documents' })
-                else if (tab.id === 'derivation-tree') setView({ page: 'derivation-tree', focusId: null })
-                else setView({ page: 'block-diagram' })
+                else if (tab.id === 'document-network') setView({ page: 'document-network' })
+                else setView({ page: 'derivation-tree', focusId: null })
               }}
               className={`px-3 py-1.5 text-sm rounded transition-colors ${
                 activeTab === tab.id
@@ -151,7 +152,8 @@ export default function App() {
         {/* ------------------------------------------------------------------ */}
         {view.page === 'hierarchy' && (
           <>
-            <aside className="w-72 bg-white border-r border-gray-200 flex flex-col overflow-hidden shrink-0">
+            {/* Left: tree navigator */}
+            <aside className="w-64 bg-white border-r border-gray-200 flex flex-col overflow-hidden shrink-0">
               {hierarchyLoading ? (
                 <div className="flex items-center justify-center flex-1 text-gray-400 text-sm">
                   Loading…
@@ -176,14 +178,28 @@ export default function App() {
                 />
               )}
             </aside>
-            <section className="flex-1 overflow-y-auto p-6">
-              <SidePanel
-                node={selectedNode}
-                flatNodes={flatNodes}
-                onRefresh={() => void loadHierarchy()}
-                onSelect={setSelectedNode}
+
+            {/* Centre: block diagram — always visible */}
+            <section className="flex-1 overflow-hidden flex flex-col min-w-0">
+              <BlockDiagram
+                hierarchyNodes={nodes}
+                onOpenDetail={(id) =>
+                  setView({ page: 'requirement-detail', requirementId: id })
+                }
               />
             </section>
+
+            {/* Right: node detail / edit panel — slides in when a node is selected */}
+            {selectedNode && (
+              <aside className="w-72 bg-white border-l border-gray-200 flex flex-col overflow-hidden shrink-0">
+                <SidePanel
+                  node={selectedNode}
+                  flatNodes={flatNodes}
+                  onRefresh={() => void loadHierarchy()}
+                  onSelect={setSelectedNode}
+                />
+              </aside>
+            )}
           </>
         )}
 
@@ -260,14 +276,14 @@ export default function App() {
         )}
 
         {/* ------------------------------------------------------------------ */}
-        {/* Block diagram                                                        */}
+        {/* Document network graph                                               */}
         {/* ------------------------------------------------------------------ */}
-        {view.page === 'block-diagram' && (
+        {view.page === 'document-network' && (
           <div className="flex-1 overflow-hidden flex flex-col">
-            <BlockDiagram
-              hierarchyNodes={nodes}
-              onOpenDetail={(id) =>
-                setView({ page: 'requirement-detail', requirementId: id })
+            <DocumentNetwork
+              focusDocumentId={view.focusDocumentId ?? null}
+              onOpenDocument={(docId) =>
+                setView({ page: 'document-detail', documentId: docId })
               }
             />
           </div>
@@ -318,6 +334,9 @@ export default function App() {
                   backFrom: 'document-detail',
                   backDocumentId: view.documentId ?? undefined,
                 })
+              }
+              onViewInNetwork={(docId) =>
+                setView({ page: 'document-network', focusDocumentId: docId })
               }
               userName={userName}
             />

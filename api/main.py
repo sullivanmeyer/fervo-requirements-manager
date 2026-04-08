@@ -9,6 +9,7 @@ from routers.attachments import ensure_attachments_bucket
 import routers.source_documents as source_documents
 import routers.attachments as attachments
 import routers.extraction as extraction
+import routers.document_references as document_references
 
 
 @asynccontextmanager
@@ -39,6 +40,7 @@ app.include_router(source_documents.router, prefix="/api", tags=["source-documen
 app.include_router(attachments.router, prefix="/api", tags=["attachments"])
 app.include_router(saved_filters.router, prefix="/api", tags=["saved-filters"])
 app.include_router(extraction.router, prefix="/api", tags=["extraction"])
+app.include_router(document_references.router, prefix="/api", tags=["document-references"])
 
 
 @app.get("/health")

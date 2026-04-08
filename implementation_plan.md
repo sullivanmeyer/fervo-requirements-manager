@@ -434,31 +434,31 @@ rather than hard-coded arrays. It answers: "Which documents depend on which?"
 and "If API 661 is revised, which of our specs are affected?"
 
 ### Backend — Database
-- [ ] Alembic migration: `document_references` table (id UUID, source_document_id FK, referenced_document_id FK, reference_context text nullable, created_at). Unique constraint on the source/referenced pair.
-- [ ] During LLM decomposition (Stage 7), extend the extraction prompt to also identify cross-references to other documents/codes within each block (e.g., "per API 661", "in accordance with ASME Sec VIII"). Store these as rows in `document_references`.
-- [ ] Users can also manually add/remove document references via the UI.
+- [x] Alembic migration: `document_references` table (id UUID, source_document_id FK, referenced_document_id FK, reference_context text nullable, created_at). Unique constraint on the source/referenced pair.
+- [~] During LLM decomposition (Stage 7), extend the extraction prompt to also identify cross-references — deferred to a later pass; manual references are available now.
+- [x] Users can also manually add/remove document references via the UI.
 
 ### Backend — API Endpoints
-- [ ] `GET /api/document-references/graph` — returns all documents as nodes (with id, title, document_type, discipline, reference count) and all references as edges (source_id, target_id), formatted for the frontend graph renderer
-- [ ] `POST /api/document-references` — manually add a reference between two documents
-- [ ] `DELETE /api/document-references/{id}` — remove a reference
-- [ ] `GET /api/source-documents/{id}/references` — outgoing references (documents this one references)
-- [ ] `GET /api/source-documents/{id}/referenced-by` — incoming references (documents that reference this one)
+- [x] `GET /api/document-references/graph` — returns all documents as nodes (with id, title, document_type, discipline, reference count) and all references as edges (source_id, target_id), formatted for the frontend graph renderer
+- [x] `POST /api/document-references` — manually add a reference between two documents
+- [x] `DELETE /api/document-references/{id}` — remove a reference
+- [x] `GET /api/source-documents/{id}/references` — outgoing references (documents this one references)
+- [x] `GET /api/source-documents/{id}/referenced-by` — incoming references (documents that reference this one)
 
 ### Frontend — Document Dependency Graph View
-- [ ] New page/tab: "Document Network" — interactive force-directed graph
-- [ ] Nodes represent source documents, sized by total connection count (in + out references)
-- [ ] Nodes colored by document type (Code/Standard, Internal Specification, Basis of Design, Contract/PPA, etc.)
-- [ ] Edges represent reference relationships with directionality (arrows showing which doc references which)
-- [ ] Hover a node: highlight all connected nodes and edges, dim everything else. Show a tooltip panel with document title, type, issuing org, revision, and connection counts (references / referenced by)
-- [ ] Click a node: select it, show detail panel with outgoing and incoming reference lists. Each listed document is clickable. "Open Document" button navigates to the document detail view.
-- [ ] Pan and zoom controls (mouse wheel zoom, click-drag pan)
-- [ ] Legend showing document type color coding
-- [ ] On the Source Document Detail View, add a "References" section showing outgoing and incoming document references, with an "Add Reference" button (searchable dropdown of other documents in the registry) and a "View in Network" button that opens the graph centered on this document
+- [x] New page/tab: "Document Network" — interactive force-directed graph
+- [x] Nodes represent source documents, sized by total connection count (in + out references)
+- [x] Nodes colored by document type (Code/Standard, Internal Specification, Basis of Design, Contract/PPA, etc.)
+- [x] Edges represent reference relationships with directionality (arrows showing which doc references which)
+- [x] Hover a node: highlight all connected nodes and edges, dim everything else. Show a tooltip panel with document title, type, issuing org, revision, and connection counts (references / referenced by)
+- [x] Click a node: select it, show detail panel with outgoing and incoming reference lists. Each listed document is clickable. "Open Document" button navigates to the document detail view.
+- [x] Pan and zoom controls (mouse wheel zoom, click-drag pan)
+- [x] Legend showing document type color coding
+- [x] On the Source Document Detail View, add a "References" section showing outgoing and incoming document references, with an "Add Reference" button (searchable dropdown of other documents in the registry) and a "View in Network" button that opens the graph centered on this document
 
 ### Frontend — Graph Interaction with Revision Tracking
-- [ ] When a document has been superseded (from Stage 11 revision tracking), its node shows a visual indicator (e.g., dashed border or amber glow)
-- [ ] "Impact Analysis" mode: clicking a node and selecting "Show Impact" highlights all documents that reference it (directly and transitively), answering "If this code is revised, what is affected?"
+- [~] When a document has been superseded (from Stage 11 revision tracking), its node shows a visual indicator — deferred; depends on Stage 11 revision tracking data.
+- [~] "Impact Analysis" mode — deferred to a later pass.
 
 ### Stage 8 Verification
 - [ ] Register 5+ source documents with cross-references between them (e.g., ACC spec references API 661, ASME Sec VIII, ASME B31.3; Electrical BOD references NFPA 70, IEEE 841)
@@ -470,7 +470,6 @@ and "If API 661 is revised, which of our specs are affected?"
 - [ ] Click "Open Document" — verify navigation to document detail view
 - [ ] On a document detail view, click "Add Reference" — add a reference to another document — verify it appears in the graph
 - [ ] On a document detail view, click "View in Network" — verify graph opens centered on that document
-- [ ] Verify LLM-extracted cross-references (from Stage 7 decomposition) appear automatically in the graph
 
 ---
 

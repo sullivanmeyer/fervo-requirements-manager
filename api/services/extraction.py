@@ -27,7 +27,7 @@ from google.genai import types
 # Model config
 # ---------------------------------------------------------------------------
 
-MODEL = "gemini-2.0-flash"
+MODEL = "gemini-2.5-flash"
 
 # Retry config for transient 503 errors
 _MAX_RETRIES = 3

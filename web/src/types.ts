@@ -195,6 +195,43 @@ export interface DocumentBlock {
 // Extraction candidates
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Document references (dependency graph)
+// ---------------------------------------------------------------------------
+
+export interface DocumentReferenceListItem {
+  id: string            // the other document's UUID
+  document_id: string   // human-readable ID (e.g. "API 661")
+  title: string
+  document_type: string
+  reference_context: string | null
+  ref_row_id: string    // the document_references table PK — used for deletion
+}
+
+export interface GraphNode {
+  id: string
+  document_id: string
+  title: string
+  document_type: string
+  issuing_organization: string | null
+  revision: string | null
+  disciplines: string[]
+  out_count: number   // edges going out (this doc cites)
+  in_count: number    // edges coming in (others cite this doc)
+}
+
+export interface GraphEdge {
+  id: string
+  source_id: string
+  target_id: string
+  reference_context: string | null
+}
+
+export interface DocumentGraph {
+  nodes: GraphNode[]
+  edges: GraphEdge[]
+}
+
 export interface ExtractionCandidate {
   id: string
   source_document_id: string

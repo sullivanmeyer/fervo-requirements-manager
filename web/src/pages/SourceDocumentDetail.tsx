@@ -21,6 +21,7 @@ import { useEffect, useRef, useState } from 'react'
 import {
   createSourceDocument,
   fetchSourceDocument,
+  fetchSourceDocuments,
   pdfDownloadUrl,
   updateSourceDocument,
   uploadPdf,
@@ -33,10 +34,18 @@ import {
   fetchCandidates,
   updateCandidate,
 } from '../api/extraction'
+import {
+  addDocumentReference,
+  deleteDocumentReference,
+  fetchIncomingReferences,
+  fetchOutgoingReferences,
+} from '../api/documentReferences'
 import type {
   DocumentBlock,
+  DocumentReferenceListItem,
   ExtractionCandidate,
   SourceDocumentDetail as DocDetail,
+  SourceDocumentListItem,
 } from '../types'
 
 // ---------------------------------------------------------------------------
@@ -156,6 +165,7 @@ interface Props {
   onCancel: () => void
   onCreateRequirement: (sourceDocumentId: string, initialStatement: string) => void
   onOpenRequirement: (requirementId: string) => void
+  onViewInNetwork?: (documentId: string) => void
 }
 
 // ---------------------------------------------------------------------------
@@ -169,6 +179,7 @@ export default function SourceDocumentDetail({
   onCancel,
   onCreateRequirement,
   onOpenRequirement,
+  onViewInNetwork,
 }: Props) {
   const isNew = documentId === null
 
@@ -184,7 +195,7 @@ export default function SourceDocumentDetail({
   const [uploading, setUploading] = useState(false)
 
   // Panel
-  const [activePanel, setActivePanel] = useState<'viewer' | 'blocks' | 'text'>('viewer')
+  const [activePanel, setActivePanel] = useState<'viewer' | 'blocks' | 'text' | 'references'>('viewer')
 
   // Document blocks
   const [blocks, setBlocks] = useState<DocumentBlock[]>([])
@@ -198,6 +209,16 @@ export default function SourceDocumentDetail({
   const [candidates, setCandidates] = useState<ExtractionCandidate[]>([])
   const [extracting, setExtracting] = useState(false)
   const [candidateError, setCandidateError] = useState<string | null>(null)
+
+  // Document references
+  const [outRefs, setOutRefs] = useState<DocumentReferenceListItem[]>([])
+  const [inRefs, setInRefs] = useState<DocumentReferenceListItem[]>([])
+  const [refError, setRefError] = useState<string | null>(null)
+  const [allDocs, setAllDocs] = useState<SourceDocumentListItem[]>([])
+  const [addingRef, setAddingRef] = useState(false)
+  const [addRefTargetId, setAddRefTargetId] = useState('')
+  const [addRefContext, setAddRefContext] = useState('')
+  const [savingRef, setSavingRef] = useState(false)
 
   // Inline edit state for "Edit & Accept"
   const [editingCandidateId, setEditingCandidateId] = useState<string | null>(null)
@@ -216,15 +237,21 @@ export default function SourceDocumentDetail({
     if (isNew) return
     const doLoad = async () => {
       try {
-        const [d, blks, cands] = await Promise.all([
+        const [d, blks, cands, outgoing, incoming, docs] = await Promise.all([
           fetchSourceDocument(documentId!),
           fetchBlocks(documentId!).catch(() => [] as DocumentBlock[]),
           fetchCandidates(documentId!).catch(() => [] as ExtractionCandidate[]),
+          fetchOutgoingReferences(documentId!).catch(() => [] as DocumentReferenceListItem[]),
+          fetchIncomingReferences(documentId!).catch(() => [] as DocumentReferenceListItem[]),
+          fetchSourceDocuments().catch(() => [] as SourceDocumentListItem[]),
         ])
         setDoc(d)
         setForm(formFromDetail(d))
         setBlocks(blks)
         setCandidates(cands)
+        setOutRefs(outgoing)
+        setInRefs(incoming)
+        setAllDocs(docs)
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Failed to load document')
       } finally {
@@ -472,6 +499,43 @@ export default function SourceDocumentDetail({
   }
 
   // -------------------------------------------------------------------------
+  // Document reference actions
+  // -------------------------------------------------------------------------
+
+  const handleAddRef = async () => {
+    if (!documentId || !addRefTargetId) return
+    setSavingRef(true)
+    setRefError(null)
+    try {
+      await addDocumentReference(documentId, addRefTargetId, addRefContext || undefined)
+      const [outgoing, incoming] = await Promise.all([
+        fetchOutgoingReferences(documentId),
+        fetchIncomingReferences(documentId),
+      ])
+      setOutRefs(outgoing)
+      setInRefs(incoming)
+      setAddingRef(false)
+      setAddRefTargetId('')
+      setAddRefContext('')
+    } catch (e) {
+      setRefError(e instanceof Error ? e.message : 'Failed to add reference')
+    } finally {
+      setSavingRef(false)
+    }
+  }
+
+  const handleRemoveRef = async (refRowId: string) => {
+    if (!documentId) return
+    setRefError(null)
+    try {
+      await deleteDocumentReference(refRowId)
+      setOutRefs((prev) => prev.filter((r) => r.ref_row_id !== refRowId))
+    } catch (e) {
+      setRefError(e instanceof Error ? e.message : 'Failed to remove reference')
+    }
+  }
+
+  // -------------------------------------------------------------------------
   // Derived values
   // -------------------------------------------------------------------------
 
@@ -675,8 +739,8 @@ export default function SourceDocumentDetail({
 
             {/* Tab bar */}
             <div className="flex border-b border-gray-200 bg-white shrink-0">
-              {(['viewer', 'blocks', 'text'] as const).map((panel) => {
-                const labels = { viewer: 'PDF Viewer', blocks: 'Document Blocks', text: 'Extracted Text' }
+              {(['viewer', 'blocks', 'text', 'references'] as const).map((panel) => {
+                const labels = { viewer: 'PDF Viewer', blocks: 'Document Blocks', text: 'Extracted Text', references: 'References' }
                 return (
                   <button
                     key={panel}
@@ -696,6 +760,11 @@ export default function SourceDocumentDetail({
                     {panel === 'blocks' && candidates.length > 0 && (
                       <span className="ml-1 px-1.5 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">
                         {acceptedCount}/{candidates.length}
+                      </span>
+                    )}
+                    {panel === 'references' && (outRefs.length + inRefs.length) > 0 && (
+                      <span className="ml-1.5 px-1.5 py-0.5 text-xs bg-indigo-100 text-indigo-700 rounded-full">
+                        {outRefs.length + inRefs.length}
                       </span>
                     )}
                   </button>
@@ -1067,6 +1136,148 @@ export default function SourceDocumentDetail({
                       : 'Upload a PDF to extract its text.'}
                   </div>
                 )}
+              </div>
+            )}
+
+            {/* ---- References ---- */}
+            {activePanel === 'references' && (
+              <div className="flex-1 overflow-y-auto p-4 space-y-5">
+
+                {/* Error */}
+                {refError && (
+                  <div className="px-3 py-2 bg-red-50 border border-red-200 rounded text-xs text-red-700">
+                    {refError}
+                  </div>
+                )}
+
+                {/* Header row */}
+                <div className="flex items-center gap-3">
+                  <h3 className="text-sm font-semibold text-gray-700 flex-1">
+                    Document References
+                  </h3>
+                  {onViewInNetwork && documentId && (
+                    <button
+                      onClick={() => onViewInNetwork(documentId)}
+                      className="px-3 py-1.5 text-xs border border-indigo-300 text-indigo-700 rounded hover:bg-indigo-50"
+                    >
+                      View in Network
+                    </button>
+                  )}
+                  <button
+                    onClick={() => { setAddingRef(true); setRefError(null) }}
+                    className="px-3 py-1.5 text-xs bg-indigo-600 text-white rounded hover:bg-indigo-700"
+                  >
+                    + Add Reference
+                  </button>
+                </div>
+
+                {/* Add reference inline form */}
+                {addingRef && (
+                  <div className="border border-indigo-200 rounded-lg p-3 space-y-2 bg-indigo-50">
+                    <p className="text-xs font-semibold text-indigo-800">
+                      This document cites:
+                    </p>
+                    <select
+                      value={addRefTargetId}
+                      onChange={(e) => setAddRefTargetId(e.target.value)}
+                      className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                    >
+                      <option value="">— select a document —</option>
+                      {allDocs
+                        .filter((d) => d.id !== documentId)
+                        .filter((d) => !outRefs.some((r) => r.id === d.id))
+                        .map((d) => (
+                          <option key={d.id} value={d.id}>
+                            {d.document_id} — {d.title}
+                          </option>
+                        ))
+                      }
+                    </select>
+                    <input
+                      type="text"
+                      value={addRefContext}
+                      onChange={(e) => setAddRefContext(e.target.value)}
+                      placeholder="Context (optional) — e.g. per §5.1"
+                      className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => void handleAddRef()}
+                        disabled={savingRef || !addRefTargetId}
+                        className="px-3 py-1.5 text-xs bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:opacity-50"
+                      >
+                        {savingRef ? 'Saving…' : 'Add'}
+                      </button>
+                      <button
+                        onClick={() => { setAddingRef(false); setAddRefTargetId(''); setAddRefContext('') }}
+                        className="px-3 py-1.5 text-xs border border-gray-300 text-gray-600 rounded hover:bg-gray-50"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                )}
+
+                {/* Outgoing references (this doc cites) */}
+                <div>
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
+                    This document cites ({outRefs.length})
+                  </p>
+                  {outRefs.length === 0 ? (
+                    <p className="text-xs text-gray-400 italic">None recorded.</p>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {outRefs.map((r) => (
+                        <div
+                          key={r.ref_row_id}
+                          className="flex items-start gap-2 px-3 py-2 bg-white border border-gray-200 rounded-lg"
+                        >
+                          <div className="flex-1 min-w-0">
+                            <span className="font-mono text-xs font-semibold text-blue-700 block">
+                              {r.document_id}
+                            </span>
+                            <span className="text-xs text-gray-600 block">{r.title}</span>
+                            {r.reference_context && (
+                              <span className="text-xs text-gray-400 italic">{r.reference_context}</span>
+                            )}
+                          </div>
+                          <button
+                            onClick={() => void handleRemoveRef(r.ref_row_id)}
+                            className="text-gray-400 hover:text-red-500 text-sm leading-none shrink-0 mt-0.5"
+                            title="Remove reference"
+                          >
+                            ×
+                          </button>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
+                {/* Incoming references (who cites this doc) */}
+                <div>
+                  <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
+                    Referenced by ({inRefs.length})
+                  </p>
+                  {inRefs.length === 0 ? (
+                    <p className="text-xs text-gray-400 italic">No other documents reference this one.</p>
+                  ) : (
+                    <div className="space-y-1.5">
+                      {inRefs.map((r) => (
+                        <div
+                          key={r.ref_row_id}
+                          className="px-3 py-2 bg-purple-50 border border-purple-100 rounded-lg"
+                        >
+                          <span className="font-mono text-xs font-semibold text-purple-700 block">
+                            {r.document_id}
+                          </span>
+                          <span className="text-xs text-gray-600 block">{r.title}</span>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+
               </div>
             )}
 
