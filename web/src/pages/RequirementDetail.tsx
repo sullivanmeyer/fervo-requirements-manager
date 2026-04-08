@@ -420,6 +420,10 @@ export default function RequirementDetail({
 
     const payload = {
       ...form,
+      // Optional UUID fields — send undefined (omitted) rather than '' so
+      // Pydantic doesn't try to parse an empty string as a UUID.
+      source_document_id: form.source_document_id || undefined,
+      source_clause: form.source_clause || undefined,
       last_modified_by: form.last_modified_by || undefined,
       last_modified_date: form.last_modified_date || undefined,
       change_history: form.change_history || undefined,

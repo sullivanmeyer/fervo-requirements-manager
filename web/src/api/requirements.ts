@@ -11,6 +11,26 @@ import type {
 
 const BASE = '/api'
 
+/** Extract a human-readable message from a FastAPI error response body.
+ *  FastAPI returns detail as a plain string for HTTPException, but as an
+ *  array of {loc, msg, type} objects for Pydantic validation errors.
+ *  Calling String() on that array produces "[object Object]".
+ */
+function extractDetail(err: unknown, fallback: string): string {
+  if (typeof err !== 'object' || err === null || !('detail' in err)) return fallback
+  const detail = (err as { detail: unknown }).detail
+  if (Array.isArray(detail)) {
+    return detail
+      .map((d) =>
+        typeof d === 'object' && d !== null && 'msg' in d
+          ? String((d as { msg: unknown }).msg)
+          : JSON.stringify(d),
+      )
+      .join('; ')
+  }
+  return String(detail)
+}
+
 export async function fetchRequirements(
   page = 1,
   pageSize = 50,
@@ -38,11 +58,7 @@ export async function createRequirement(
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
-    const detail =
-      typeof err === 'object' && err !== null && 'detail' in err
-        ? String((err as { detail: unknown }).detail)
-        : `Create failed (${res.status})`
-    throw new Error(detail)
+    throw new Error(extractDetail(err, `Create failed (${res.status})`))
   }
   return res.json() as Promise<RequirementDetail>
 }
@@ -58,11 +74,7 @@ export async function updateRequirement(
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({}))
-    const detail =
-      typeof err === 'object' && err !== null && 'detail' in err
-        ? String((err as { detail: unknown }).detail)
-        : `Update failed (${res.status})`
-    throw new Error(detail)
+    throw new Error(extractDetail(err, `Update failed (${res.status})`))
   }
   return res.json() as Promise<RequirementDetail>
 }
@@ -134,11 +146,7 @@ export async function fetchAllLinks(): Promise<RequirementLink[]> {
 
 async function _apiError(res: Response, fallback: string): Promise<never> {
   const err = await res.json().catch(() => ({}))
-  const detail =
-    typeof err === 'object' && err !== null && 'detail' in err
-      ? String((err as { detail: unknown }).detail)
-      : fallback
-  throw new Error(detail)
+  throw new Error(extractDetail(err, fallback))
 }
 
 export async function addLink(
