@@ -141,6 +141,9 @@ def decompose_document(pdf_bytes: bytes) -> list[dict]:
       clause_number, heading, content, block_type,
       parent_clause_number, depth
     """
+    if not pdf_bytes:
+        raise ValueError("PDF bytes are empty — ensure the file was uploaded to storage correctly before decomposing.")
+
     client = _get_client()
 
     # Write PDF to a temp file so the File API can upload it
