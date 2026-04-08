@@ -33,7 +33,7 @@ export default function SourceDocumentRegistry({ onOpenDetail, onCreateNew }: Pr
   // Filters
   const [search, setSearch] = useState('')
   const [typeFilter, setTypeFilter] = useState('')
-  const [hideStubs, setHideStubs] = useState(false)
+  const [hideStubs, setHideStubs] = useState(true)
 
   const load = async () => {
     setLoading(true)
