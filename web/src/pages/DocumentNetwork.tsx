@@ -12,7 +12,7 @@
  * Node size reflects total connection count (in + out).
  * Node color reflects document type.
  */
-import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { fetchDocumentGraph } from '../api/documentReferences'
 import type { DocumentGraph, GraphNode, GraphEdge } from '../types'
 
@@ -127,7 +127,8 @@ export default function DocumentNetwork({ focusDocumentId, onOpenDocument }: Pro
     moved: boolean
   } | null>(null)
 
-  // Canvas size — set directly on the DOM element, never stored in React state
+  // Canvas size in React state — drives the width/height attributes on the canvas element
+  const [canvasSize, setCanvasSize] = useState({ w: 800, h: 600 })
 
   // ---------------------------------------------------------------------------
   // Load graph data
@@ -178,31 +179,24 @@ export default function DocumentNetwork({ focusDocumentId, onOpenDocument }: Pro
   }, [graph])
 
   // ---------------------------------------------------------------------------
-  // Canvas sizing — set the drawing buffer to match the container exactly.
-  // We bypass React state entirely and write directly to the DOM element so
-  // there are no re-renders and no 800×600 cold-start flash.
+  // Canvas sizing — keep the drawing buffer matched to the container.
+  // A ResizeObserver drives the state; a one-shot effect seeds the initial
+  // size from the actual container dimensions so there is no 800×600 flash.
   // ---------------------------------------------------------------------------
-
-  useLayoutEffect(() => {
-    // Set initial size synchronously before the first paint
-    const container = containerRef.current
-    const canvas = canvasRef.current
-    if (container && canvas) {
-      canvas.width = Math.floor(container.clientWidth)
-      canvas.height = Math.floor(container.clientHeight)
-    }
-  }, [])
 
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
+
+    // Seed with real dimensions immediately (fires before graph loads)
+    const { clientWidth: w, clientHeight: h } = container
+    if (w > 0 && h > 0) setCanvasSize({ w, h })
+
+    // Keep in sync when the container is resized
     const obs = new ResizeObserver((entries) => {
-      const canvas = canvasRef.current
-      if (!canvas) return
       for (const entry of entries) {
         const { width, height } = entry.contentRect
-        canvas.width = Math.floor(width)
-        canvas.height = Math.floor(height)
+        setCanvasSize({ w: Math.floor(width), h: Math.floor(height) })
       }
     })
     obs.observe(container)
@@ -669,7 +663,9 @@ export default function DocumentNetwork({ focusDocumentId, onOpenDocument }: Pro
 
         <canvas
           ref={canvasRef}
-          className="absolute inset-0"
+          width={canvasSize.w}
+          height={canvasSize.h}
+          className="block"
           onWheel={handleWheel}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
