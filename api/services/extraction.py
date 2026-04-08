@@ -17,6 +17,7 @@ import json
 import os
 import re
 import tempfile
+import time
 from typing import Any
 
 from google import genai
@@ -26,7 +27,11 @@ from google.genai import types
 # Model config
 # ---------------------------------------------------------------------------
 
-MODEL = "gemini-2.5-pro"
+MODEL = "gemini-2.0-flash"
+
+# Retry config for transient 503 errors
+_MAX_RETRIES = 3
+_RETRY_DELAY_S = 5
 
 # ---------------------------------------------------------------------------
 # Prompt templates
@@ -115,6 +120,22 @@ def _get_client() -> genai.Client:
     return genai.Client(api_key=api_key)
 
 
+def _generate_with_retry(client: genai.Client, **kwargs) -> Any:
+    """Call generate_content with simple retry logic for transient 503s."""
+    last_exc = None
+    for attempt in range(_MAX_RETRIES):
+        try:
+            return client.models.generate_content(**kwargs)
+        except Exception as e:
+            if "503" in str(e) or "UNAVAILABLE" in str(e):
+                last_exc = e
+                if attempt < _MAX_RETRIES - 1:
+                    time.sleep(_RETRY_DELAY_S)
+            else:
+                raise
+    raise last_exc
+
+
 def _parse_json_response(text: str) -> Any:
     """Extract a JSON array from the model's response, handling markdown fences."""
     # Strip markdown code fences (```json ... ``` or ``` ... ```)
@@ -160,7 +181,8 @@ def decompose_document(pdf_bytes: bytes) -> list[dict]:
         os.unlink(tmp_path)
 
     try:
-        response = client.models.generate_content(
+        response = _generate_with_retry(
+            client,
             model=MODEL,
             contents=[
                 types.Content(
@@ -226,7 +248,8 @@ def extract_requirements(blocks: list[dict]) -> list[dict]:
     blocks_json = json.dumps(blocks_for_prompt, indent=2)
     prompt = EXTRACT_USER_TEMPLATE.format(blocks_json=blocks_json)
 
-    response = client.models.generate_content(
+    response = _generate_with_retry(
+        client,
         model=MODEL,
         contents=[
             types.Content(
