@@ -7,7 +7,7 @@
  *   Extracted Text  — legacy raw text panel (kept for reference)
  *
  * Document Blocks tab:
- *   • "Decompose Document" triggers Claude decomposition and stores blocks in DB
+ *   • "Decompose Document" triggers Gemini decomposition and stores blocks in DB
  *   • Each block shows clause number, type badge, and content
  *   • Blocks can be checked for selective extraction
  *   • "Extract from Selected" / "Extract All" trigger LLM requirement extraction
@@ -816,7 +816,7 @@ export default function SourceDocumentDetail({
                           <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                           <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
                         </svg>
-                        <span>Sending PDF to Claude for decomposition…</span>
+                        <span>Sending PDF to Gemini for decomposition…</span>
                         <span className="text-xs text-gray-400">This may take 30–90 seconds.</span>
                       </div>
                     ) : blocks.length === 0 ? (
