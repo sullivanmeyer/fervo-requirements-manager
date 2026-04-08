@@ -44,3 +44,16 @@ export async function deleteDocumentReference(refRowId: string): Promise<void> {
   const res = await fetch(`${BASE}/document-references/${refRowId}`, { method: 'DELETE' })
   if (!res.ok) throw new Error('Failed to remove reference')
 }
+
+export async function detectDocumentReferences(
+  documentId: string,
+): Promise<{ detected: number; stubs_created: number; edges_added: number }> {
+  const res = await fetch(`${BASE}/source-documents/${documentId}/detect-references`, {
+    method: 'POST',
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({})) as { detail?: string }
+    throw new Error(err.detail ?? `Reference detection failed (${res.status})`)
+  }
+  return res.json() as Promise<{ detected: number; stubs_created: number; edges_added: number }>
+}

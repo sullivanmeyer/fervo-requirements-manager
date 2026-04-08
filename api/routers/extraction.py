@@ -187,6 +187,89 @@ def _next_requirement_id(discipline: str, db: Session) -> str:
 
 
 # ---------------------------------------------------------------------------
+# Reference detection helper (shared by decomposition and on-demand endpoint)
+# ---------------------------------------------------------------------------
+
+def _apply_reference_detection(
+    doc_uuid: UUID,
+    source_doc: "SourceDocument",
+    block_texts: list[str],
+    db: "Session",
+) -> dict:
+    """
+    Run Gemini reference detection on *block_texts*, create stub SourceDocument
+    rows for any unrecognised references, and insert DocumentReference edges.
+
+    Returns a summary dict: {detected, stubs_created, edges_added}.
+    Safe to call on already-decomposed documents (idempotent — skips existing edges).
+    """
+    try:
+        detected = detect_document_references(block_texts)
+    except Exception as e:
+        print(f"[detect_refs] WARNING: {e}")
+        detected = []
+
+    stubs_created = 0
+    edges_added = 0
+
+    if detected:
+        all_docs = db.query(SourceDocument).all()
+        existing_by_norm: dict[str, SourceDocument] = {
+            _normalize_doc_id(d.document_id): d for d in all_docs
+        }
+        self_norm = _normalize_doc_id(source_doc.document_id)
+
+        for ref in detected:
+            norm = ref["normalized"]
+            doc_num = ref["document_number"]
+            full_ref = ref["full_reference"]
+            context = ref["context"]
+
+            if norm == self_norm:
+                continue
+
+            if norm in existing_by_norm:
+                target = existing_by_norm[norm]
+            else:
+                target = SourceDocument(
+                    id=uuid.uuid4(),
+                    document_id=doc_num,
+                    title=full_ref,
+                    document_type="Code/Standard",
+                    is_stub=True,
+                    created_at=datetime.utcnow(),
+                    updated_at=datetime.utcnow(),
+                )
+                db.add(target)
+                db.flush()
+                existing_by_norm[norm] = target
+                stubs_created += 1
+                print(f"[detect_refs] Created stub: {doc_num!r}")
+
+            existing_edge = db.query(DocumentReference).filter(
+                DocumentReference.source_document_id == doc_uuid,
+                DocumentReference.referenced_document_id == target.id,
+            ).first()
+            if not existing_edge:
+                db.add(DocumentReference(
+                    id=uuid.uuid4(),
+                    source_document_id=doc_uuid,
+                    referenced_document_id=target.id,
+                    reference_context=context,
+                    created_at=datetime.utcnow(),
+                ))
+                edges_added += 1
+
+        db.commit()
+        print(
+            f"[detect_refs] {len(detected)} refs detected, "
+            f"{stubs_created} stubs created, {edges_added} edges added"
+        )
+
+    return {"detected": len(detected), "stubs_created": stubs_created, "edges_added": edges_added}
+
+
+# ---------------------------------------------------------------------------
 # Endpoints
 # ---------------------------------------------------------------------------
 
@@ -213,6 +296,10 @@ def _run_decomposition(doc_id: str, file_path: str):
         raw_blocks = decompose_document(pdf_bytes)
 
         doc_uuid = UUID(doc_id)
+        doc = db.query(SourceDocument).filter(SourceDocument.id == doc_uuid).first()
+        if not doc:
+            print(f"[decompose] ERROR: doc {doc_id} not found in DB")
+            return
 
         # Delete existing blocks
         db.query(DocumentBlock).filter(
@@ -252,68 +339,8 @@ def _run_decomposition(doc_id: str, file_path: str):
         print(f"[decompose] {len(new_blocks)} blocks written for doc {doc_id}")
 
         # ---- Reference detection ----
-        # Ask Gemini to find all external document references in the block text,
-        # then create stub SourceDocument rows for any that aren't already in the
-        # registry and insert DocumentReference edges.
         block_texts = [b.content for b in new_blocks if b.content.strip()]
-        try:
-            detected = detect_document_references(block_texts)
-        except Exception as e:
-            print(f"[detect_refs] WARNING: {e}")
-            detected = []
-
-        if detected:
-            # Build a lookup of existing documents by normalized document_id
-            all_docs = db.query(SourceDocument).all()
-            existing_by_norm: dict[str, SourceDocument] = {
-                _normalize_doc_id(d.document_id): d for d in all_docs
-            }
-
-            for ref in detected:
-                norm = ref["normalized"]
-                doc_num = ref["document_number"]
-                full_ref = ref["full_reference"]
-                context = ref["context"]
-
-                # Skip self-reference
-                if _normalize_doc_id(doc.document_id) == norm:
-                    continue
-
-                # Find or create the target document
-                if norm in existing_by_norm:
-                    target = existing_by_norm[norm]
-                else:
-                    target = SourceDocument(
-                        id=uuid.uuid4(),
-                        document_id=doc_num,
-                        title=full_ref,
-                        document_type="Code/Standard",
-                        is_stub=True,
-                        created_at=datetime.utcnow(),
-                        updated_at=datetime.utcnow(),
-                    )
-                    db.add(target)
-                    db.flush()  # get target.id assigned
-                    existing_by_norm[norm] = target
-                    print(f"[detect_refs] Created stub: {doc_num!r}")
-
-                # Insert edge if it doesn't already exist
-                existing_edge = db.query(DocumentReference).filter(
-                    DocumentReference.source_document_id == doc_uuid,
-                    DocumentReference.referenced_document_id == target.id,
-                ).first()
-                if not existing_edge:
-                    db.add(DocumentReference(
-                        id=uuid.uuid4(),
-                        source_document_id=doc_uuid,
-                        referenced_document_id=target.id,
-                        reference_context=context,
-                        created_at=datetime.utcnow(),
-                    ))
-
-            db.commit()
-            stub_count = sum(1 for r in detected if _normalize_doc_id(r["document_number"]) not in {_normalize_doc_id(d.document_id) for d in all_docs})
-            print(f"[detect_refs] {len(detected)} references detected, edges inserted for doc {doc_id}")
+        _apply_reference_detection(doc_uuid, doc, block_texts, db)
 
     except Exception as e:
         db.rollback()
@@ -338,6 +365,33 @@ def decompose(doc_id: str, background_tasks: BackgroundTasks, db: Session = Depe
 
     background_tasks.add_task(_run_decomposition, doc_id, doc.file_path)
     return {"status": "processing"}
+
+
+@router.post("/source-documents/{doc_id}/detect-references")
+def detect_references(doc_id: str, db: Session = Depends(get_db)):
+    """
+    Re-run reference detection on a document's existing blocks.
+
+    Useful for documents that were decomposed before the automatic reference
+    detection pipeline was added, or to refresh after editing blocks.
+    Creates stub SourceDocument rows and DocumentReference edges for any
+    newly-detected external references.
+    """
+    doc = _get_doc_or_404(doc_id, db)
+    blocks = (
+        db.query(DocumentBlock)
+        .filter(DocumentBlock.source_document_id == UUID(doc_id))
+        .order_by(DocumentBlock.sort_order)
+        .all()
+    )
+    if not blocks:
+        raise HTTPException(
+            status_code=422,
+            detail="No blocks found. Decompose the document first.",
+        )
+    block_texts = [b.content for b in blocks if b.content.strip()]
+    result = _apply_reference_detection(UUID(doc_id), doc, block_texts, db)
+    return result
 
 
 @router.get("/source-documents/{doc_id}/blocks")

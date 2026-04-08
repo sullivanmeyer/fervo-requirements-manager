@@ -37,6 +37,7 @@ import {
 import {
   addDocumentReference,
   deleteDocumentReference,
+  detectDocumentReferences,
   fetchIncomingReferences,
   fetchOutgoingReferences,
 } from '../api/documentReferences'
@@ -219,6 +220,7 @@ export default function SourceDocumentDetail({
   const [addRefTargetId, setAddRefTargetId] = useState('')
   const [addRefContext, setAddRefContext] = useState('')
   const [savingRef, setSavingRef] = useState(false)
+  const [detectingRefs, setDetectingRefs] = useState(false)
 
   // Inline edit state for "Edit & Accept"
   const [editingCandidateId, setEditingCandidateId] = useState<string | null>(null)
@@ -532,6 +534,29 @@ export default function SourceDocumentDetail({
       setOutRefs((prev) => prev.filter((r) => r.ref_row_id !== refRowId))
     } catch (e) {
       setRefError(e instanceof Error ? e.message : 'Failed to remove reference')
+    }
+  }
+
+  const handleDetectRefs = async () => {
+    if (!documentId) return
+    setDetectingRefs(true)
+    setRefError(null)
+    try {
+      const result = await detectDocumentReferences(documentId)
+      // Reload outgoing references to show newly detected ones
+      const [outgoing, incoming] = await Promise.all([
+        fetchOutgoingReferences(documentId),
+        fetchIncomingReferences(documentId),
+      ])
+      setOutRefs(outgoing)
+      setInRefs(incoming)
+      if (result.edges_added === 0 && result.stubs_created === 0) {
+        setRefError(`Detection complete — no new references found (${result.detected} already known).`)
+      }
+    } catch (e) {
+      setRefError(e instanceof Error ? e.message : 'Reference detection failed')
+    } finally {
+      setDetectingRefs(false)
     }
   }
 
@@ -1169,6 +1194,16 @@ export default function SourceDocumentDetail({
                       className="px-3 py-1.5 text-xs border border-indigo-300 text-indigo-700 rounded hover:bg-indigo-50"
                     >
                       View in Network
+                    </button>
+                  )}
+                  {blocks.length > 0 && (
+                    <button
+                      onClick={() => void handleDetectRefs()}
+                      disabled={detectingRefs}
+                      className="px-3 py-1.5 text-xs border border-gray-300 text-gray-600 rounded hover:bg-gray-50 disabled:opacity-50"
+                      title="Re-run Gemini reference detection on existing document blocks"
+                    >
+                      {detectingRefs ? 'Detecting…' : 'Detect References'}
                     </button>
                   )}
                   <button
