@@ -1,6 +1,6 @@
 import type { Attachment } from '../types'
 
-const BASE = 'http://localhost:8000/api'
+const BASE = '/api'
 
 export async function fetchAttachments(requirementId: string): Promise<Attachment[]> {
   const res = await fetch(`${BASE}/requirements/${requirementId}/attachments`)
