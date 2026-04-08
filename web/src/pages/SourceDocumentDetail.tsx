@@ -448,6 +448,20 @@ export default function SourceDocumentDetail({
   }
 
   // -------------------------------------------------------------------------
+  // Merge selected blocks into a new requirement form
+  // -------------------------------------------------------------------------
+
+  const handleMergeBlocks = () => {
+    if (!documentId || selectedBlockIds.size < 2) return
+    // Preserve document order by sorting by sort_order, not selection order
+    const selected = blocks
+      .filter((b) => selectedBlockIds.has(b.id))
+      .sort((a, b) => a.sort_order - b.sort_order)
+    const merged = selected.map((b) => b.content.trim()).join('\n\n')
+    onCreateRequirement(documentId, merged)
+  }
+
+  // -------------------------------------------------------------------------
   // Legacy: "Create Requirement from Selection"
   // -------------------------------------------------------------------------
 
@@ -753,6 +767,15 @@ export default function SourceDocumentDetail({
                           {selectedBlockIds.size > 0 ? 'Clear selection' : 'Select all'}
                         </button>
                         <div className="flex-1" />
+                        {selectedBlockIds.size >= 2 && (
+                          <button
+                            onClick={handleMergeBlocks}
+                            className="px-3 py-1.5 text-xs border border-purple-300 text-purple-700 rounded hover:bg-purple-50"
+                            title="Concatenate selected blocks into a single requirement form"
+                          >
+                            Merge to Requirement ({selectedBlockIds.size})
+                          </button>
+                        )}
                         <button
                           onClick={() => void handleExtract(true)}
                           disabled={extracting || selectedBlockIds.size === 0}
