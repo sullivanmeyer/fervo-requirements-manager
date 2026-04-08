@@ -12,7 +12,7 @@
  * Node size reflects total connection count (in + out).
  * Node color reflects document type.
  */
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react'
 import { fetchDocumentGraph } from '../api/documentReferences'
 import type { DocumentGraph, GraphNode, GraphEdge } from '../types'
 
@@ -127,8 +127,7 @@ export default function DocumentNetwork({ focusDocumentId, onOpenDocument }: Pro
     moved: boolean
   } | null>(null)
 
-  // Canvas size
-  const [canvasSize, setCanvasSize] = useState({ w: 800, h: 600 })
+  // Canvas size — set directly on the DOM element, never stored in React state
 
   // ---------------------------------------------------------------------------
   // Load graph data
@@ -179,16 +178,31 @@ export default function DocumentNetwork({ focusDocumentId, onOpenDocument }: Pro
   }, [graph])
 
   // ---------------------------------------------------------------------------
-  // Resize observer — keep canvas pixel dimensions matching container
+  // Canvas sizing — set the drawing buffer to match the container exactly.
+  // We bypass React state entirely and write directly to the DOM element so
+  // there are no re-renders and no 800×600 cold-start flash.
   // ---------------------------------------------------------------------------
+
+  useLayoutEffect(() => {
+    // Set initial size synchronously before the first paint
+    const container = containerRef.current
+    const canvas = canvasRef.current
+    if (container && canvas) {
+      canvas.width = Math.floor(container.clientWidth)
+      canvas.height = Math.floor(container.clientHeight)
+    }
+  }, [])
 
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
     const obs = new ResizeObserver((entries) => {
+      const canvas = canvasRef.current
+      if (!canvas) return
       for (const entry of entries) {
         const { width, height } = entry.contentRect
-        setCanvasSize({ w: Math.floor(width), h: Math.floor(height) })
+        canvas.width = Math.floor(width)
+        canvas.height = Math.floor(height)
       }
     })
     obs.observe(container)
@@ -655,9 +669,7 @@ export default function DocumentNetwork({ focusDocumentId, onOpenDocument }: Pro
 
         <canvas
           ref={canvasRef}
-          width={canvasSize.w}
-          height={canvasSize.h}
-          className="block"
+          className="absolute inset-0"
           onWheel={handleWheel}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}

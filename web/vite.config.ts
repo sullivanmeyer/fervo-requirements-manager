@@ -10,6 +10,8 @@ export default defineConfig({
       '/api': {
         target: 'http://api:8000',
         changeOrigin: true,
+        timeout: 0,         // no proxy timeout — LLM calls can take 60+ s
+        proxyTimeout: 0,    // covers the backend response wait as well
       },
     },
   },

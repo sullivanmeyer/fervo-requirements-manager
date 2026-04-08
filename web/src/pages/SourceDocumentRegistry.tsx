@@ -5,7 +5,7 @@
  * Each row is clickable to open the document detail/edit view.
  * A "Register Document" button opens a creation form.
  */
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { fetchSourceDocuments } from '../api/sourceDocuments'
 import type { SourceDocumentListItem } from '../types'
 
@@ -18,6 +18,8 @@ const DOC_TYPE_CLASSES: Record<string, string> = {
   'Other': 'bg-gray-100 text-gray-600',
 }
 
+const ALL_TYPES = ['Code/Standard', 'Specification', 'Technical Report', 'Drawing', 'Datasheet', 'Other']
+
 interface Props {
   onOpenDetail: (id: string) => void
   onCreateNew: () => void
@@ -27,6 +29,11 @@ export default function SourceDocumentRegistry({ onOpenDetail, onCreateNew }: Pr
   const [items, setItems] = useState<SourceDocumentListItem[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+
+  // Filters
+  const [search, setSearch] = useState('')
+  const [typeFilter, setTypeFilter] = useState('')
+  const [hideStubs, setHideStubs] = useState(false)
 
   const load = async () => {
     setLoading(true)
@@ -44,18 +51,60 @@ export default function SourceDocumentRegistry({ onOpenDetail, onCreateNew }: Pr
 
   const stubCount = items.filter((d) => d.is_stub).length
 
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase()
+    return items.filter((d) => {
+      if (hideStubs && d.is_stub) return false
+      if (typeFilter && d.document_type !== typeFilter) return false
+      if (q && !d.document_id.toLowerCase().includes(q) && !d.title.toLowerCase().includes(q)) return false
+      return true
+    })
+  }, [items, search, typeFilter, hideStubs])
+
   return (
     <div className="flex flex-col h-full">
       {/* Toolbar */}
-      <div className="flex items-center gap-3 px-4 py-3 bg-white border-b border-gray-200 shrink-0">
-        <span className="text-sm text-gray-500">
-          {items.length} document{items.length !== 1 ? 's' : ''}
-          {stubCount > 0 && (
-            <span className="ml-2 px-1.5 py-0.5 text-xs bg-amber-100 text-amber-700 rounded-full font-medium">
-              {stubCount} stub{stubCount !== 1 ? 's' : ''}
-            </span>
-          )}
+      <div className="flex items-center gap-3 px-4 py-3 bg-white border-b border-gray-200 shrink-0 flex-wrap">
+
+        {/* Search */}
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Search ID or title…"
+          className="px-2.5 py-1.5 text-sm border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-400 w-52"
+        />
+
+        {/* Type filter */}
+        <select
+          value={typeFilter}
+          onChange={(e) => setTypeFilter(e.target.value)}
+          className="px-2.5 py-1.5 text-sm border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white"
+        >
+          <option value="">All types</option>
+          {ALL_TYPES.map((t) => (
+            <option key={t} value={t}>{t}</option>
+          ))}
+        </select>
+
+        {/* Stub toggle */}
+        <button
+          onClick={() => setHideStubs((v) => !v)}
+          className={`px-3 py-1.5 text-sm rounded border transition-colors ${
+            hideStubs
+              ? 'bg-amber-100 border-amber-300 text-amber-800'
+              : 'border-gray-300 text-gray-600 hover:bg-gray-50'
+          }`}
+          title={hideStubs ? 'Showing registered documents only — click to show stubs' : 'Click to hide auto-detected stub documents'}
+        >
+          {hideStubs ? `Stubs hidden (${stubCount})` : `Stubs: ${stubCount}`}
+        </button>
+
+        {/* Count */}
+        <span className="text-sm text-gray-400">
+          {filtered.length}{filtered.length !== items.length ? ` / ${items.length}` : ''} doc{filtered.length !== 1 ? 's' : ''}
         </span>
+
         <div className="ml-auto flex gap-2">
           <button
             onClick={() => void load()}
@@ -82,10 +131,24 @@ export default function SourceDocumentRegistry({ onOpenDetail, onCreateNew }: Pr
       <div className="flex-1 overflow-auto">
         {loading ? (
           <div className="flex items-center justify-center h-32 text-gray-400 text-sm">Loading…</div>
-        ) : items.length === 0 ? (
+        ) : filtered.length === 0 ? (
           <div className="flex flex-col items-center justify-center h-48 text-gray-400">
-            <p className="text-base font-medium">No documents yet</p>
-            <p className="text-sm mt-1">Click "Register Document" to add the first one.</p>
+            {items.length === 0 ? (
+              <>
+                <p className="text-base font-medium">No documents yet</p>
+                <p className="text-sm mt-1">Click "Register Document" to add the first one.</p>
+              </>
+            ) : (
+              <>
+                <p className="text-base font-medium">No documents match the current filters</p>
+                <button
+                  onClick={() => { setSearch(''); setTypeFilter(''); setHideStubs(false) }}
+                  className="text-sm mt-2 text-blue-600 underline"
+                >
+                  Clear filters
+                </button>
+              </>
+            )}
           </div>
         ) : (
           <table className="w-full text-left border-collapse">
@@ -99,7 +162,7 @@ export default function SourceDocumentRegistry({ onOpenDetail, onCreateNew }: Pr
               </tr>
             </thead>
             <tbody>
-              {items.map((doc, i) => {
+              {filtered.map((doc, i) => {
                 const typeCls = DOC_TYPE_CLASSES[doc.document_type] ?? 'bg-gray-100 text-gray-600'
                 return (
                   <tr
