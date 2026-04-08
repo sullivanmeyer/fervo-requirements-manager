@@ -39,7 +39,8 @@ const NODE_TYPE_COLORS: Record<string, string> = {
 
 const DEFAULT_NODE_COLOR = '#6B7280'
 
-function nodeColor(type: string): string {
+function nodeColor(type: string, isStub: boolean): string {
+  if (isStub) return '#D1D5DB'  // always gray for stubs — not-yet-registered
   return NODE_TYPE_COLORS[type] ?? DEFAULT_NODE_COLOR
 }
 
@@ -340,7 +341,7 @@ export default function DocumentNetwork({ focusDocumentId, onOpenDocument }: Pro
       const isDimmed = hovId && !connectedIds.has(n.id)
 
       ctx.globalAlpha = isDimmed ? 0.2 : 1
-      const color = nodeColor(n.document_type)
+      const color = nodeColor(n.document_type, n.is_stub)
 
       // Shadow / glow for selected
       if (isSelected) {
@@ -354,10 +355,12 @@ export default function DocumentNetwork({ focusDocumentId, onOpenDocument }: Pro
       ctx.fillStyle = color
       ctx.fill()
 
-      // Stroke
+      // Stroke — stubs get a dashed border to signal "not yet registered"
       ctx.lineWidth = isSelected ? 3 : isHovered ? 2 : 1.5
-      ctx.strokeStyle = isSelected ? '#fff' : isHovered ? '#fff' : 'rgba(255,255,255,0.5)'
+      ctx.strokeStyle = isSelected ? '#fff' : isHovered ? '#fff' : n.is_stub ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.5)'
+      if (n.is_stub) ctx.setLineDash([4, 3])
       ctx.stroke()
+      ctx.setLineDash([])
 
       ctx.shadowBlur = 0
 
@@ -390,8 +393,8 @@ export default function DocumentNetwork({ focusDocumentId, onOpenDocument }: Pro
         const sy = s.y * scale + ty
         const lines = [
           n.title.length > 40 ? n.title.slice(0, 37) + '…' : n.title,
-          n.document_type + (n.revision ? ` · ${n.revision}` : ''),
-          n.issuing_organization ?? '',
+          n.is_stub ? '⚠ Not yet registered' : (n.document_type + (n.revision ? ` · ${n.revision}` : '')),
+          n.is_stub ? 'Auto-detected reference — click to register' : (n.issuing_organization ?? ''),
           `${n.out_count} refs out · ${n.in_count} refs in`,
         ].filter(Boolean)
 
@@ -718,6 +721,13 @@ export default function DocumentNetwork({ focusDocumentId, onOpenDocument }: Pro
               ×
             </button>
           </div>
+
+          {/* Stub notice */}
+          {selectedNode.is_stub && (
+            <div className="px-4 py-2 bg-amber-50 border-b border-amber-200 text-xs text-amber-800">
+              <span className="font-semibold">Not yet registered.</span> This document was auto-detected as a reference. Open it to fill in the full metadata.
+            </div>
+          )}
 
           {/* Metadata */}
           <div className="px-4 py-3 border-b border-gray-200 space-y-1 text-xs text-gray-500">

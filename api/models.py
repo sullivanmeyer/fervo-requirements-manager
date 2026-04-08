@@ -24,6 +24,8 @@ class SourceDocument(Base):
     disciplines = Column(ARRAY(Text), nullable=True)
     file_path = Column(Text, nullable=True)       # MinIO object key
     extracted_text = Column(Text, nullable=True)
+    # True = auto-detected reference stub; cleared when user saves real metadata
+    is_stub = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(
         DateTime,

@@ -42,12 +42,19 @@ export default function SourceDocumentRegistry({ onOpenDetail, onCreateNew }: Pr
 
   useEffect(() => { void load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
+  const stubCount = items.filter((d) => d.is_stub).length
+
   return (
     <div className="flex flex-col h-full">
       {/* Toolbar */}
       <div className="flex items-center gap-3 px-4 py-3 bg-white border-b border-gray-200 shrink-0">
         <span className="text-sm text-gray-500">
           {items.length} document{items.length !== 1 ? 's' : ''}
+          {stubCount > 0 && (
+            <span className="ml-2 px-1.5 py-0.5 text-xs bg-amber-100 text-amber-700 rounded-full font-medium">
+              {stubCount} stub{stubCount !== 1 ? 's' : ''}
+            </span>
+          )}
         </span>
         <div className="ml-auto flex gap-2">
           <button
@@ -104,8 +111,13 @@ export default function SourceDocumentRegistry({ onOpenDetail, onCreateNew }: Pr
                   >
                     <td className="px-3 py-2">
                       <span className="font-mono text-xs font-semibold text-blue-700">{doc.document_id}</span>
+                      {doc.is_stub && (
+                        <span className="ml-1.5 px-1.5 py-0.5 text-xs bg-amber-100 text-amber-700 border border-amber-200 rounded font-medium">
+                          Stub
+                        </span>
+                      )}
                     </td>
-                    <td className="px-3 py-2 text-sm text-gray-800 max-w-xs truncate">{doc.title}</td>
+                    <td className={`px-3 py-2 text-sm max-w-xs truncate ${doc.is_stub ? 'text-gray-400 italic' : 'text-gray-800'}`}>{doc.title}</td>
                     <td className="px-3 py-2">
                       <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${typeCls}`}>
                         {doc.document_type}

@@ -71,6 +71,7 @@ def _doc_to_dict(doc: SourceDocument, include_text: bool = False) -> dict[str, A
         "issuing_organization": doc.issuing_organization,
         "disciplines": doc.disciplines or [],
         "has_file": doc.file_path is not None,
+        "is_stub": bool(doc.is_stub),
         "created_at": doc.created_at.isoformat(),
         "updated_at": doc.updated_at.isoformat(),
     }
@@ -179,6 +180,8 @@ def update_source_document(
 
     for field, value in data.model_dump(exclude_unset=True).items():
         setattr(doc, field, value)
+    # Any manual save promotes a stub to a real registry entry
+    doc.is_stub = False
     doc.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(doc)
@@ -242,6 +245,7 @@ async def upload_pdf(
 
     doc.file_path = object_key
     doc.extracted_text = extracted
+    doc.is_stub = False
     doc.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(doc)

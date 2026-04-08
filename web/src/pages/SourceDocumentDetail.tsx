@@ -583,6 +583,14 @@ export default function SourceDocumentDetail({
         </div>
       </div>
 
+      {doc?.is_stub && (
+        <div className="px-4 py-2 bg-amber-50 border-b border-amber-200 text-sm text-amber-800 flex items-center gap-2">
+          <span className="font-semibold">Auto-detected stub.</span>
+          This document was detected as a reference but hasn't been fully registered.
+          Fill in the metadata below and save to promote it to a full entry.
+        </div>
+      )}
+
       {error && (
         <div className="px-4 py-2 bg-red-50 border-b border-red-200 text-sm text-red-700">
           {error}

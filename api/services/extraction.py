@@ -76,6 +76,33 @@ Example of one element:
 }
 """
 
+DETECT_REFS_SYSTEM = """\
+You are an expert at identifying normative document references in engineering specifications.
+Your output must be valid JSON — no prose before or after the JSON array.
+"""
+
+DETECT_REFS_USER_TEMPLATE = """\
+Scan the following engineering document text and identify every reference to an external
+document — codes, standards, specifications, regulations, industry guidelines, or other
+normative references.
+
+For each reference return an object with:
+  "document_number"  : the base identifier stripped of any revision, edition, or year.
+                       Examples: "API 661", "ASME B31.3", "NFPA 70", "IEEE 841", "ISO 9001"
+  "full_reference"   : the complete reference as it appears in the text, e.g. "API 661, 7th Edition"
+  "context"          : one short phrase showing where it is cited, e.g. "per API 661 §5.1"
+
+Rules:
+- Only external normative references — NOT "this specification", "the project", "the engineer"
+- Strip edition numbers, revision numbers, years from document_number
+  (e.g. "ASME B31.3-2022" → "ASME B31.3"; "API 661, 7th Ed." → "API 661")
+- If the same base document appears multiple times, include it once using the most complete form
+- Return ONLY a JSON array.  If no external references are found, return [].
+
+=== DOCUMENT TEXT ===
+{text}
+"""
+
 EXTRACT_SYSTEM = """\
 You are an expert at extracting engineering requirements from specification text.
 Your output must be valid JSON — no prose before or after the JSON array.
@@ -221,6 +248,94 @@ def decompose_document(pdf_bytes: bytes) -> list[dict]:
             "parent_clause_number": b.get("parent_clause_number"),
             "depth": int(b.get("depth", 0)),
             "sort_order": i,
+        })
+    return normalised
+
+
+def _normalize_doc_id(name: str) -> str:
+    """
+    Strip revision/edition/year suffixes so that "API 661, 7th Edition" and
+    "API 661" both normalise to "api 661" for duplicate-detection.
+
+    Patterns removed (case-insensitive, applied left-to-right):
+      - Hyphen or colon + 4-digit year   "B31.3-2022", "ISO 9001:2015"
+      - Parenthesised year               "NFPA 70 (2023)"
+      - "Nth Edition" / "Nth Ed."        "API 661, 7th Edition"
+      - "Edition N"                      uncommon but handled
+      - "Rev N" / "Revision N"
+      - Trailing standalone 4-digit year ", 2020"
+    """
+    n = name.strip()
+    n = re.sub(r'[-:]\d{4}\b.*$', '', n)                                          # -2022 / :2015
+    n = re.sub(r'\s*\(\d{4}\).*$', '', n)                                         # (2023)
+    n = re.sub(r',?\s+\d{1,2}(st|nd|rd|th)\s+ed(ition|\.?).*$', '', n, flags=re.IGNORECASE)  # 7th Ed
+    n = re.sub(r',?\s+edition\s+\d+.*$', '', n, flags=re.IGNORECASE)              # Edition 3
+    n = re.sub(r',?\s+rev(ision)?\.?\s*\d*\b.*$', '', n, flags=re.IGNORECASE)    # Rev 2
+    n = re.sub(r',?\s+\d{4}$', '', n)                                             # trailing year
+    return n.strip().lower()
+
+
+def detect_document_references(block_texts: list[str]) -> list[dict]:
+    """
+    Ask Gemini to identify all external document references in a list of block
+    content strings.  Returns a list of dicts with keys:
+      document_number  — base ID without revision (e.g. "API 661")
+      full_reference   — as written in the text (e.g. "API 661, 7th Edition")
+      context          — short phrase e.g. "per API 661 §5.1"
+
+    Caps input at ~100 000 characters to stay within model context limits.
+    Reference sections are typically early in a document, so leading blocks
+    are the most important — we send them in order.
+    """
+    # Concatenate block text, capped at 100k chars
+    combined = ""
+    for text in block_texts:
+        if len(combined) + len(text) > 100_000:
+            break
+        combined += text + "\n\n"
+
+    if not combined.strip():
+        return []
+
+    client = _get_client()
+    prompt = DETECT_REFS_USER_TEMPLATE.format(text=combined)
+
+    try:
+        response = _generate_with_retry(
+            client,
+            model=MODEL,
+            contents=[
+                types.Content(
+                    role="user",
+                    parts=[types.Part(text=prompt)],
+                )
+            ],
+            config=types.GenerateContentConfig(
+                system_instruction=DETECT_REFS_SYSTEM,
+            ),
+        )
+        raw = response.text or ""
+        refs = _parse_json_response(raw)
+    except Exception as e:
+        # Reference detection is best-effort — don't fail the decomposition
+        print(f"[detect_refs] WARNING: reference detection failed: {e}")
+        return []
+
+    normalised = []
+    seen: set[str] = set()
+    for r in refs:
+        doc_num = str(r.get("document_number", "")).strip()
+        if not doc_num:
+            continue
+        norm = _normalize_doc_id(doc_num)
+        if norm in seen or not norm:
+            continue
+        seen.add(norm)
+        normalised.append({
+            "document_number": doc_num,
+            "normalized": norm,
+            "full_reference": str(r.get("full_reference", doc_num)).strip(),
+            "context": str(r.get("context", "")).strip() or None,
         })
     return normalised
 

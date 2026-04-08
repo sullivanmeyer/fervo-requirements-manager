@@ -98,6 +98,7 @@ export interface SourceDocumentListItem {
   issuing_organization: string | null
   disciplines: string[]
   has_file: boolean
+  is_stub: boolean
   created_at: string
   updated_at: string
 }
@@ -218,6 +219,7 @@ export interface GraphNode {
   disciplines: string[]
   out_count: number   // edges going out (this doc cites)
   in_count: number    // edges coming in (others cite this doc)
+  is_stub: boolean    // auto-detected; not yet fully registered
 }
 
 export interface GraphEdge {

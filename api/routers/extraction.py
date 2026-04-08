@@ -28,13 +28,19 @@ from sqlalchemy.orm import Session
 from database import get_db
 from models import (
     DocumentBlock,
+    DocumentReference,
     ExtractionCandidate,
     Requirement,
     RequirementLink,
     SourceDocument,
 )
 from routers.source_documents import _minio_client, BUCKET
-from services.extraction import decompose_document, extract_requirements
+from services.extraction import (
+    decompose_document,
+    detect_document_references,
+    extract_requirements,
+    _normalize_doc_id,
+)
 
 router = APIRouter()
 
@@ -244,6 +250,70 @@ def _run_decomposition(doc_id: str, file_path: str):
 
         db.commit()
         print(f"[decompose] {len(new_blocks)} blocks written for doc {doc_id}")
+
+        # ---- Reference detection ----
+        # Ask Gemini to find all external document references in the block text,
+        # then create stub SourceDocument rows for any that aren't already in the
+        # registry and insert DocumentReference edges.
+        block_texts = [b.content for b in new_blocks if b.content.strip()]
+        try:
+            detected = detect_document_references(block_texts)
+        except Exception as e:
+            print(f"[detect_refs] WARNING: {e}")
+            detected = []
+
+        if detected:
+            # Build a lookup of existing documents by normalized document_id
+            all_docs = db.query(SourceDocument).all()
+            existing_by_norm: dict[str, SourceDocument] = {
+                _normalize_doc_id(d.document_id): d for d in all_docs
+            }
+
+            for ref in detected:
+                norm = ref["normalized"]
+                doc_num = ref["document_number"]
+                full_ref = ref["full_reference"]
+                context = ref["context"]
+
+                # Skip self-reference
+                if _normalize_doc_id(doc.document_id) == norm:
+                    continue
+
+                # Find or create the target document
+                if norm in existing_by_norm:
+                    target = existing_by_norm[norm]
+                else:
+                    target = SourceDocument(
+                        id=uuid.uuid4(),
+                        document_id=doc_num,
+                        title=full_ref,
+                        document_type="Code/Standard",
+                        is_stub=True,
+                        created_at=datetime.utcnow(),
+                        updated_at=datetime.utcnow(),
+                    )
+                    db.add(target)
+                    db.flush()  # get target.id assigned
+                    existing_by_norm[norm] = target
+                    print(f"[detect_refs] Created stub: {doc_num!r}")
+
+                # Insert edge if it doesn't already exist
+                existing_edge = db.query(DocumentReference).filter(
+                    DocumentReference.source_document_id == doc_uuid,
+                    DocumentReference.referenced_document_id == target.id,
+                ).first()
+                if not existing_edge:
+                    db.add(DocumentReference(
+                        id=uuid.uuid4(),
+                        source_document_id=doc_uuid,
+                        referenced_document_id=target.id,
+                        reference_context=context,
+                        created_at=datetime.utcnow(),
+                    ))
+
+            db.commit()
+            stub_count = sum(1 for r in detected if _normalize_doc_id(r["document_number"]) not in {_normalize_doc_id(d.document_id) for d in all_docs})
+            print(f"[detect_refs] {len(detected)} references detected, edges inserted for doc {doc_id}")
 
     except Exception as e:
         db.rollback()
