@@ -16,6 +16,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import tempfile
 from typing import Any
 
 from google import genai
@@ -134,7 +135,7 @@ def _parse_json_response(text: str) -> Any:
 
 def decompose_document(pdf_bytes: bytes) -> list[dict]:
     """
-    Send the PDF to Gemini and return a list of block dicts.
+    Send the PDF to Gemini via the File API and return a list of block dicts.
 
     Each dict has the keys defined in DECOMPOSE_USER:
       clause_number, heading, content, block_type,
@@ -142,26 +143,44 @@ def decompose_document(pdf_bytes: bytes) -> list[dict]:
     """
     client = _get_client()
 
-    response = client.models.generate_content(
-        model=MODEL,
-        contents=[
-            types.Content(
-                role="user",
-                parts=[
-                    types.Part(
-                        inline_data=types.Blob(
+    # Write PDF to a temp file so the File API can upload it
+    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+        tmp.write(pdf_bytes)
+        tmp_path = tmp.name
+
+    try:
+        uploaded = client.files.upload(
+            file=tmp_path,
+            config={"mime_type": "application/pdf"},
+        )
+    finally:
+        os.unlink(tmp_path)
+
+    try:
+        response = client.models.generate_content(
+            model=MODEL,
+            contents=[
+                types.Content(
+                    role="user",
+                    parts=[
+                        types.Part.from_uri(
+                            file_uri=uploaded.uri,
                             mime_type="application/pdf",
-                            data=pdf_bytes,
-                        )
-                    ),
-                    types.Part(text=DECOMPOSE_USER),
-                ],
-            )
-        ],
-        config=types.GenerateContentConfig(
-            system_instruction=DECOMPOSE_SYSTEM,
-        ),
-    )
+                        ),
+                        types.Part(text=DECOMPOSE_USER),
+                    ],
+                )
+            ],
+            config=types.GenerateContentConfig(
+                system_instruction=DECOMPOSE_SYSTEM,
+            ),
+        )
+    finally:
+        # Clean up the uploaded file from Gemini's storage
+        try:
+            client.files.delete(name=uploaded.name)
+        except Exception:
+            pass
 
     raw_text = response.text
     blocks = _parse_json_response(raw_text)
