@@ -184,15 +184,22 @@ export default function DocumentNetwork({ focusDocumentId, onOpenDocument }: Pro
   // size from the actual container dimensions so there is no 800×600 flash.
   // ---------------------------------------------------------------------------
 
+  // NOTE: `loading` is a dependency here on purpose.
+  // The canvas container div is only mounted after loading completes (the
+  // early loading-spinner return replaces the full JSX).  Running with []
+  // means this effect fires while containerRef.current is still null, the
+  // guard bails out, and the ResizeObserver is never installed.  Including
+  // `loading` re-runs the effect the moment the container appears in the DOM.
   useEffect(() => {
+    if (loading) return   // container not yet in DOM
     const container = containerRef.current
     if (!container) return
 
-    // Seed with real dimensions immediately (fires before graph loads)
+    // Seed canvas size from the real container dimensions now that it's mounted
     const { clientWidth: w, clientHeight: h } = container
     if (w > 0 && h > 0) setCanvasSize({ w, h })
 
-    // Keep in sync when the container is resized
+    // Keep in sync when the container is resized (e.g. browser window resize)
     const obs = new ResizeObserver((entries) => {
       for (const entry of entries) {
         const { width, height } = entry.contentRect
@@ -201,7 +208,7 @@ export default function DocumentNetwork({ focusDocumentId, onOpenDocument }: Pro
     })
     obs.observe(container)
     return () => obs.disconnect()
-  }, [])
+  }, [loading])
 
   // ---------------------------------------------------------------------------
   // Physics step
