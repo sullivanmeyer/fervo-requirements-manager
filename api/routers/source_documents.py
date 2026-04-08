@@ -80,6 +80,33 @@ def _doc_to_dict(doc: SourceDocument, include_text: bool = False) -> dict[str, A
     return d
 
 
+def _full_response(doc: SourceDocument, db: Session) -> dict[str, Any]:
+    """Return the full SourceDocumentDetail shape (includes extracted_text +
+    linked_requirements).  Use this for every endpoint that the frontend expects
+    to deserialize as SourceDocumentDetail — create, update, upload, and GET.
+    Omitting linked_requirements causes a TypeError in the React render and a
+    blank white screen.
+    """
+    result = _doc_to_dict(doc, include_text=True)
+    linked_reqs = (
+        db.query(Requirement)
+        .filter(Requirement.source_document_id == doc.id)
+        .order_by(Requirement.requirement_id)
+        .all()
+    )
+    result["linked_requirements"] = [
+        {
+            "id": str(r.id),
+            "requirement_id": r.requirement_id,
+            "title": r.title,
+            "status": r.status,
+            "source_clause": r.source_clause,
+        }
+        for r in linked_reqs
+    ]
+    return result
+
+
 # ---------------------------------------------------------------------------
 # Text normalisation
 # ---------------------------------------------------------------------------
@@ -124,27 +151,7 @@ def get_source_document(doc_id: UUID, db: Session = Depends(get_db)):
     if not doc:
         raise HTTPException(status_code=404, detail="Source document not found")
 
-    result = _doc_to_dict(doc, include_text=True)
-
-    # Include the list of requirements derived from this document
-    linked_reqs = (
-        db.query(Requirement)
-        .filter(Requirement.source_document_id == doc_id)
-        .order_by(Requirement.requirement_id)
-        .all()
-    )
-    result["linked_requirements"] = [
-        {
-            "id": str(r.id),
-            "requirement_id": r.requirement_id,
-            "title": r.title,
-            "status": r.status,
-            "source_clause": r.source_clause,
-        }
-        for r in linked_reqs
-    ]
-
-    return result
+    return _full_response(doc, db)
 
 
 @router.post("/source-documents", status_code=201)
@@ -167,7 +174,7 @@ def create_source_document(data: SourceDocumentCreate, db: Session = Depends(get
             detail=f"A document with ID '{data.document_id}' already exists.",
         )
     db.refresh(doc)
-    return _doc_to_dict(doc, include_text=True)
+    return _full_response(doc, db)
 
 
 @router.put("/source-documents/{doc_id}")
@@ -185,7 +192,7 @@ def update_source_document(
     doc.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(doc)
-    return _doc_to_dict(doc, include_text=True)
+    return _full_response(doc, db)
 
 
 @router.post("/source-documents/{doc_id}/upload")
@@ -249,7 +256,7 @@ async def upload_pdf(
     doc.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(doc)
-    return _doc_to_dict(doc, include_text=True)
+    return _full_response(doc, db)
 
 
 @router.get("/source-documents/{doc_id}/download")
