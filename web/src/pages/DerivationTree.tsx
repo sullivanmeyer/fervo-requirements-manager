@@ -133,20 +133,22 @@ function computeLayout(root: TreeNode): GraphLayout {
     }
   }
 
-  // Compute canvas width from the widest level
+  // Layout flows LEFT → RIGHT: depth level = column (x-axis),
+  // siblings within a level are distributed vertically (y-axis).
   const maxCount = Math.max(...levels.map((l) => l.length), 1)
-  const canvasW = PADDING * 2 + maxCount * NODE_W + (maxCount - 1) * H_GAP
+  const canvasW = PADDING * 2 + levels.length * NODE_W + (levels.length - 1) * V_GAP
+  const canvasH = PADDING * 2 + maxCount * NODE_H + (maxCount - 1) * H_GAP
 
   // Position each node
   const posMap = new Map<string, { x: number; y: number }>()
   levels.forEach((levelNodes, levelIndex) => {
     const count = levelNodes.length
-    const rowW = count * NODE_W + (count - 1) * H_GAP
-    const startX = (canvasW - rowW) / 2
+    const colH = count * NODE_H + (count - 1) * H_GAP
+    const startY = (canvasH - colH) / 2
     levelNodes.forEach((node, i) => {
       posMap.set(node.req.id, {
-        x: startX + i * (NODE_W + H_GAP),
-        y: PADDING + levelIndex * (NODE_H + V_GAP),
+        x: PADDING + levelIndex * (NODE_W + V_GAP),
+        y: startY + i * (NODE_H + H_GAP),
       })
     })
   })
@@ -176,25 +178,23 @@ function computeLayout(root: TreeNode): GraphLayout {
     }
   }
 
-  const canvasH = PADDING * 2 + levels.length * NODE_H + (levels.length - 1) * V_GAP
-
   return { nodes, edges, canvasW, canvasH }
 }
 
 // ---------------------------------------------------------------------------
-// SVG edge path: cubic bezier from bottom-center of parent to top-center of child
+// SVG edge path: cubic bezier from right-center of parent to left-center of child
 // ---------------------------------------------------------------------------
 
 function edgePath(
   from: { x: number; y: number },
   to: { x: number; y: number },
 ): string {
-  const x1 = from.x + NODE_W / 2
-  const y1 = from.y + NODE_H
-  const x2 = to.x + NODE_W / 2
-  const y2 = to.y
-  const midY = (y1 + y2) / 2
-  return `M ${x1} ${y1} C ${x1} ${midY}, ${x2} ${midY}, ${x2} ${y2}`
+  const x1 = from.x + NODE_W        // right edge of parent card
+  const y1 = from.y + NODE_H / 2    // vertical center of parent card
+  const x2 = to.x                   // left edge of child card
+  const y2 = to.y + NODE_H / 2      // vertical center of child card
+  const midX = (x1 + x2) / 2
+  return `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`
 }
 
 // ---------------------------------------------------------------------------
