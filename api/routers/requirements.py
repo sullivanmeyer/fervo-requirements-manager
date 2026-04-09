@@ -332,7 +332,7 @@ def list_requirements(
                 and_(
                     ConflictRecord.id == crr_table.c.conflict_record_id,
                     ConflictRecord.archived == False,  # noqa: E712
-                    ConflictRecord.status == "Open",
+                    ConflictRecord.status.in_(["Open", "Under Discussion"]),
                 ),
             )
             .scalar_subquery()
@@ -369,7 +369,7 @@ def list_requirements(
                 and_(
                     ConflictRecord.id == crr_table.c.conflict_record_id,
                     ConflictRecord.archived == False,  # noqa: E712
-                    ConflictRecord.status == "Open",
+                    ConflictRecord.status.in_(["Open", "Under Discussion"]),
                 ),
             )
             .filter(crr_table.c.requirement_id.in_(req_ids))

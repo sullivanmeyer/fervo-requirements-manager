@@ -163,7 +163,7 @@ function renderCell(col: string, req: RequirementListItem): React.ReactNode {
       if (count === 0) return <span className="text-gray-400 text-xs">—</span>
       return (
         <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">
-          {count} open
+          {count} active
         </span>
       )
     }
@@ -799,7 +799,7 @@ export default function RequirementsTable({
                 onChange={(e) => setFilter('has_open_conflicts', e.target.checked ? true : undefined)}
                 className="rounded"
               />
-              Has open conflicts
+              Has active conflicts
             </label>
 
           </div>
