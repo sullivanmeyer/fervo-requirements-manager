@@ -34,6 +34,24 @@ export interface Unit {
 // Requirements
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Conflict records
+// ---------------------------------------------------------------------------
+
+export interface ConflictRecord {
+  id: string
+  description: string
+  status: 'Open' | 'Under Discussion' | 'Resolved' | 'Deferred'
+  resolution_notes: string | null
+  created_by: string
+  created_at: string
+  requirements: { id: string; requirement_id: string; title: string; status: string }[]
+}
+
+// ---------------------------------------------------------------------------
+// Requirements
+// ---------------------------------------------------------------------------
+
 /** Minimal record returned in the paginated list view */
 export interface RequirementListItem {
   id: string
@@ -48,6 +66,7 @@ export interface RequirementListItem {
   hierarchy_nodes: { id: string; name: string }[]
   sites: { id: string; name: string }[]
   units: { id: string; name: string }[]
+  open_conflict_count: number
 }
 
 /** Minimal stub used in parent/child link lists */
@@ -74,6 +93,7 @@ export interface RequirementDetail extends RequirementListItem {
   updated_at: string
   parent_requirements: RequirementStub[]
   child_requirements: RequirementStub[]
+  conflict_records: ConflictRecord[]
 }
 
 // ---------------------------------------------------------------------------

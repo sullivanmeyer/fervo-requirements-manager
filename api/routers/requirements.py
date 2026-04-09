@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from database import get_db
-from models import HierarchyNode, Requirement, RequirementLink, Site, SourceDocument, Unit
+from models import ConflictRecord, HierarchyNode, Requirement, RequirementLink, Site, SourceDocument, Unit
 from schemas import RequirementCreate, RequirementUpdate
 
 router = APIRouter()
@@ -117,6 +117,37 @@ def _requirement_to_dict(
                     "title": sd.title,
                 }
 
+        # Conflict records involving this requirement
+        conflict_records: list[dict] = []
+        if db is not None:
+            crs = (
+                db.query(ConflictRecord)
+                .filter(
+                    ConflictRecord.archived == False,  # noqa: E712
+                    ConflictRecord.requirements.any(Requirement.id == req.id),
+                )
+                .order_by(ConflictRecord.created_at.desc())
+                .all()
+            )
+            for cr in crs:
+                conflict_records.append({
+                    "id": str(cr.id),
+                    "description": cr.description,
+                    "status": cr.status,
+                    "resolution_notes": cr.resolution_notes,
+                    "created_by": cr.created_by,
+                    "created_at": cr.created_at.isoformat(),
+                    "requirements": [
+                        {
+                            "id": str(r.id),
+                            "requirement_id": r.requirement_id,
+                            "title": r.title,
+                            "status": r.status,
+                        }
+                        for r in cr.requirements
+                    ],
+                })
+
         base.update(
             {
                 "statement": req.statement,
@@ -138,6 +169,7 @@ def _requirement_to_dict(
                 "updated_at": req.updated_at.isoformat(),
                 "parent_requirements": parent_reqs,
                 "child_requirements": child_reqs,
+                "conflict_records": conflict_records,
             }
         )
     return base
@@ -222,6 +254,7 @@ def list_requirements(
     created_date_to: Optional[str] = Query(None),
     modified_date_from: Optional[str] = Query(None),
     modified_date_to: Optional[str] = Query(None),
+    has_open_conflicts: Optional[bool] = Query(None),
     db: Session = Depends(get_db),
 ):
     """
@@ -289,6 +322,26 @@ def list_requirements(
     if modified_date_to:
         base_q = base_q.filter(Requirement.last_modified_date <= modified_date_to)
 
+    if has_open_conflicts is not None:
+        from models import conflict_record_requirements as crr_table
+        from sqlalchemy import and_
+        open_conflict_req_ids = (
+            db.query(crr_table.c.requirement_id)
+            .join(
+                ConflictRecord,
+                and_(
+                    ConflictRecord.id == crr_table.c.conflict_record_id,
+                    ConflictRecord.archived == False,  # noqa: E712
+                    ConflictRecord.status == "Open",
+                ),
+            )
+            .scalar_subquery()
+        )
+        if has_open_conflicts:
+            base_q = base_q.filter(Requirement.id.in_(open_conflict_req_ids))
+        else:
+            base_q = base_q.filter(~Requirement.id.in_(open_conflict_req_ids))
+
     offset = (page - 1) * page_size
     total = base_q.count()
     reqs = (
@@ -298,11 +351,44 @@ def list_requirements(
         .limit(page_size)
         .all()
     )
+
+    # Attach open conflict count to each list item
+    from models import conflict_record_requirements as crr_table
+    from sqlalchemy import func, and_
+
+    open_conflict_counts: dict[str, int] = {}
+    if reqs:
+        req_ids = [r.id for r in reqs]
+        rows = (
+            db.query(
+                crr_table.c.requirement_id,
+                func.count(crr_table.c.conflict_record_id).label("cnt"),
+            )
+            .join(
+                ConflictRecord,
+                and_(
+                    ConflictRecord.id == crr_table.c.conflict_record_id,
+                    ConflictRecord.archived == False,  # noqa: E712
+                    ConflictRecord.status == "Open",
+                ),
+            )
+            .filter(crr_table.c.requirement_id.in_(req_ids))
+            .group_by(crr_table.c.requirement_id)
+            .all()
+        )
+        open_conflict_counts = {str(row[0]): row[1] for row in rows}
+
+    items = []
+    for r in reqs:
+        d = _requirement_to_dict(r, detail=False)
+        d["open_conflict_count"] = open_conflict_counts.get(str(r.id), 0)
+        items.append(d)
+
     return {
         "total": total,
         "page": page,
         "page_size": page_size,
-        "items": [_requirement_to_dict(r, detail=False) for r in reqs],
+        "items": items,
     }
 
 

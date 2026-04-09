@@ -104,6 +104,7 @@ export type FilterConfig = {
   created_date_to?: string
   modified_date_from?: string
   modified_date_to?: string
+  has_open_conflicts?: boolean
 }
 
 export async function fetchRequirementsFiltered(
@@ -132,6 +133,7 @@ export async function fetchRequirementsFiltered(
   if (filters.created_date_to) params.set('created_date_to', filters.created_date_to)
   if (filters.modified_date_from) params.set('modified_date_from', filters.modified_date_from)
   if (filters.modified_date_to) params.set('modified_date_to', filters.modified_date_to)
+  if (filters.has_open_conflicts !== undefined) params.set('has_open_conflicts', String(filters.has_open_conflicts))
 
   const res = await fetch(`${BASE}/requirements?${params.toString()}`)
   if (!res.ok) throw new Error(`Failed to load requirements (${res.status})`)

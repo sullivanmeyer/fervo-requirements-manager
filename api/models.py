@@ -379,3 +379,55 @@ class RequirementLink(Base):
             name="ck_requirement_links_no_self_loop",
         ),
     )
+
+
+# ---------------------------------------------------------------------------
+# Conflict records
+# ---------------------------------------------------------------------------
+
+conflict_record_requirements = Table(
+    "conflict_record_requirements",
+    Base.metadata,
+    Column(
+        "conflict_record_id",
+        UUID(as_uuid=True),
+        ForeignKey("conflict_records.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column(
+        "requirement_id",
+        UUID(as_uuid=True),
+        ForeignKey("requirements.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+)
+
+
+class ConflictRecord(Base):
+    """
+    A flagged contradiction between two or more requirements.
+    Lifecycle: Open → Under Discussion → Resolved / Deferred.
+    Soft-deleted via archived flag (never physically removed).
+    """
+    __tablename__ = "conflict_records"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    description = Column(Text, nullable=False)
+    # Open / Under Discussion / Resolved / Deferred
+    status = Column(Text, nullable=False, default="Open")
+    resolution_notes = Column(Text, nullable=True)
+    created_by = Column(Text, nullable=False)
+    archived = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    requirements = relationship(
+        "Requirement",
+        secondary=conflict_record_requirements,
+        lazy="joined",
+    )

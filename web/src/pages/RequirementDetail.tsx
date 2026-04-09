@@ -25,8 +25,14 @@ import {
   fetchAttachments,
   uploadAttachment,
 } from '../api/attachments'
+import {
+  createConflictRecord,
+  deleteConflictRecord,
+  updateConflictRecord,
+} from '../api/conflictRecords'
 import type {
   Attachment,
+  ConflictRecord,
   HierarchyNode,
   RequirementDetail as ReqDetail,
   RequirementListItem,
@@ -344,6 +350,13 @@ export default function RequirementDetail({
   const [linkingIds, setLinkingIds] = useState<string[]>([])
   const [linkingSaving, setLinkingSaving] = useState(false)
 
+  // Conflict records state
+  const [conflictRecords, setConflictRecords] = useState<ConflictRecord[]>([])
+  const [showFlagConflict, setShowFlagConflict] = useState(false)
+  const [conflictForm, setConflictForm] = useState({ description: '', requirement_ids: [] as string[] })
+  const [conflictSaving, setConflictSaving] = useState(false)
+  const [conflictError, setConflictError] = useState<string | null>(null)
+
   // -------------------------------------------------------------------------
   // Load on mount
   // -------------------------------------------------------------------------
@@ -383,6 +396,7 @@ export default function RequirementDetail({
           setSites(s)
           setUnits(u)
           setAttachments(atts)
+          setConflictRecords(req.conflict_records ?? [])
         } catch (e) {
           setError(e instanceof Error ? e.message : 'Failed to load requirement')
         } finally {
@@ -938,6 +952,128 @@ export default function RequirementDetail({
             </div>
           </section>
 
+          {/* Conflict Records — only available on saved requirements */}
+          {savedDbId && (
+            <section>
+              <div className="flex items-center justify-between mb-4 pb-1 border-b border-gray-100">
+                <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider">
+                  Conflict Records
+                  {conflictRecords.filter((c) => c.status === 'Open').length > 0 && (
+                    <span className="ml-2 px-1.5 py-0.5 bg-red-100 text-red-700 text-xs rounded-full font-medium">
+                      {conflictRecords.filter((c) => c.status === 'Open').length} open
+                    </span>
+                  )}
+                </h2>
+                {!showFlagConflict && (
+                  <button
+                    type="button"
+                    onClick={() => { setShowFlagConflict(true); setConflictError(null) }}
+                    className="px-3 py-1 text-xs border border-red-300 text-red-600 rounded hover:bg-red-50"
+                  >
+                    + Flag Conflict
+                  </button>
+                )}
+              </div>
+
+              {conflictError && (
+                <p className="text-sm text-red-600 mb-3">{conflictError}</p>
+              )}
+
+              {/* Flag conflict form */}
+              {showFlagConflict && (
+                <div className="mb-4 p-4 border border-red-200 rounded bg-red-50 space-y-3">
+                  <p className="text-xs font-semibold text-red-700">
+                    Describe the conflict and select the other requirement(s) involved:
+                  </p>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Description *</label>
+                    <textarea
+                      value={conflictForm.description}
+                      onChange={(e) => setConflictForm((f) => ({ ...f, description: e.target.value }))}
+                      rows={3}
+                      placeholder="e.g. MECH-003 specifies 120 psig design pressure but PROC-007 specifies 150 psig for the same equipment."
+                      className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-red-400 resize-y"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Other conflicting requirement(s) *</label>
+                    <RequirementSearch
+                      options={allRequirements.filter((r) => r.id !== savedDbId)}
+                      selectedIds={conflictForm.requirement_ids}
+                      onChange={(ids) => setConflictForm((f) => ({ ...f, requirement_ids: ids }))}
+                      placeholder="Search by ID or title…"
+                    />
+                  </div>
+                  <div className="flex gap-2 justify-end pt-1">
+                    <button
+                      type="button"
+                      onClick={() => { setShowFlagConflict(false); setConflictForm({ description: '', requirement_ids: [] }); setConflictError(null) }}
+                      className="px-3 py-1.5 text-xs border border-gray-300 text-gray-600 rounded hover:bg-white"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      disabled={conflictSaving || !conflictForm.description.trim() || conflictForm.requirement_ids.length === 0}
+                      onClick={async () => {
+                        setConflictSaving(true)
+                        setConflictError(null)
+                        try {
+                          const cr = await createConflictRecord({
+                            description: conflictForm.description.trim(),
+                            requirement_ids: [savedDbId!, ...conflictForm.requirement_ids],
+                            created_by: form.created_by || userName,
+                          })
+                          setConflictRecords((prev) => [cr, ...prev])
+                          setShowFlagConflict(false)
+                          setConflictForm({ description: '', requirement_ids: [] })
+                        } catch (e) {
+                          setConflictError(e instanceof Error ? e.message : 'Failed to create conflict record')
+                        } finally {
+                          setConflictSaving(false)
+                        }
+                      }}
+                      className="px-3 py-1.5 text-xs bg-red-600 text-white rounded hover:bg-red-700 disabled:opacity-50"
+                    >
+                      {conflictSaving ? 'Saving…' : 'Save Conflict'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Conflict list */}
+              {conflictRecords.length === 0 && !showFlagConflict && (
+                <p className="text-sm text-gray-400 italic">No conflicts flagged.</p>
+              )}
+              <div className="space-y-3">
+                {conflictRecords.map((cr) => (
+                  <ConflictRecordCard
+                    key={cr.id}
+                    record={cr}
+                    currentRequirementId={savedDbId!}
+                    onNavigate={onSaved}
+                    onUpdate={async (update) => {
+                      try {
+                        const updated = await updateConflictRecord(cr.id, update)
+                        setConflictRecords((prev) => prev.map((r) => r.id === cr.id ? updated : r))
+                      } catch (e) {
+                        setConflictError(e instanceof Error ? e.message : 'Update failed')
+                      }
+                    }}
+                    onDelete={async () => {
+                      try {
+                        await deleteConflictRecord(cr.id)
+                        setConflictRecords((prev) => prev.filter((r) => r.id !== cr.id))
+                      } catch (e) {
+                        setConflictError(e instanceof Error ? e.message : 'Delete failed')
+                      }
+                    }}
+                  />
+                ))}
+              </div>
+            </section>
+          )}
+
           {/* Attachments — only available on saved requirements */}
           {savedDbId && (
             <section>
@@ -1016,4 +1152,140 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+// ---------------------------------------------------------------------------
+// Conflict record card
+// ---------------------------------------------------------------------------
+
+const CONFLICT_STATUS_CLASSES: Record<string, string> = {
+  Open: 'bg-red-100 text-red-700',
+  'Under Discussion': 'bg-yellow-100 text-yellow-800',
+  Resolved: 'bg-green-100 text-green-800',
+  Deferred: 'bg-gray-100 text-gray-600',
+}
+
+const CONFLICT_STATUSES = ['Open', 'Under Discussion', 'Resolved', 'Deferred']
+
+function ConflictRecordCard({
+  record,
+  currentRequirementId,
+  onNavigate,
+  onUpdate,
+  onDelete,
+}: {
+  record: ConflictRecord
+  currentRequirementId: string
+  onNavigate: (id: string) => void
+  onUpdate: (update: { status?: string; resolution_notes?: string }) => Promise<void>
+  onDelete: () => Promise<void>
+}) {
+  const [editingNotes, setEditingNotes] = useState(false)
+  const [notes, setNotes] = useState(record.resolution_notes ?? '')
+  const [saving, setSaving] = useState(false)
+
+  const showNotes = record.status === 'Resolved' || record.status === 'Deferred'
+  const otherReqs = record.requirements.filter((r) => r.id !== currentRequirementId)
+
+  return (
+    <div className="border border-gray-200 rounded p-3 space-y-2 bg-white">
+      <div className="flex items-start justify-between gap-2">
+        <p className="text-sm text-gray-800 flex-1">{record.description}</p>
+        <button
+          type="button"
+          onClick={async () => {
+            if (confirm('Remove this conflict record?')) await onDelete()
+          }}
+          className="text-xs text-gray-400 hover:text-red-500 shrink-0 mt-0.5"
+          title="Remove"
+        >
+          ×
+        </button>
+      </div>
+
+      {/* Linked requirements */}
+      {otherReqs.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {otherReqs.map((r) => (
+            <button
+              key={r.id}
+              type="button"
+              onClick={() => onNavigate(r.id)}
+              className="px-2 py-0.5 bg-indigo-50 text-indigo-700 text-xs rounded border border-indigo-200 font-mono hover:bg-indigo-100"
+              title={r.title}
+            >
+              {r.requirement_id}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Status selector */}
+      <div className="flex items-center gap-2">
+        <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${CONFLICT_STATUS_CLASSES[record.status] ?? 'bg-gray-100 text-gray-600'}`}>
+          {record.status}
+        </span>
+        <select
+          value={record.status}
+          onChange={async (e) => {
+            setSaving(true)
+            await onUpdate({ status: e.target.value })
+            setSaving(false)
+          }}
+          disabled={saving}
+          className="text-xs border border-gray-300 rounded px-2 py-0.5 bg-white focus:outline-none focus:ring-1 focus:ring-blue-400"
+        >
+          {CONFLICT_STATUSES.map((s) => (
+            <option key={s} value={s}>{s}</option>
+          ))}
+        </select>
+        <span className="text-xs text-gray-400 ml-auto">by {record.created_by}</span>
+      </div>
+
+      {/* Resolution notes — shown when Resolved or Deferred */}
+      {showNotes && (
+        <div>
+          {editingNotes ? (
+            <div className="space-y-1">
+              <textarea
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                rows={2}
+                placeholder="Describe how this conflict was resolved…"
+                className="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400 resize-y"
+              />
+              <div className="flex gap-1 justify-end">
+                <button
+                  type="button"
+                  onClick={() => { setEditingNotes(false); setNotes(record.resolution_notes ?? '') }}
+                  className="px-2 py-1 text-xs border border-gray-300 text-gray-600 rounded hover:bg-gray-50"
+                >Cancel</button>
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={async () => {
+                    setSaving(true)
+                    await onUpdate({ resolution_notes: notes })
+                    setEditingNotes(false)
+                    setSaving(false)
+                  }}
+                  className="px-2 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+                >Save</button>
+              </div>
+            </div>
+          ) : (
+            <div
+              className="text-xs text-gray-600 cursor-pointer hover:bg-gray-50 rounded px-1 py-0.5 -mx-1"
+              onClick={() => setEditingNotes(true)}
+              title="Click to edit resolution notes"
+            >
+              {record.resolution_notes
+                ? record.resolution_notes
+                : <span className="text-gray-400 italic">Add resolution notes…</span>}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
 }

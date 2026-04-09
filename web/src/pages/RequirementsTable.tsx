@@ -31,6 +31,7 @@ const DEFAULT_COLUMNS: Column[] = [
   { key: 'hierarchy_nodes', label: 'Hierarchy Nodes', visible: true, width: 200 },
   { key: 'sites', label: 'Site', visible: true, width: 120 },
   { key: 'units', label: 'Applicable Units', visible: true, width: 150 },
+  { key: 'open_conflict_count', label: 'Conflicts', visible: true, width: 90 },
   { key: 'created_by', label: 'Created By', visible: true, width: 120 },
   { key: 'created_date', label: 'Created Date', visible: true, width: 110 },
 ]
@@ -108,7 +109,8 @@ function hasActiveFilters(f: FilterConfig): boolean {
     f.created_date_from ||
     f.created_date_to ||
     f.modified_date_from ||
-    f.modified_date_to
+    f.modified_date_to ||
+    f.has_open_conflicts !== undefined
   )
 }
 
@@ -156,6 +158,15 @@ function renderCell(col: string, req: RequirementListItem): React.ReactNode {
           ))}
         </div>
       )
+    case 'open_conflict_count': {
+      const count = req.open_conflict_count ?? 0
+      if (count === 0) return <span className="text-gray-400 text-xs">—</span>
+      return (
+        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">
+          {count} open
+        </span>
+      )
+    }
     default:
       return <span className="text-sm text-gray-700">{String(req[col as keyof RequirementListItem] ?? '—')}</span>
   }
@@ -775,6 +786,21 @@ export default function RequirementsTable({
                 className={`px-1.5 py-1 text-xs border rounded ${filters.created_date_to ? 'border-blue-400' : 'border-gray-300'}`}
               />
             </div>
+
+            {/* Open conflicts filter */}
+            <label className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs border rounded cursor-pointer ${
+              filters.has_open_conflicts !== undefined
+                ? 'border-red-400 bg-red-50 text-red-700'
+                : 'border-gray-300 text-gray-600 hover:bg-gray-50'
+            }`}>
+              <input
+                type="checkbox"
+                checked={filters.has_open_conflicts === true}
+                onChange={(e) => setFilter('has_open_conflicts', e.target.checked ? true : undefined)}
+                className="rounded"
+              />
+              Has open conflicts
+            </label>
 
           </div>
         </div>

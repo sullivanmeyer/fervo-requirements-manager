@@ -473,7 +473,7 @@ and "If API 661 is revised, which of our specs are affected?"
 
 ---
 
-## Stage 9 — Conflict Record Tracking
+## Stage 9 — Conflict Record Tracking ✓ COMPLETE
 
 ### Goal
 Allow users to flag pairs of requirements as conflicting, describe the nature of
@@ -481,24 +481,24 @@ the conflict, and track resolution. Conflicts appear as a field on each involved
 requirement.
 
 ### Backend — Database
-- [ ] Alembic migration: `conflict_records` table (id UUID, description text, status enum: Open/Under Discussion/Resolved/Deferred, resolution_notes text nullable, created_by text, created_at, updated_at)
-- [ ] Alembic migration: `conflict_record_requirements` junction table (conflict_record_id FK, requirement_id FK) — supports linking 2+ requirements to a single conflict
-- [ ] Update requirement detail endpoint to include associated conflict records
+- [x] Alembic migration: `conflict_records` table (id UUID, description text, status enum: Open/Under Discussion/Resolved/Deferred, resolution_notes text nullable, created_by text, created_at, updated_at)
+- [x] Alembic migration: `conflict_record_requirements` junction table (conflict_record_id FK, requirement_id FK) — supports linking 2+ requirements to a single conflict
+- [x] Update requirement detail endpoint to include associated conflict records
 
 ### Backend — API Endpoints
-- [ ] `POST /api/conflict-records` — create a conflict record (accepts list of requirement IDs, description)
-- [ ] `GET /api/conflict-records` — list all conflict records with filtering by status
-- [ ] `GET /api/conflict-records/{id}` — single conflict record with linked requirements
-- [ ] `PUT /api/conflict-records/{id}` — update status, description, resolution notes
-- [ ] `DELETE /api/conflict-records/{id}` — soft delete
+- [x] `POST /api/conflict-records` — create a conflict record (accepts list of requirement IDs, description)
+- [x] `GET /api/conflict-records` — list all conflict records with filtering by status
+- [x] `GET /api/conflict-records/{id}` — single conflict record with linked requirements
+- [x] `PUT /api/conflict-records/{id}` — update status, description, resolution notes
+- [x] `DELETE /api/conflict-records/{id}` — soft delete
 
 ### Frontend — Conflict Record UI
-- [ ] On the Requirement Detail View, new "Conflict Records" section showing all conflicts involving this requirement
-- [ ] Each conflict shows: description, status badge, linked requirements (clickable), resolution notes
-- [ ] "Flag Conflict" button on the detail view: opens a form to select one or more other requirements, describe the conflict, and create the record
-- [ ] Conflict status is editable inline (dropdown to change Open → Under Discussion → Resolved → Deferred)
-- [ ] Resolution notes field becomes editable when status changes to Resolved or Deferred
-- [ ] Requirements table view: add a "Conflicts" column showing count of open conflicts (filterable: "has open conflicts" checkbox)
+- [x] On the Requirement Detail View, new "Conflict Records" section showing all conflicts involving this requirement
+- [x] Each conflict shows: description, status badge, linked requirements (clickable), resolution notes
+- [x] "Flag Conflict" button on the detail view: opens a form to select one or more other requirements, describe the conflict, and create the record
+- [x] Conflict status is editable inline (dropdown to change Open → Under Discussion → Resolved → Deferred)
+- [x] Resolution notes field becomes editable when status changes to Resolved or Deferred
+- [x] Requirements table view: add a "Conflicts" column showing count of open conflicts (filterable: "has open conflicts" checkbox)
 
 ### Stage 9 Verification
 - [ ] Create two contradictory requirements (e.g., one specifying 120 psig design pressure, another specifying 150 psig for the same equipment)
