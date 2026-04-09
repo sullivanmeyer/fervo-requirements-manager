@@ -207,16 +207,18 @@ export default function App() {
         {/* Requirements table                                                   */}
         {/* ------------------------------------------------------------------ */}
         {view.page === 'requirements' && (
-          <RequirementsTable
-            hierarchyNodes={nodes}
-            userName={userName}
-            onOpenDetail={(id) =>
-              setView({ page: 'requirement-detail', requirementId: id })
-            }
-            onCreateNew={() =>
-              setView({ page: 'requirement-detail', requirementId: null })
-            }
-          />
+          <div className="flex-1 overflow-hidden flex flex-col">
+            <RequirementsTable
+              hierarchyNodes={nodes}
+              userName={userName}
+              onOpenDetail={(id) =>
+                setView({ page: 'requirement-detail', requirementId: id })
+              }
+              onCreateNew={() =>
+                setView({ page: 'requirement-detail', requirementId: null })
+              }
+            />
+          </div>
         )}
 
         {/* ------------------------------------------------------------------ */}
