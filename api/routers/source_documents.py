@@ -3,12 +3,12 @@
 Design notes:
 - document_id is user-supplied (e.g. "ASME B31.3", "API 661 7th Ed").
   The DB enforces uniqueness; duplicate submissions get a 409 response.
-- PDFs are stored in MinIO under the "documents" bucket.  The object key
-  is the document UUID to avoid any special-character issues in user IDs.
+- PDFs are stored in the "documents" bucket (MinIO locally, Azure Blob in prod).
+  The object key is the document UUID to avoid any special-character issues.
 - Text extraction runs synchronously on upload using pdfplumber.  For very
   large PDFs this could be made async, but it's fine for Phase 1.
-- The download endpoint streams the file back from MinIO so we never buffer
-  the entire PDF in API memory.
+- The download endpoint streams the file back so we never buffer the entire
+  PDF in API memory.
 """
 from __future__ import annotations
 
@@ -23,38 +23,24 @@ import re
 import pdfplumber
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
-from minio import Minio
-from minio.error import S3Error
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from database import get_db
 from models import Requirement, SourceDocument
 from schemas import SourceDocumentCreate, SourceDocumentUpdate
+from storage import StorageError, delete_file, download_file, ensure_bucket as _ensure_bucket, upload_file
 
 router = APIRouter()
 
 BUCKET = "documents"
 
 
-# ---------------------------------------------------------------------------
-# MinIO client (created once per process)
-# ---------------------------------------------------------------------------
-
-def _minio_client() -> Minio:
-    endpoint = os.environ.get("MINIO_ENDPOINT", "minio:9000")
-    access_key = os.environ.get("MINIO_ACCESS_KEY", "minioadmin")
-    secret_key = os.environ.get("MINIO_SECRET_KEY", "minioadmin")
-    return Minio(endpoint, access_key=access_key, secret_key=secret_key, secure=False)
-
-
 def ensure_bucket() -> None:
-    """Create the documents bucket if it doesn't already exist.
+    """Create the documents bucket / container if it doesn't exist.
     Called once at API startup from main.py.
     """
-    client = _minio_client()
-    if not client.bucket_exists(BUCKET):
-        client.make_bucket(BUCKET)
+    _ensure_bucket(BUCKET)
 
 
 # ---------------------------------------------------------------------------
@@ -222,18 +208,10 @@ async def upload_pdf(
     # special characters that might appear in user-defined document IDs.
     object_key = f"{doc_id}.pdf"
 
-    # Upload to MinIO
-    client = _minio_client()
     try:
-        client.put_object(
-            BUCKET,
-            object_key,
-            io.BytesIO(pdf_bytes),
-            length=len(pdf_bytes),
-            content_type="application/pdf",
-        )
-    except S3Error as e:
-        raise HTTPException(status_code=500, detail=f"MinIO upload failed: {e}")
+        upload_file(BUCKET, object_key, pdf_bytes, "application/pdf")
+    except StorageError as e:
+        raise HTTPException(status_code=500, detail=f"File upload failed: {e}")
 
     # Extract text with pdfplumber, then normalise line-wrapping.
     # layout=True tells pdfplumber to infer spaces from character x-positions
@@ -273,14 +251,13 @@ def download_pdf(doc_id: UUID, db: Session = Depends(get_db)):
     if not doc.file_path:
         raise HTTPException(status_code=404, detail="No file uploaded for this document")
 
-    client = _minio_client()
     try:
-        response = client.get_object(BUCKET, doc.file_path)
-    except S3Error as e:
-        raise HTTPException(status_code=500, detail=f"MinIO download failed: {e}")
+        stream = download_file(BUCKET, doc.file_path)
+    except StorageError:
+        raise HTTPException(status_code=404, detail="PDF not found in storage")
 
     return StreamingResponse(
-        response,
+        stream,
         media_type="application/pdf",
         headers={
             "Content-Disposition": f'inline; filename="{doc.document_id}.pdf"'

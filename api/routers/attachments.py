@@ -1,42 +1,30 @@
 """Requirement file attachments — upload, list, download.
 
-Files are stored in MinIO under the "attachments" bucket.
+Files are stored in the "attachments" bucket (MinIO locally, Azure Blob in prod).
 The object key is the attachment UUID to avoid any special characters.
 """
 from __future__ import annotations
 
-import io
-import os
 import uuid as uuid_module
 from datetime import datetime
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
-from minio import Minio
-from minio.error import S3Error
 from sqlalchemy.orm import Session
 
 from database import get_db
 from models import Requirement, RequirementAttachment
+from storage import StorageError, delete_file, download_file, ensure_bucket as _ensure_bucket, upload_file
 
 router = APIRouter()
 
 BUCKET = "attachments"
 
 
-def _minio_client() -> Minio:
-    endpoint = os.environ.get("MINIO_ENDPOINT", "minio:9000")
-    access_key = os.environ.get("MINIO_ACCESS_KEY", "minioadmin")
-    secret_key = os.environ.get("MINIO_SECRET_KEY", "minioadmin")
-    return Minio(endpoint, access_key=access_key, secret_key=secret_key, secure=False)
-
-
 def ensure_attachments_bucket() -> None:
-    """Create the attachments bucket if it doesn't already exist."""
-    client = _minio_client()
-    if not client.bucket_exists(BUCKET):
-        client.make_bucket(BUCKET)
+    """Create the attachments bucket / container if it doesn't exist."""
+    _ensure_bucket(BUCKET)
 
 
 # ---------------------------------------------------------------------------
@@ -90,16 +78,9 @@ def upload_attachment(
     file_size = len(file_data)
     content_type = file.content_type or "application/octet-stream"
 
-    client = _minio_client()
     try:
-        client.put_object(
-            BUCKET,
-            object_key,
-            io.BytesIO(file_data),
-            length=file_size,
-            content_type=content_type,
-        )
-    except S3Error as e:
+        upload_file(BUCKET, object_key, file_data, content_type)
+    except StorageError as e:
         raise HTTPException(status_code=500, detail=f"File storage error: {e}")
 
     attachment = RequirementAttachment(
@@ -140,14 +121,13 @@ def download_attachment(attachment_id: UUID, db: Session = Depends(get_db)):
     if not attachment:
         raise HTTPException(status_code=404, detail="Attachment not found")
 
-    client = _minio_client()
     try:
-        response = client.get_object(BUCKET, attachment.file_path)
-    except S3Error:
+        stream = download_file(BUCKET, attachment.file_path)
+    except StorageError:
         raise HTTPException(status_code=404, detail="File not found in storage")
 
     return StreamingResponse(
-        response,
+        stream,
         media_type=attachment.content_type or "application/octet-stream",
         headers={
             "Content-Disposition": f'attachment; filename="{attachment.file_name}"'
@@ -169,11 +149,7 @@ def delete_attachment(attachment_id: UUID, db: Session = Depends(get_db)):
     if not attachment:
         raise HTTPException(status_code=404, detail="Attachment not found")
 
-    client = _minio_client()
-    try:
-        client.remove_object(BUCKET, attachment.file_path)
-    except S3Error:
-        pass  # If the file is already gone from storage, still delete the record
+    delete_file(BUCKET, attachment.file_path)  # silently ignores missing files
 
     db.delete(attachment)
     db.commit()

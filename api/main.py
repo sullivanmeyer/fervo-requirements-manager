@@ -1,3 +1,4 @@
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -14,20 +15,27 @@ import routers.document_references as document_references
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Create MinIO buckets on startup — like a migration for object storage.
+    # Ensure storage buckets / containers exist on startup.
+    # Works for both MinIO (local) and Azure Blob Storage (production).
     for ensure_fn in (ensure_bucket, ensure_attachments_bucket):
         try:
             ensure_fn()
         except Exception as e:
-            print(f"Warning: could not ensure MinIO bucket on startup: {e}")
+            print(f"Warning: could not ensure storage bucket on startup: {e}")
     yield
 
 
 app = FastAPI(title="Requirements Management API", version="0.1.0", lifespan=lifespan)
 
+# ALLOWED_ORIGINS: comma-separated list of frontend origins.
+# Local dev: set via docker-compose.yml (http://localhost:3000)
+# Azure:     set in App Service config (https://your-app.azurestaticapps.net)
+_origins_env = os.environ.get("ALLOWED_ORIGINS", "")
+_origins = [o.strip() for o in _origins_env.split(",") if o.strip()] or ["http://localhost:3000"]
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:3000"],
+    allow_origins=_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

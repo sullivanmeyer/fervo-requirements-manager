@@ -34,7 +34,9 @@ from models import (
     RequirementLink,
     SourceDocument,
 )
-from routers.source_documents import _minio_client, BUCKET
+from storage import read_file, StorageError
+
+BUCKET = "documents"
 from services.extraction import (
     decompose_document,
     detect_document_references,
@@ -282,16 +284,11 @@ def _run_decomposition(doc_id: str, file_path: str):
 
     db = SessionLocal()
     try:
-        minio = _minio_client()
         try:
-            response = minio.get_object(BUCKET, file_path)
-            pdf_bytes = response.read()
-        finally:
-            try:
-                response.close()
-                response.release_conn()
-            except Exception:
-                pass
+            pdf_bytes = read_file(BUCKET, file_path)
+        except StorageError as e:
+            print(f"[decompose] ERROR: could not fetch PDF from storage: {e}")
+            return
 
         raw_blocks = decompose_document(pdf_bytes)
 

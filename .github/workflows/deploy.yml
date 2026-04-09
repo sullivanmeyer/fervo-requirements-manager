@@ -1,0 +1,93 @@
+# Azure deployment pipeline — runs on every push to the azure-deploy branch.
+#
+# What it does:
+#   1. Builds the FastAPI Docker image and pushes it to Azure Container Registry.
+#   2. Triggers App Service to pull the new image (auto-deploy webhook or restart).
+#   3. Builds the React frontend and deploys it to Azure Static Web Apps.
+#
+# Required GitHub repository secrets:
+#   AZURE_CREDENTIALS            - Service principal JSON (az ad sp create-for-rbac)
+#   ACR_LOGIN_SERVER             - e.g. reqmgmtacr.azurecr.io
+#   ACR_USERNAME                 - ACR admin username
+#   ACR_PASSWORD                 - ACR admin password
+#   AZURE_WEBAPP_NAME            - App Service name (e.g. reqmgmt-api)
+#   AZURE_STATIC_WEB_APPS_API_TOKEN - Deployment token from Static Web Apps resource
+
+name: Deploy to Azure
+
+on:
+  push:
+    branches:
+      - azure-deploy
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1 — Build and deploy the FastAPI backend
+  # ---------------------------------------------------------------------------
+  deploy-backend:
+    name: Build & deploy API
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Log in to Azure
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Log in to Azure Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ secrets.ACR_LOGIN_SERVER }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./api
+          push: true
+          tags: ${{ secrets.ACR_LOGIN_SERVER }}/reqmgmt-api:latest
+
+      - name: Deploy image to App Service
+        uses: azure/webapps-deploy@v3
+        with:
+          app-name: ${{ secrets.AZURE_WEBAPP_NAME }}
+          images: ${{ secrets.ACR_LOGIN_SERVER }}/reqmgmt-api:latest
+
+  # ---------------------------------------------------------------------------
+  # Job 2 — Build and deploy the React frontend
+  # ---------------------------------------------------------------------------
+  deploy-frontend:
+    name: Build & deploy frontend
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        working-directory: ./web
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: ./web
+        run: npm run build
+        # .env.production is committed to this branch and sets VITE_API_URL
+
+      - name: Deploy to Azure Static Web Apps
+        uses: Azure/static-web-apps-deploy@v1
+        with:
+          azure_static_web_apps_api_token: ${{ secrets.AZURE_STATIC_WEB_APPS_API_TOKEN }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          action: upload
+          app_location: /web
+          output_location: dist
+          skip_app_build: true  # we built above so we control the env vars
