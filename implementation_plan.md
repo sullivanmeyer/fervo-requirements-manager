@@ -501,55 +501,72 @@ requirement.
 - [x] Requirements table view: add a "Conflicts" column showing count of open conflicts (filterable: "has open conflicts" checkbox)
 
 ### Stage 9 Verification
-- [ ] Create two contradictory requirements (e.g., one specifying 120 psig design pressure, another specifying 150 psig for the same equipment)
-- [ ] Flag them as conflicting with a description of the conflict
-- [ ] Verify the conflict record appears on both requirements' detail views
-- [ ] Change conflict status to Resolved, add resolution notes
-- [ ] Verify the conflict count in the table view updates
-- [ ] Filter the table to show only requirements with open conflicts
+- [x] Create two contradictory requirements (e.g., one specifying 120 psig design pressure, another specifying 150 psig for the same equipment)
+- [x] Flag them as conflicting with a description of the conflict
+- [x] Verify the conflict record appears on both requirements' detail views
+- [x] Change conflict status to Resolved, add resolution notes
+- [x] Verify the conflict count in the table view updates
+- [x] Filter the table to show only requirements with open conflicts
 
 ---
 
-## Stage 10 — Orphan Report + Gap Analysis + Full-Text Search
+# Stage 10 — Hierarchy Discipline Tags + Orphan Report + Gap Analysis + Full-Text Search ✓ COMPLETE
 
 ### Goal
-Add analytical views that help engineers identify missing traceability and
-requirements gaps, plus global search.
+Add discipline classification to hierarchy nodes so that gap analysis and orphan
+detection correctly flag missing requirements only where they're relevant — an
+electrical requirement shouldn't show as a gap on a mechanical-only assembly.
+Then add analytical views for orphan detection and gap analysis, plus global search.
 
-### Backend — API Endpoints
-- [ ] `GET /api/reports/orphans` — returns requirements whose only parent is Self-Derived AND are assigned to non-root hierarchy nodes (potential missing traceability)
-- [ ] `GET /api/reports/gaps?requirement_id={id}` — for a given parent requirement, returns a list of hierarchy nodes that have child requirements derived from it vs. hierarchy nodes that don't (identifies where flow-down is missing)
-- [ ] `GET /api/search?q={query}` — full-text search across requirement titles, statements, rationale, tags, source document titles, owner names. Uses PostgreSQL `tsvector` / `tsquery` for performance.
+### Backend — Database (Hierarchy Discipline Tags)
+- [x] Alembic migration: add `applicable_disciplines` column (text array, nullable) to `hierarchy_nodes` table. This is a multi-select of the same discipline enum used on requirements (Mechanical, Electrical, I&C, Civil/Structural, Process, Fire Protection, General). A node with no disciplines set is treated as applicable to all disciplines.
+- [x] Update hierarchy seed script to assign default disciplines to Geoblock nodes (e.g., ACC Tube Bundles = [Mechanical, Process]; E-House Building = [Electrical]; PLC Architecture = [I&C]; ACC Structural Steel = [Civil/Structural, Mechanical])
+- [x] Update `GET /api/hierarchy` and `PUT /api/hierarchy/{id}` to include and accept `applicable_disciplines`
 
-### Backend — Database
-- [ ] Alembic migration: add GIN index on a generated `tsvector` column covering requirement title, statement, rationale, tags, and owner fields
-- [ ] Alembic migration: add GIN index on source_documents covering title and document_id
+### Frontend — Hierarchy Discipline Tags
+- [x] On the hierarchy tree side panel, add an "Applicable Disciplines" multi-select field (same discipline enum as requirements)
+- [x] Discipline tags shown as colored badges on each node in the tree view
+- [x] When creating a new hierarchy node, the discipline field defaults to the parent node's disciplines (editable)
+
+### Backend — Database (Full-Text Search)
+- [x] Alembic migration: add GIN index on a generated `tsvector` column covering requirement title, statement, rationale, tags, and owner fields
+- [x] Alembic migration: add GIN index on source_documents covering title and document_id
+
+### Backend — API Endpoints (Reports & Search)
+- [x] `GET /api/reports/orphans` — returns requirements whose only parent is Self-Derived AND are assigned to non-root hierarchy nodes (potential missing traceability)
+- [x] `GET /api/reports/gaps?requirement_id={id}` — for a given parent requirement, returns a list of hierarchy nodes that share at least one discipline with the requirement but have no child requirements derived from it. This is the discipline-filtered gap analysis: if a plant-level Mechanical requirement has been flowed down to the ACC but not to the Turbogen lube oil skid, and both nodes include "Mechanical" in their applicable disciplines, the lube oil skid shows as a gap. But nodes tagged only as "Electrical" or "I&C" would not appear as gaps for that Mechanical requirement.
+- [x] `GET /api/search?q={query}` — full-text search across requirement titles, statements, rationale, tags, source document titles, owner names. Uses PostgreSQL `tsvector` / `tsquery` for performance.
 
 ### Frontend — Orphan Report
-- [ ] New page/tab: "Orphan Report" — table of requirements flagged as orphans
-- [ ] Each row shows Requirement ID, Title, Owner, Hierarchy Nodes, Status
-- [ ] Clicking a row opens the requirement detail view where the user can assign parent requirements
+- [x] New page/tab: "Orphan Report" — table of requirements flagged as orphans
+- [x] Each row shows Requirement ID, Title, Owner, Hierarchy Nodes, Status
+- [x] Clicking a row opens the requirement detail view where the user can assign parent requirements
+- [x] Filter by discipline and status
 
 ### Frontend — Gap Analysis
-- [ ] Accessible from the Requirement Detail View: "Analyze Flow-Down Gaps" button on any requirement
-- [ ] Displays a list of hierarchy nodes, each showing whether a child requirement derived from this parent exists at that node
-- [ ] Nodes with coverage shown in green; nodes without coverage shown in red/amber with a "Create Child Requirement" shortcut
+- [x] Accessible from the Requirement Detail View: "Analyze Flow-Down Gaps" button on any requirement
+- [x] Displays a two-column layout: hierarchy nodes with derived children (covered) and hierarchy nodes without derived children (gaps), filtered by discipline overlap between the requirement and each node's applicable_disciplines
+- [x] Discipline badges displayed on each hierarchy node in the gap analysis to show why it was included/excluded
+- [x] Nodes with coverage shown in green; nodes without coverage shown in red/amber with a "Create Child Requirement" shortcut
+- [x] Click "Create Child Requirement" from a gap — new requirement form opens pre-linked to the selected parent and pre-assigned to the gap hierarchy node
 
 ### Frontend — Global Search
-- [ ] Search bar in the top navigation, always visible
-- [ ] Results grouped by type: Requirements, Source Documents
-- [ ] Each result shows title/ID, a snippet of matching text, and is clickable to open the detail view
-- [ ] Search results appear in a dropdown as the user types (debounced, ≥3 characters)
+- [x] Search bar in the top navigation, always visible
+- [x] Results grouped by type: Requirements, Source Documents
+- [x] Each result shows title/ID, a snippet of matching text with highlighted matching terms, and is clickable to open the detail view
+- [x] Search results appear in a dropdown as the user types (debounced, ≥3 characters)
 
 ### Stage 10 Verification
-- [ ] Create a requirement assigned to a low-level hierarchy node with only Self-Derived as parent — verify it appears in the orphan report
+- [ ] Create a top-level Mechanical requirement and verify gap analysis shows only Mechanical-tagged hierarchy nodes as gaps (not Electrical-only or I&C-only nodes)
+- [ ] Verify that nodes with no disciplines set (applicable_disciplines is null/empty) appear in gap analysis for all disciplines (treated as universal)
+- [ ] Create an orphan requirement (Self-Derived parent, assigned to a component-level node) — verify it appears in the orphan report
 - [ ] Assign a real parent to it — verify it disappears from the orphan report
-- [ ] Select a top-level requirement and run gap analysis — verify hierarchy nodes with/without derived children are correctly identified
-- [ ] Click "Create Child Requirement" from a gap — verify new requirement form opens pre-linked
+- [ ] Click "Create Child Requirement" from a gap — verify new requirement form opens pre-linked to parent and pre-assigned to the gap node
 - [ ] Search for a word that appears in a requirement statement — verify the requirement appears in results
 - [ ] Search for a source document title — verify it appears in results
 - [ ] Search for an owner's name — verify their requirements appear in results
-
+- [ ] Verify discipline badges render correctly on hierarchy nodes in the tree view
+- [ ] Verify new child hierarchy nodes inherit applicable_disciplines from their parent node
 ---
 
 ## Stage 11 — Document Revision Tracking + Requirements Export
