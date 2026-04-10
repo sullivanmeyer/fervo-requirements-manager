@@ -668,10 +668,22 @@ export default function RequirementDetail({
           <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
           </svg>
-          <span>
-            <strong>Stale requirement</strong> — the source document this was derived from has been superseded by a new revision.
-            Review this requirement and update or re-approve as needed.
+          <span className="flex-1">
+            <strong>Stale requirement</strong> — the source document this was derived from has been revised.
+            Review this requirement against the new revision and update or re-approve as needed.
           </span>
+          <button
+            onClick={async () => {
+              if (!savedDbId) return
+              try {
+                await updateRequirement(savedDbId, { stale: false })
+                setReqStale(false)
+              } catch { /* ignore — non-critical */ }
+            }}
+            className="ml-2 px-2.5 py-1 text-xs bg-amber-100 border border-amber-300 text-amber-800 rounded hover:bg-amber-200 shrink-0"
+          >
+            Mark as Reviewed
+          </button>
         </div>
       )}
 

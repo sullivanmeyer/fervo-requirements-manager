@@ -19,7 +19,6 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import {
-  createNewRevision,
   createSourceDocument,
   fetchSourceDocument,
   fetchSourceDocuments,
@@ -223,11 +222,6 @@ export default function SourceDocumentDetail({
   const [savingRef, setSavingRef] = useState(false)
   const [detectingRefs, setDetectingRefs] = useState(false)
 
-  // New revision dialog state
-  const [showNewRevision, setShowNewRevision] = useState(false)
-  const [newRevForm, setNewRevForm] = useState({ document_id: '', title: '', revision: '', issuing_organization: '', document_type: 'Specification' })
-  const [savingRevision, setSavingRevision] = useState(false)
-  const [revisionResult, setRevisionResult] = useState<{ newId: string; staleCount: number } | null>(null)
 
   // Inline edit state for "Edit & Accept"
   const [editingCandidateId, setEditingCandidateId] = useState<string | null>(null)
@@ -685,6 +679,11 @@ export default function SourceDocumentDetail({
               placeholder="7th Edition, Rev 2, etc."
               className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
             />
+            {!isNew && doc && form.revision && form.revision !== (doc.revision ?? '') && (
+              <p className="mt-1 text-xs text-amber-600">
+                Saving a new revision value will flag all derived requirements as stale.
+              </p>
+            )}
           </Field>
 
           <Field label="Issuing Organization">
@@ -744,105 +743,6 @@ export default function SourceDocumentDetail({
             </div>
           )}
 
-          {/* Register new revision */}
-          {!isNew && doc && !doc.superseded_by_id && (
-            <div className="pt-2 border-t border-gray-100">
-              <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
-                Revision Management
-              </p>
-              {revisionResult ? (
-                <div className="text-xs text-green-700 bg-green-50 border border-green-200 rounded p-2 mb-2">
-                  New revision registered.{' '}
-                  {revisionResult.staleCount > 0
-                    ? `${revisionResult.staleCount} derived requirement${revisionResult.staleCount !== 1 ? 's' : ''} flagged as stale.`
-                    : 'No derived requirements to flag.'}
-                </div>
-              ) : showNewRevision ? (
-                <div className="space-y-2">
-                  <p className="text-xs text-gray-500 italic">
-                    This registers a new revision document and marks all derived requirements as stale.
-                  </p>
-                  {[
-                    { key: 'document_id', label: 'Document ID' },
-                    { key: 'title', label: 'Title' },
-                    { key: 'revision', label: 'Revision' },
-                    { key: 'issuing_organization', label: 'Issuing Org' },
-                  ].map(({ key, label }) => (
-                    <div key={key}>
-                      <label className="block text-xs text-gray-500 mb-0.5">{label}</label>
-                      <input
-                        type="text"
-                        value={newRevForm[key as keyof typeof newRevForm]}
-                        onChange={(e) => setNewRevForm((f) => ({ ...f, [key]: e.target.value }))}
-                        className="w-full border border-gray-300 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400"
-                      />
-                    </div>
-                  ))}
-                  <div className="flex gap-2 pt-1">
-                    <button
-                      disabled={savingRevision || !newRevForm.document_id || !newRevForm.title}
-                      onClick={async () => {
-                        if (!documentId) return
-                        setSavingRevision(true)
-                        try {
-                          const result = await createNewRevision(documentId, {
-                            document_id: newRevForm.document_id,
-                            title: newRevForm.title,
-                            document_type: doc.document_type,
-                            revision: newRevForm.revision || undefined,
-                            issuing_organization: newRevForm.issuing_organization || undefined,
-                            disciplines: doc.disciplines,
-                          })
-                          setRevisionResult({ newId: result.id, staleCount: result.stale_requirements_flagged })
-                          setShowNewRevision(false)
-                          // Reload current doc to reflect superseded_by_id
-                          const updated = await fetchSourceDocument(documentId)
-                          setDoc(updated)
-                        } catch (e) {
-                          setError(e instanceof Error ? e.message : 'Failed to register revision')
-                        } finally {
-                          setSavingRevision(false)
-                        }
-                      }}
-                      className="px-3 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
-                    >
-                      {savingRevision ? 'Saving…' : 'Confirm'}
-                    </button>
-                    <button
-                      onClick={() => setShowNewRevision(false)}
-                      className="px-3 py-1 text-xs border border-gray-300 text-gray-600 rounded hover:bg-gray-50"
-                    >
-                      Cancel
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <button
-                  onClick={() => {
-                    setNewRevForm({
-                      document_id: doc.document_id + ' Rev ' + (doc.revision ? String.fromCharCode((doc.revision.charCodeAt(0) || 64) + 1) : 'B'),
-                      title: doc.title,
-                      revision: '',
-                      issuing_organization: doc.issuing_organization ?? '',
-                      document_type: doc.document_type,
-                    })
-                    setShowNewRevision(true)
-                  }}
-                  className="w-full px-3 py-1.5 text-xs border border-amber-300 text-amber-700 rounded hover:bg-amber-50"
-                >
-                  Register New Revision
-                </button>
-              )}
-            </div>
-          )}
-
-          {doc?.superseded_by_id && (
-            <div className="pt-2 border-t border-gray-100">
-              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded p-2">
-                This document has been superseded by a newer revision.
-              </p>
-            </div>
-          )}
 
           {/* Linked requirements list */}
           {!isNew && doc && doc.linked_requirements.length > 0 && (

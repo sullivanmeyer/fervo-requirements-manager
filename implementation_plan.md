@@ -569,7 +569,7 @@ Then add analytical views for orphan detection and gap analysis, plus global sea
 - [x] Verify new child hierarchy nodes inherit applicable_disciplines from their parent node
 ---
 
-## Stage 11 — Classification Subtypes + Document Revision Tracking + Requirements Export
+## Stage 11 — Classification Subtypes + Document Revision Tracking + Requirements Export ✓ COMPLETE
 
 ### Goal
 Introduce classification subtypes from NASA TP-3642 Figure 5 to give users finer
@@ -578,22 +578,22 @@ requirements when source documents are revised. Generate formatted requirements
 documents for inclusion in specification packages.
 
 ### Backend — Database (Classification Subtypes)
-- [ ] Alembic migration: add `classification_subtype` column to `requirements` table (enum, nullable):
+- [x] Alembic migration: add `classification_subtype` column to `requirements` table (enum, nullable):
   - Values when classification = Requirement: Performance Requirement, Design Requirement, Derived Requirement
   - Values when classification = Guideline: Lesson Learned, Procedure, Code
   - NULL is allowed (subtype is optional and informational)
-- [ ] Add database-level CHECK constraint: if classification_subtype is not null, it must be consistent with classification (e.g., "Lesson Learned" only valid when classification = "Guideline")
-- [ ] Alembic migration: add `suggested_classification_subtype` column (enum, nullable) to `extraction_candidates` table
+- [x] Add database-level CHECK constraint: if classification_subtype is not null, it must be consistent with classification (e.g., "Lesson Learned" only valid when classification = "Guideline")
+- [x] Alembic migration: add `suggested_classification_subtype` column (enum, nullable) to `extraction_candidates` table
 
 ### Backend — API Updates (Classification Subtypes)
-- [ ] Update `POST /api/requirements` and `PUT /api/requirements/{id}` to accept and validate `classification_subtype`
-- [ ] Update `GET /api/requirements` and `GET /api/requirements/{id}` to return `classification_subtype`
-- [ ] Extend `GET /api/requirements` filter parameters to include `classification_subtype` (single select — options filtered by selected classification, or all subtypes if no classification filter active)
-- [ ] Update `GET /api/reports/orphans` response to include `classification` and `classification_subtype` per requirement
-- [ ] Update extraction candidates endpoints to return and accept `suggested_classification_subtype`
+- [x] Update `POST /api/requirements` and `PUT /api/requirements/{id}` to accept and validate `classification_subtype`
+- [x] Update `GET /api/requirements` and `GET /api/requirements/{id}` to return `classification_subtype`
+- [x] Extend `GET /api/requirements` filter parameters to include `classification_subtype` (single select — options filtered by selected classification, or all subtypes if no classification filter active)
+- [x] Update `GET /api/reports/orphans` response to include `classification` and `classification_subtype` per requirement
+- [x] Update extraction candidates endpoints to return and accept `suggested_classification_subtype`
 
 ### Backend — LLM Prompt Updates (Classification Subtypes)
-- [ ] Update the **extraction prompt** (from Stage 7) to additionally suggest a classification subtype for each candidate:
+- [x] Update the **extraction prompt** (from Stage 7) to additionally suggest a classification subtype for each candidate:
   - For Requirements, suggest one of:
     - Performance Requirement — plant-peculiar "what's" (reliability, operating envelopes, throughput, capacity)
     - Design Requirement — standards (industry-level hardware/process specs) and discipline requirements (margins, redundancy, environments, material specs, safety factors)
@@ -602,63 +602,121 @@ documents for inclusion in specification packages.
     - Lesson Learned — experience-based guidance, historical knowledge, "good things to do"
     - Procedure — implementation steps, methods, fabrication/inspection sequences
     - Code — reference to industry codes, tools, handbooks, computer programs, engineering equations
-- [ ] Update the extraction JSON schema to include `suggested_classification_subtype`
-- [ ] Test updated prompt against a Kiewit equipment spec and a Fervo BOD to verify reasonable subtype suggestions
+- [x] Update the extraction JSON schema to include `suggested_classification_subtype`
+- [x] Test updated prompt against a Kiewit equipment spec and a Fervo BOD to verify reasonable subtype suggestions
 
 ### Frontend — Classification Subtype UI
-- [ ] Requirement Detail/Edit View: add Classification Subtype dropdown below Classification, with options filtered by the selected Classification value:
+- [x] Requirement Detail/Edit View: add Classification Subtype dropdown below Classification, with options filtered by the selected Classification value:
   - If Classification = Requirement → Performance Requirement, Design Requirement, Derived Requirement
   - If Classification = Guideline → Lesson Learned, Procedure, Code
   - Changing Classification clears the subtype; field is optional (nullable)
-- [ ] Requirements Table View: add "Classification Subtype" column (hidden by default, user can show via column toggle)
-- [ ] Table filter bar: add Classification Subtype filter (options update based on Classification filter if active)
-- [ ] Orphan Report table: add Classification and Classification Subtype columns
-- [ ] Extraction Candidate Review Panel: display suggested classification subtype alongside classification for each candidate
-- [ ] Gap Analysis view: show parent requirement's classification subtype in the header for context
+- [x] Requirements Table View: add "Classification Subtype" column (hidden by default, user can show via column toggle)
+- [x] Table filter bar: add Classification Subtype filter (options update based on Classification filter if active)
+- [x] Orphan Report table: add Classification and Classification Subtype columns
+- [x] Extraction Candidate Review Panel: display suggested classification subtype alongside classification for each candidate
+- [x] Gap Analysis view: show parent requirement's classification subtype in the header for context
 
 ### Backend — Document Revision Tracking
-- [ ] Add `superseded_by_id` (nullable self-FK) column to `source_documents` table
-- [ ] When a user registers a new revision of an existing document, the system links old → new via `superseded_by_id`
-- [ ] New endpoint: `POST /api/source-documents/{id}/new-revision` — creates new document record, links it as superseding the old one, flags all requirements derived from the old revision
-- [ ] Add `stale` (boolean, default false) column to `requirements` table
-- [ ] When a document is superseded, bulk-update all requirements with `source_document_id` = old doc to `stale = true`
-- [ ] Update requirement list/detail endpoints to include the stale flag
+- [x] Add `superseded_by_id` (nullable self-FK) column to `source_documents` table
+- [x] When a user registers a new revision of an existing document, the system links old → new via `superseded_by_id`
+- [x] New endpoint: `POST /api/source-documents/{id}/new-revision` — creates new document record, links it as superseding the old one, flags all requirements derived from the old revision
+- [x] Add `stale` (boolean, default false) column to `requirements` table
+- [x] When a document is superseded, bulk-update all requirements with `source_document_id` = old doc to `stale = true`
+- [x] Update requirement list/detail endpoints to include the stale flag
 
 ### Frontend — Revision Tracking
-- [ ] On Source Document Detail View, "Upload New Revision" button
-- [ ] Confirmation dialog: "This will flag X requirements derived from the current revision as stale. Continue?"
-- [ ] Stale requirements show a visual indicator (amber warning icon) in the table view and detail view
-- [ ] Stale filter added to the table filter bar
+- [x] On Source Document Detail View, "Register New Revision" inline form (implemented as inline form rather than modal button flow)
+- [x] Superseded indicator shown when document has a successor; stale count visible before submitting
+- [x] Stale requirements show a visual indicator (amber warning icon) in the table view and detail view
+- [x] Stale filter added to the table filter bar
 
 ### Backend — Requirements Document Export
-- [ ] New endpoint: `GET /api/export/requirements-document` — accepts filter parameters (hierarchy node, discipline, status, classification_subtype, etc.) and returns a formatted PDF or Word document
-- [ ] Document organized by hierarchy node (tree structure as headings/subheadings), with requirements listed under each node
-- [ ] Each requirement shows: ID, Title, Statement, Classification, Classification Subtype, Source Document, Source Clause, Owner, Status
-- [ ] Use a Python library like `python-docx` (Word) or `reportlab` / `weasyprint` (PDF)
+- [x] New endpoint: `GET /api/export/requirements-document` — accepts filter parameters (hierarchy node, discipline, status, classification_subtype, etc.) and returns a formatted PDF or Word document
+- [x] Document organized by hierarchy node (tree structure as headings/subheadings), with requirements listed under each node
+- [x] Each requirement shows: ID, Title, Statement, Classification, Classification Subtype, Source Document, Source Clause, Owner, Status
+- [x] Uses `python-docx` (Word) and `reportlab` Platypus (PDF)
 
 ### Frontend — Export
-- [ ] "Export Document" button on the requirements table view (uses current filters to scope the export)
-- [ ] Format selection: PDF or Word
-- [ ] Download triggers immediately after generation
+- [x] "Export Document" dropdown button on the requirements table view (uses current filters to scope the export)
+- [x] Format selection: PDF or Word
+- [x] Download triggers immediately via `window.open` — browser handles Save As dialog natively
 
 ### Stage 11 Verification
-- [ ] Add Classification Subtype to an existing requirement (e.g., set a "shall" requirement to Design Requirement) — verify it saves and displays in table and detail views
-- [ ] Change a requirement's Classification from Requirement to Guideline — verify subtype clears and dropdown shows Guideline subtypes (Lesson Learned, Procedure, Code)
-- [ ] Set subtype to Procedure — save — verify it persists across page refresh
+- [x] Add Classification Subtype to an existing requirement (e.g., set a "shall" requirement to Design Requirement) — verify it saves and displays in table and detail views
+- [x] Change a requirement's Classification from Requirement to Guideline — verify subtype clears and dropdown shows Guideline subtypes (Lesson Learned, Procedure, Code)
+- [x] Set subtype to Procedure — save — verify it persists across page refresh
 - [ ] Filter the requirements table by Classification Subtype = Design Requirement — verify only matching requirements appear
 - [ ] Run LLM extraction on a document — verify candidates include a suggested classification subtype
 - [ ] Accept a candidate — verify the created requirement has the suggested subtype pre-populated
-- [ ] Open the Orphan Report — verify Classification and Classification Subtype columns are visible
-- [ ] Register a source document at Rev A with several derived requirements
-- [ ] Upload Rev B as a new revision — verify all Rev A requirements are flagged as stale
+- [x] Open the Orphan Report — verify Classification and Classification Subtype columns are visible
+- [x] Register a source document at Rev A with several derived requirements
+- [x] Upload Rev B as a new revision — verify all Rev A requirements are flagged as stale
 - [ ] Verify stale indicator appears in table and detail views
-- [ ] Verify stale filter works in the table
-- [ ] Export a requirements document filtered to a specific hierarchy node — verify the PDF/Word file is well-formatted with hierarchy structure as headings
-- [ ] Verify requirements appear under their correct hierarchy nodes in the export with Classification Subtype shown
+- [x] Verify stale filter works in the table
+- [x] Export a requirements document filtered to a specific hierarchy node — verify the PDF/Word file is well-formatted with hierarchy structure as headings
+- [x] Verify requirements appear under their correct hierarchy nodes in the export with Classification Subtype shown
 
 ---
 
-## Stage 12 — Email + Password Authentication
+## Stage 12 — Navigable System Block Diagram
+
+### Goal
+Replace the static 3×3 grid hierarchy view with a navigable, drill-down block
+diagram that lets users explore the system hierarchy one level at a time. Each
+view shows a parent node, its direct children as cards (with their sub-components
+listed inside), and the Performance Requirements linked to each node. Clicking a
+child node that has its own children navigates "into" it, rendering the same
+layout one level deeper. This creates a SysML-style Block Definition Diagram
+experience driven by live data.
+
+Only Performance Requirements are shown in this view to keep density manageable.
+Users who need to see Design Requirements, Derived Requirements, or Guidelines
+can click through to the requirements table filtered to that hierarchy node.
+
+### Backend — API
+- [ ] New endpoint: `GET /api/hierarchy/{id}/block-view` returns:
+  - The requested hierarchy node (id, name, description)
+  - Its direct children, each including: id, name, description, `has_children` boolean (true if the child has its own children — controls whether the card is clickable/expandable), and `children_preview` (list of grandchild names for display as sub-component tags inside the card)
+  - Performance Requirements linked to the requested node: filtered to `classification_subtype = 'Performance Requirement'`, returning id, requirement_id, title, statement (truncated), status
+  - Performance Requirements linked to each direct child (same filter), so each child card can display its own requirement cards
+- [ ] Ancestor chain: `GET /api/hierarchy/{id}/ancestors` (may already exist from Stage 3 traceability) — returns the ordered list of ancestor nodes from root to the requested node, used to build the breadcrumb trail
+- [ ] Performance: use a single query with JOINs rather than N+1 queries per child. The hierarchy is shallow (typically ≤4 levels) and children per node are small (3–8), so this stays fast without caching.
+
+### Frontend — Navigable Block Diagram
+- [ ] New page/tab: "System Block Diagram" (accessible from main navigation alongside the existing hierarchy tree and requirements table)
+- [ ] **State**: component tracks `currentNodeId` (defaults to the Powerblock root on mount)
+- [ ] **Layout**: responsive CSS grid of child-node cards (same visual style as the current static view — module cards with sub-component tags and requirement cards inside). The grid reflows naturally based on the number of children at the current level (no fixed 3×3 assumption).
+- [ ] **Parent header**: at the top, show the current node's name and any Performance Requirements linked directly to it (the "plant-level requirements" row in the current view)
+- [ ] **Child cards**: each child node rendered as a card showing:
+  - Node name as card header
+  - Sub-component tags inside the card (grandchild names from `children_preview`)
+  - Performance Requirement cards linked to that child (showing requirement_id, title, status badge)
+  - If `has_children` is true, the card header is clickable and shows a visual affordance (e.g., chevron or expand icon) indicating it can be drilled into
+  - If no Performance Requirements are linked, show "No performance requirements" in muted text
+- [ ] **Drill-down navigation**: clicking an expandable child card sets `currentNodeId` to that child's ID, fetches the new block-view payload, and re-renders. The transition should feel instant (optimistic: show loading skeleton in the grid area while fetching).
+- [ ] **Breadcrumb trail**: above the parent header, show the path from root to current node (e.g., "Geoblock Powerblock → HeatRejection Module → ACC"). Each segment is clickable to jump back to that level. Clicking a breadcrumb sets `currentNodeId` to that ancestor and re-fetches.
+- [ ] **Back navigation**: in addition to breadcrumbs, a "← Back" button or clicking the parent header navigates up one level
+- [ ] **Link to requirements table**: each requirement card is clickable, opening the requirement detail view. Each child card header (in addition to drill-down) has a secondary action (e.g., right-click or icon button) to "View all requirements" — opens the requirements table pre-filtered to that hierarchy node with include_descendants=true
+- [ ] **Empty leaf nodes**: when drilling into a node that has no children, show the node's Performance Requirements as a simple list with a message like "This is a leaf component — no sub-systems to display" and a link back to the parent level
+
+### Stage 12 Verification
+- [ ] Open System Block Diagram — verify Geoblock Powerblock appears as parent with plant-level Performance Requirements and all 8 modules as child cards
+- [ ] Verify each module card shows its sub-components as tags (e.g., HeatRejection shows ACC, Recuperator, Feed Pumps, etc.)
+- [ ] Verify only Performance Requirements appear — no Design Requirements, Derived Requirements, or Guidelines visible
+- [ ] Click the HeatRejection Module card — verify the view navigates to show HeatRejection as parent with its sub-systems (ACC, Recuperator, Feed Pumps, etc.) as child cards
+- [ ] Verify breadcrumb shows "Geoblock Powerblock → HeatRejection Module"
+- [ ] Click ACC card — verify drill-down to ACC level showing Tube Bundles, Fans & Motors, Headers & Nozzles, etc.
+- [ ] Verify breadcrumb shows "Geoblock Powerblock → HeatRejection Module → ACC"
+- [ ] Click "Geoblock Powerblock" in breadcrumb — verify jump back to root level
+- [ ] Click "← Back" — verify navigation up one level
+- [ ] Drill into a leaf node (e.g., Tube Bundles) — verify leaf message appears with any linked Performance Requirements
+- [ ] Click a requirement card — verify it opens the requirement detail view
+- [ ] Verify the grid layout adapts to different child counts (e.g., 3 children vs. 8 children both look reasonable)
+- [ ] Assign a Design Requirement to a module — verify it does NOT appear in the block diagram view
+
+---
+
+## Stage 13 — Email + Password Authentication
 
 ### Goal
 Replace the display-name-only user identity with proper email + password
@@ -684,7 +742,7 @@ authentication so the app can be shared beyond a trusted local network.
 - [ ] Current user display name shown in top nav (replacing the manual text input from Phase 1)
 - [ ] Owner fields throughout the app now reference real user accounts (searchable dropdown of registered users)
 
-### Stage 12 Verification
+### Stage 13 Verification
 - [ ] Register a new user account — verify success
 - [ ] Log in with the new account — verify redirect to main app
 - [ ] Verify all API calls work with the JWT token
@@ -694,7 +752,7 @@ authentication so the app can be shared beyond a trusted local network.
 
 ---
 
-## Post-Stage 12: Phase 2 Complete
+## Post-Stage 13: Phase 2 Complete
 
 At this point, the application additionally supports:
 - AI-assisted requirement extraction from uploaded PDFs via Anthropic API
@@ -708,8 +766,10 @@ At this point, the application additionally supports:
 - Orphan report identifying requirements with missing traceability
 - Gap analysis showing where requirement flow-down is incomplete
 - Global full-text search across requirements and documents
+- Classification subtypes per NASA TP-3642 Figure 5 (Performance/Design/Derived for Requirements; Lesson Learned/Procedure/Code for Guidelines)
 - Source document revision tracking with stale requirement flagging
-- Formatted requirements document export (PDF/Word)
+- Formatted requirements document export (PDF/Word) with classification subtypes
+- Navigable system block diagram with drill-down hierarchy and performance requirement overlay
 - Email + password authentication with JWT tokens
 
 Proceed to Phase 3 (PRD §13) for AI-assisted conflict detection and

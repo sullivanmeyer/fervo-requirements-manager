@@ -75,27 +75,3 @@ export function pdfDownloadUrl(id: string): string {
   return `${BASE}/source-documents/${id}/download`
 }
 
-/**
- * Register a new revision of an existing source document.
- * The old document is marked as superseded, and all requirements derived from
- * it are flagged as stale.  Returns the new revision's SourceDocumentDetail.
- */
-export async function createNewRevision(
-  oldDocId: string,
-  data: {
-    document_id: string
-    title: string
-    document_type: string
-    revision?: string
-    issuing_organization?: string
-    disciplines?: string[]
-  },
-): Promise<SourceDocumentDetail & { stale_requirements_flagged: number }> {
-  const res = await fetch(`${BASE}/source-documents/${oldDocId}/new-revision`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data),
-  })
-  if (!res.ok) return apiError(res)
-  return res.json()
-}

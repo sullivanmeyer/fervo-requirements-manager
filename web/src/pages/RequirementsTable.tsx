@@ -127,7 +127,17 @@ const EMPTY_FILTERS: FilterConfig = {}
 function renderCell(col: string, req: RequirementListItem): React.ReactNode {
   switch (col) {
     case 'requirement_id':
-      return <span className="font-mono text-xs font-medium text-blue-700">{req.requirement_id}</span>
+      return (
+        <span className="flex items-center gap-1">
+          {req.stale && (
+            <span
+              className="inline-block w-2 h-2 rounded-full bg-amber-400 shrink-0"
+              title="Stale — source document has been revised"
+            />
+          )}
+          <span className="font-mono text-xs font-medium text-blue-700">{req.requirement_id}</span>
+        </span>
+      )
     case 'status': {
       const cls = STATUS_CLASSES[req.status] ?? 'bg-gray-100 text-gray-700'
       return <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${cls}`}>{req.status}</span>
