@@ -18,16 +18,17 @@ depends_on = None
 
 
 def upgrade() -> None:
-    # Requirements: title + statement + rationale + owner + tags
-    # Cast 'english' to regconfig so PostgreSQL recognises the expression as IMMUTABLE.
+    # Requirements: title + statement + rationale + owner
+    # array_to_string is STABLE not IMMUTABLE so tags cannot be included in a
+    # functional GIN index — the search router handles tags via a separate LIKE
+    # clause instead.
     op.execute(sa.text("""
         CREATE INDEX idx_requirements_fts ON requirements USING GIN (
             to_tsvector('english'::regconfig,
                 coalesce(title, '') || ' ' ||
                 coalesce(statement, '') || ' ' ||
                 coalesce(rationale, '') || ' ' ||
-                coalesce(owner, '') || ' ' ||
-                array_to_string(coalesce(tags, ARRAY[]::text[]), ' ')
+                coalesce(owner, '')
             )
         )
     """))

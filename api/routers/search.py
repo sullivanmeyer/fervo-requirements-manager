@@ -20,8 +20,7 @@ _REQ_TSVEC = """
         coalesce(title, '') || ' ' ||
         coalesce(statement, '') || ' ' ||
         coalesce(rationale, '') || ' ' ||
-        coalesce(owner, '') || ' ' ||
-        array_to_string(coalesce(tags, ARRAY[]::text[]), ' ')
+        coalesce(owner, '')
     )
 """
 
