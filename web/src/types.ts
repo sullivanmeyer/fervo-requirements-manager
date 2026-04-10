@@ -3,6 +3,7 @@ export interface HierarchyNode {
   parent_id: string | null
   name: string
   description: string | null
+  applicable_disciplines: string[]
   archived: boolean
   sort_order: number
   created_at: string
@@ -266,4 +267,56 @@ export interface ExtractionCandidate {
   status: 'Pending' | 'Accepted' | 'Rejected' | 'Edited'
   accepted_requirement_id: string | null
   created_at: string
+}
+
+// ---------------------------------------------------------------------------
+// Reports
+// ---------------------------------------------------------------------------
+
+export interface OrphanRequirement {
+  id: string
+  requirement_id: string
+  title: string
+  discipline: string
+  status: string
+  owner: string
+  hierarchy_nodes: { id: string; name: string }[]
+}
+
+export interface GapNodeStub {
+  id: string
+  name: string
+  applicable_disciplines: string[]
+  parent_id: string | null
+}
+
+export interface GapAnalysisResult {
+  requirement: OrphanRequirement
+  covered: GapNodeStub[]
+  gaps: GapNodeStub[]
+}
+
+// ---------------------------------------------------------------------------
+// Global search
+// ---------------------------------------------------------------------------
+
+export interface SearchRequirementResult {
+  id: string
+  requirement_id: string
+  title: string
+  discipline: string
+  status: string
+  owner: string
+}
+
+export interface SearchDocumentResult {
+  id: string
+  document_id: string
+  title: string
+  document_type: string
+}
+
+export interface SearchResults {
+  requirements: SearchRequirementResult[]
+  source_documents: SearchDocumentResult[]
 }

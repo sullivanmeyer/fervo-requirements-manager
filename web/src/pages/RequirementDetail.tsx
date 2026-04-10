@@ -30,9 +30,12 @@ import {
   deleteConflictRecord,
   updateConflictRecord,
 } from '../api/conflictRecords'
+import { fetchGapAnalysis } from '../api/search'
 import type {
   Attachment,
   ConflictRecord,
+  GapAnalysisResult,
+  GapNodeStub,
   HierarchyNode,
   RequirementDetail as ReqDetail,
   RequirementListItem,
@@ -86,6 +89,7 @@ interface Props {
   onViewInTree: (id: string) => void  // navigate to derivation tree tab
   onAddChild: (parentId: string) => void
   onOpenDocument?: (docId: string) => void
+  onCreateChildForGap?: (parentId: string, hierarchyNodeId: string) => void
 }
 
 interface FormState {
@@ -317,6 +321,7 @@ export default function RequirementDetail({
   onViewInTree,
   onAddChild,
   onOpenDocument,
+  onCreateChildForGap,
 }: Props) {
   const isNew = requirementId === null
 
@@ -356,6 +361,12 @@ export default function RequirementDetail({
   const [conflictForm, setConflictForm] = useState({ description: '', requirement_ids: [] as string[] })
   const [conflictSaving, setConflictSaving] = useState(false)
   const [conflictError, setConflictError] = useState<string | null>(null)
+
+  // Gap analysis state
+  const [gapAnalysis, setGapAnalysis] = useState<GapAnalysisResult | null>(null)
+  const [gapLoading, setGapLoading] = useState(false)
+  const [gapError, setGapError] = useState<string | null>(null)
+  const [showGaps, setShowGaps] = useState(false)
 
   // -------------------------------------------------------------------------
   // Load on mount
@@ -952,6 +963,93 @@ export default function RequirementDetail({
             </div>
           </section>
 
+          {/* Gap Analysis — only for saved requirements */}
+          {savedDbId && (
+            <section>
+              <div className="flex items-center justify-between mb-4 pb-1 border-b border-gray-100">
+                <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider">
+                  Flow-Down Gap Analysis
+                </h2>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (showGaps) { setShowGaps(false); return }
+                    setGapLoading(true)
+                    setGapError(null)
+                    try {
+                      const result = await fetchGapAnalysis(savedDbId)
+                      setGapAnalysis(result)
+                      setShowGaps(true)
+                    } catch (e) {
+                      setGapError(e instanceof Error ? e.message : 'Gap analysis failed')
+                    } finally {
+                      setGapLoading(false)
+                    }
+                  }}
+                  disabled={gapLoading}
+                  className="px-3 py-1 text-xs border border-indigo-300 text-indigo-600 rounded hover:bg-indigo-50 disabled:opacity-50"
+                >
+                  {gapLoading ? 'Analyzing…' : showGaps ? 'Hide' : 'Analyze Flow-Down Gaps'}
+                </button>
+              </div>
+
+              {gapError && <p className="text-sm text-red-600 mb-3">{gapError}</p>}
+
+              {showGaps && gapAnalysis && (
+                <div className="space-y-4">
+                  <p className="text-xs text-gray-400">
+                    Showing hierarchy nodes tagged with <strong>{gapAnalysis.requirement.discipline}</strong> discipline (or universal).
+                    Covered = at least one direct child requirement assigned to that node.
+                  </p>
+                  <div className="grid grid-cols-2 gap-4">
+                    {/* Covered */}
+                    <div>
+                      <p className="text-xs font-semibold text-green-700 mb-2 flex items-center gap-1">
+                        <span className="inline-block w-2 h-2 rounded-full bg-green-500" />
+                        Covered ({gapAnalysis.covered.length})
+                      </p>
+                      {gapAnalysis.covered.length === 0 ? (
+                        <p className="text-xs text-gray-400 italic">None</p>
+                      ) : (
+                        <div className="space-y-1">
+                          {gapAnalysis.covered.map((n) => (
+                            <GapNodeRow key={n.id} node={n} covered />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Gaps */}
+                    <div>
+                      <p className="text-xs font-semibold text-amber-700 mb-2 flex items-center gap-1">
+                        <span className="inline-block w-2 h-2 rounded-full bg-amber-400" />
+                        Gaps ({gapAnalysis.gaps.length})
+                      </p>
+                      {gapAnalysis.gaps.length === 0 ? (
+                        <p className="text-xs text-gray-400 italic">No gaps — full coverage!</p>
+                      ) : (
+                        <div className="space-y-1">
+                          {gapAnalysis.gaps.map((n) => (
+                            <GapNodeRow
+                              key={n.id}
+                              node={n}
+                              covered={false}
+                              onCreateChild={
+                                onCreateChildForGap
+                                  ? () => onCreateChildForGap(savedDbId!, n.id)
+                                  : undefined
+                              }
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </section>
+          )}
+
           {/* Conflict Records — only available on saved requirements */}
           {savedDbId && (
             <section>
@@ -1152,6 +1250,62 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+// ---------------------------------------------------------------------------
+// Gap analysis node row
+// ---------------------------------------------------------------------------
+
+const DISC_BADGE_COLORS: Record<string, string> = {
+  'Mechanical':        'bg-blue-100 text-blue-700',
+  'Electrical':        'bg-amber-100 text-amber-700',
+  'I&C':               'bg-purple-100 text-purple-700',
+  'Civil/Structural':  'bg-orange-100 text-orange-700',
+  'Process':           'bg-green-100 text-green-700',
+  'Fire Protection':   'bg-red-100 text-red-700',
+  'General':           'bg-gray-100 text-gray-500',
+}
+
+function GapNodeRow({
+  node,
+  covered,
+  onCreateChild,
+}: {
+  node: GapNodeStub
+  covered: boolean
+  onCreateChild?: () => void
+}) {
+  return (
+    <div className={`flex items-center gap-2 px-2.5 py-1.5 rounded border text-xs ${
+      covered
+        ? 'border-green-200 bg-green-50'
+        : 'border-amber-200 bg-amber-50'
+    }`}>
+      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${covered ? 'bg-green-500' : 'bg-amber-400'}`} />
+      <span className="flex-1 text-gray-800 leading-tight">{node.name}</span>
+      {node.applicable_disciplines.length > 0 && (
+        <span className="flex gap-0.5 shrink-0">
+          {node.applicable_disciplines.map((d) => (
+            <span
+              key={d}
+              className={`text-[9px] font-semibold px-1 py-0.5 rounded ${DISC_BADGE_COLORS[d] ?? 'bg-gray-100 text-gray-500'}`}
+            >
+              {d.slice(0, 4).toUpperCase()}
+            </span>
+          ))}
+        </span>
+      )}
+      {!covered && onCreateChild && (
+        <button
+          type="button"
+          onClick={onCreateChild}
+          className="ml-1 px-2 py-0.5 text-[10px] bg-indigo-600 text-white rounded hover:bg-indigo-700 shrink-0"
+        >
+          + Child
+        </button>
+      )}
+    </div>
+  )
 }
 
 // ---------------------------------------------------------------------------

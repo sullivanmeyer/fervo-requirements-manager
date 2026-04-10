@@ -110,6 +110,7 @@ export default function HierarchyTree({
         <AddNodeModal
           parentId={selectedId}
           parentName={selectedNode?.name ?? ''}
+          parentDisciplines={selectedNode?.applicable_disciplines ?? []}
           onCreated={() => {
             setShowAddModal(false)
             onRefresh()

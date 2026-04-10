@@ -98,6 +98,7 @@ class HierarchyNodeCreate(BaseModel):
     description: Optional[str] = None
     parent_id: Optional[UUID] = None
     sort_order: int = 0
+    applicable_disciplines: Optional[List[str]] = None
 
 
 class HierarchyNodeUpdate(BaseModel):
@@ -105,6 +106,7 @@ class HierarchyNodeUpdate(BaseModel):
     description: Optional[str] = None
     parent_id: Optional[UUID] = None
     sort_order: Optional[int] = None
+    applicable_disciplines: Optional[List[str]] = None
 
 
 # ---------------------------------------------------------------------------

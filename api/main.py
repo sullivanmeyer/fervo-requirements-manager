@@ -11,6 +11,8 @@ import routers.attachments as attachments
 import routers.conflict_records as conflict_records
 import routers.extraction as extraction
 import routers.document_references as document_references
+import routers.reports as reports
+import routers.search as search
 
 
 @asynccontextmanager
@@ -43,6 +45,8 @@ app.include_router(saved_filters.router, prefix="/api", tags=["saved-filters"])
 app.include_router(conflict_records.router, prefix="/api", tags=["conflict-records"])
 app.include_router(extraction.router, prefix="/api", tags=["extraction"])
 app.include_router(document_references.router, prefix="/api", tags=["document-references"])
+app.include_router(reports.router, prefix="/api", tags=["reports"])
+app.include_router(search.router, prefix="/api", tags=["search"])
 
 
 @app.get("/health")

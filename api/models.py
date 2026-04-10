@@ -50,6 +50,7 @@ class HierarchyNode(Base):
     )
     name = Column(Text, nullable=False)
     description = Column(Text, nullable=True)
+    applicable_disciplines = Column(ARRAY(Text), nullable=True)
     archived = Column(Boolean, default=False, nullable=False)
     sort_order = Column(Integer, default=0, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

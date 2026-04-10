@@ -20,6 +20,7 @@ def _node_to_dict(node: HierarchyNode) -> dict[str, Any]:
         "parent_id": str(node.parent_id) if node.parent_id else None,
         "name": node.name,
         "description": node.description,
+        "applicable_disciplines": node.applicable_disciplines or [],
         "archived": node.archived,
         "sort_order": node.sort_order,
         "created_at": node.created_at.isoformat(),

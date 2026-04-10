@@ -25,6 +25,7 @@ export const createNode = (data: {
   description?: string
   parent_id?: string | null
   sort_order?: number
+  applicable_disciplines?: string[]
 }): Promise<HierarchyNode> =>
   request('/hierarchy', {
     method: 'POST',
@@ -39,6 +40,7 @@ export const updateNode = (
     description?: string | null
     parent_id?: string | null
     sort_order?: number
+    applicable_disciplines?: string[] | null
   },
 ): Promise<HierarchyNode> =>
   request(`/hierarchy/${id}`, {
