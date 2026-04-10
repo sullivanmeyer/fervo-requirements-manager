@@ -350,6 +350,8 @@ interface Props {
   userName: string
   onOpenDetail: (id: string) => void
   onCreateNew: () => void
+  /** Pre-seed the hierarchy filter and open the filter bar (used by Block Diagram "View all requirements" links) */
+  initialHierarchyNodeId?: string
 }
 
 // ---------------------------------------------------------------------------
@@ -361,6 +363,7 @@ export default function RequirementsTable({
   userName,
   onOpenDetail,
   onCreateNew,
+  initialHierarchyNodeId,
 }: Props) {
   const [items, setItems] = useState<RequirementListItem[]>([])
   const [total, setTotal] = useState(0)
@@ -383,10 +386,14 @@ export default function RequirementsTable({
   const [sortKey, setSortKey] = useState<string>('requirement_id')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
 
-  // Filter state
-  const [filters, setFilters] = useState<FilterConfig>(EMPTY_FILTERS)
+  // Filter state — pre-seed hierarchy filter when navigated from the block diagram
+  const [filters, setFilters] = useState<FilterConfig>(
+    initialHierarchyNodeId
+      ? { ...EMPTY_FILTERS, hierarchy_node_id: initialHierarchyNodeId, include_descendants: true }
+      : EMPTY_FILTERS
+  )
   const [ownerInput, setOwnerInput] = useState('')
-  const [showFilterBar, setShowFilterBar] = useState(false)
+  const [showFilterBar, setShowFilterBar] = useState(!!initialHierarchyNodeId)
 
   // Reference data for filter dropdowns
   const [sites, setSites] = useState<Site[]>([])

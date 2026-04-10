@@ -29,7 +29,7 @@ export function flattenTree(nodes: HierarchyNode[], depth = 0): FlatNode[] {
 
 type AppView =
   | { page: 'hierarchy' }
-  | { page: 'requirements' }
+  | { page: 'requirements'; initialHierarchyNodeId?: string }
   | { page: 'requirement-detail'; requirementId: string | null; initialParentIds?: string[]; initialStatement?: string; initialSourceDocumentId?: string; backFrom?: 'document-detail' | 'orphan-report'; backDocumentId?: string }
   | { page: 'derivation-tree'; focusId: string | null }
   | { page: 'documents' }
@@ -341,6 +341,9 @@ export default function App() {
                 onOpenDetail={(id) =>
                   setView({ page: 'requirement-detail', requirementId: id })
                 }
+                onViewAllRequirements={(nodeId) =>
+                  setView({ page: 'requirements', initialHierarchyNodeId: nodeId })
+                }
               />
             </section>
 
@@ -366,6 +369,7 @@ export default function App() {
             <RequirementsTable
               hierarchyNodes={nodes}
               userName={userName}
+              initialHierarchyNodeId={view.page === 'requirements' ? view.initialHierarchyNodeId : undefined}
               onOpenDetail={(id) =>
                 setView({ page: 'requirement-detail', requirementId: id })
               }

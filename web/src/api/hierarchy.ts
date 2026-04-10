@@ -1,4 +1,4 @@
-import type { HierarchyNode } from '../types'
+import type { AncestorNode, BlockView, HierarchyNode } from '../types'
 
 const BASE = '/api'
 
@@ -51,3 +51,9 @@ export const updateNode = (
 
 export const archiveNode = (id: string): Promise<HierarchyNode> =>
   request(`/hierarchy/${id}/archive`, { method: 'PATCH' })
+
+export const fetchAncestors = (id: string): Promise<AncestorNode[]> =>
+  request(`/hierarchy/${id}/ancestors`)
+
+export const fetchBlockView = (id: string): Promise<BlockView> =>
+  request(`/hierarchy/${id}/block-view`)

@@ -17,6 +17,37 @@ export interface FlatNode {
 }
 
 // ---------------------------------------------------------------------------
+// Block diagram (Stage 12)
+// ---------------------------------------------------------------------------
+
+export interface AncestorNode {
+  id: string
+  name: string
+}
+
+export interface BlockViewReq {
+  id: string
+  requirement_id: string
+  title: string
+  status: string
+}
+
+export interface BlockViewChild {
+  id: string
+  name: string
+  description: string | null
+  has_children: boolean
+  children_preview: string[]
+  performance_requirements: BlockViewReq[]
+}
+
+export interface BlockView {
+  node: { id: string; name: string; description: string | null }
+  performance_requirements: BlockViewReq[]
+  children: BlockViewChild[]
+}
+
+// ---------------------------------------------------------------------------
 // Reference data
 // ---------------------------------------------------------------------------
 
