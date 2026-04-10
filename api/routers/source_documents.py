@@ -21,7 +21,7 @@ from uuid import UUID
 import re
 
 import pdfplumber
-from fastapi import APIRouter, Depends, File, HTTPException, UploadFile
+from fastapi import APIRouter, Body, Depends, File, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from minio import Minio
 from minio.error import S3Error
@@ -72,6 +72,7 @@ def _doc_to_dict(doc: SourceDocument, include_text: bool = False) -> dict[str, A
         "disciplines": doc.disciplines or [],
         "has_file": doc.file_path is not None,
         "is_stub": bool(doc.is_stub),
+        "archived": bool(doc.archived),
         "superseded_by_id": str(doc.superseded_by_id) if doc.superseded_by_id else None,
         "created_at": doc.created_at.isoformat(),
         "updated_at": doc.updated_at.isoformat(),
@@ -141,8 +142,14 @@ def _normalise_extracted_text(raw: str) -> str:
 # ---------------------------------------------------------------------------
 
 @router.get("/source-documents")
-def list_source_documents(db: Session = Depends(get_db)):
-    docs = db.query(SourceDocument).order_by(SourceDocument.document_id).all()
+def list_source_documents(
+    include_archived: bool = False,
+    db: Session = Depends(get_db),
+):
+    q = db.query(SourceDocument)
+    if not include_archived:
+        q = q.filter(SourceDocument.archived == False)  # noqa: E712
+    docs = q.order_by(SourceDocument.document_id).all()
     return [_doc_to_dict(d) for d in docs]
 
 
@@ -206,6 +213,28 @@ def update_source_document(
             Requirement.source_document_id == doc.id
         ).update({"stale": True}, synchronize_session=False)
 
+    db.commit()
+    db.refresh(doc)
+    return _full_response(doc, db)
+
+
+@router.patch("/source-documents/{doc_id}/archive")
+def toggle_archive(
+    doc_id: UUID,
+    archived: bool = Body(..., embed=True),
+    db: Session = Depends(get_db),
+):
+    """Archive or restore a source document (soft delete).
+
+    Pass { "archived": true } to archive, { "archived": false } to restore.
+    The document and all traceability links are preserved; it is simply
+    hidden from active workflows when archived.
+    """
+    doc = db.get(SourceDocument, doc_id)
+    if not doc:
+        raise HTTPException(status_code=404, detail="Source document not found")
+    doc.archived = archived
+    doc.updated_at = datetime.utcnow()
     db.commit()
     db.refresh(doc)
     return _full_response(doc, db)

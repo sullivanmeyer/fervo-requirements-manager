@@ -9,8 +9,24 @@ function apiError(res: Response): Promise<never> {
   })
 }
 
-export async function fetchSourceDocuments(): Promise<SourceDocumentListItem[]> {
-  const res = await fetch(`${BASE}/source-documents`)
+export async function fetchSourceDocuments(
+  opts: { includeArchived?: boolean } = {},
+): Promise<SourceDocumentListItem[]> {
+  const params = opts.includeArchived ? '?include_archived=true' : ''
+  const res = await fetch(`${BASE}/source-documents${params}`)
+  if (!res.ok) return apiError(res)
+  return res.json()
+}
+
+export async function archiveSourceDocument(
+  id: string,
+  archived: boolean,
+): Promise<SourceDocumentDetail> {
+  const res = await fetch(`${BASE}/source-documents/${id}/archive`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ archived }),
+  })
   if (!res.ok) return apiError(res)
   return res.json()
 }

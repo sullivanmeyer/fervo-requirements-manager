@@ -26,6 +26,9 @@ class SourceDocument(Base):
     extracted_text = Column(Text, nullable=True)
     # True = auto-detected reference stub; cleared when user saves real metadata
     is_stub = Column(Boolean, default=False, nullable=False)
+    # Soft-delete: archived documents are hidden from active workflows but
+    # retained so that requirement traceability links remain intact
+    archived = Column(Boolean, default=False, nullable=False)
     # When this document is superseded, point to the newer revision
     superseded_by_id = Column(
         UUID(as_uuid=True),

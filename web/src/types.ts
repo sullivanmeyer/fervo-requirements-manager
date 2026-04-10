@@ -122,6 +122,7 @@ export interface SourceDocumentListItem {
   disciplines: string[]
   has_file: boolean
   is_stub: boolean
+  archived: boolean
   superseded_by_id: string | null
   created_at: string
   updated_at: string
@@ -245,6 +246,7 @@ export interface GraphNode {
   out_count: number   // edges going out (this doc cites)
   in_count: number    // edges coming in (others cite this doc)
   is_stub: boolean    // auto-detected; not yet fully registered
+  archived: boolean   // soft-deleted; hidden from active workflows
 }
 
 export interface GraphEdge {

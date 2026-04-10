@@ -384,7 +384,7 @@ export default function RequirementDetail({
 
   useEffect(() => {
     if (isNew) {
-      void Promise.all([fetchAllRequirements(), fetchSourceDocuments(), fetchSites(), fetchUnits()]).then(
+      void Promise.all([fetchAllRequirements(), fetchSourceDocuments({ includeArchived: true }), fetchSites(), fetchUnits()]).then(
         ([reqs, docs, s, u]) => {
           setAllRequirements(reqs)
           setSourceDocs(docs)
@@ -398,7 +398,7 @@ export default function RequirementDetail({
           const [req, reqs, docs, s, u, atts] = await Promise.all([
             fetchRequirement(requirementId!),
             fetchAllRequirements(),
-            fetchSourceDocuments(),
+            fetchSourceDocuments({ includeArchived: true }),
             fetchSites(),
             fetchUnits(),
             fetchAttachments(requirementId!),
@@ -768,11 +768,13 @@ export default function RequirementDetail({
                       className="flex-1 border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white"
                     >
                       <option value="">— None —</option>
-                      {sourceDocs.map((d: SourceDocumentListItem) => (
-                        <option key={d.id} value={d.id}>
-                          {d.document_id} — {d.title}
-                        </option>
-                      ))}
+                      {sourceDocs
+                        .filter((d) => !d.archived || d.id === form.source_document_id)
+                        .map((d: SourceDocumentListItem) => (
+                          <option key={d.id} value={d.id}>
+                            {d.document_id} — {d.title}{d.archived ? ' [Archived]' : ''}
+                          </option>
+                        ))}
                     </select>
                     {form.source_document_id && onOpenDocument && (
                       <button
@@ -783,6 +785,11 @@ export default function RequirementDetail({
                       >
                         Open
                       </button>
+                    )}
+                    {form.source_document_id && sourceDocs.find((d) => d.id === form.source_document_id)?.archived && (
+                      <span className="px-2 py-1 text-xs bg-gray-100 text-gray-500 border border-gray-300 rounded shrink-0">
+                        Archived
+                      </span>
                     )}
                   </div>
                 </Field>
