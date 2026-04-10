@@ -557,23 +557,64 @@ Then add analytical views for orphan detection and gap analysis, plus global sea
 - [x] Search results appear in a dropdown as the user types (debounced, ≥3 characters)
 
 ### Stage 10 Verification
-- [ ] Create a top-level Mechanical requirement and verify gap analysis shows only Mechanical-tagged hierarchy nodes as gaps (not Electrical-only or I&C-only nodes)
-- [ ] Verify that nodes with no disciplines set (applicable_disciplines is null/empty) appear in gap analysis for all disciplines (treated as universal)
-- [ ] Create an orphan requirement (Self-Derived parent, assigned to a component-level node) — verify it appears in the orphan report
-- [ ] Assign a real parent to it — verify it disappears from the orphan report
-- [ ] Click "Create Child Requirement" from a gap — verify new requirement form opens pre-linked to parent and pre-assigned to the gap node
-- [ ] Search for a word that appears in a requirement statement — verify the requirement appears in results
-- [ ] Search for a source document title — verify it appears in results
-- [ ] Search for an owner's name — verify their requirements appear in results
-- [ ] Verify discipline badges render correctly on hierarchy nodes in the tree view
-- [ ] Verify new child hierarchy nodes inherit applicable_disciplines from their parent node
+- [x] Create a top-level Mechanical requirement and verify gap analysis shows only Mechanical-tagged hierarchy nodes as gaps (not Electrical-only or I&C-only nodes)
+- [x] Verify that nodes with no disciplines set (applicable_disciplines is null/empty) appear in gap analysis for all disciplines (treated as universal)
+- [x] Create an orphan requirement (Self-Derived parent, assigned to a component-level node) — verify it appears in the orphan report
+- [x] Assign a real parent to it — verify it disappears from the orphan report
+- [x] Click "Create Child Requirement" from a gap — verify new requirement form opens pre-linked to parent and pre-assigned to the gap node
+- [x] Search for a word that appears in a requirement statement — verify the requirement appears in results
+- [x] Search for a source document title — verify it appears in results
+- [x] Search for an owner's name — verify their requirements appear in results
+- [x] Verify discipline badges render correctly on hierarchy nodes in the tree view
+- [x] Verify new child hierarchy nodes inherit applicable_disciplines from their parent node
 ---
 
-## Stage 11 — Document Revision Tracking + Requirements Export
+## Stage 11 — Classification Subtypes + Document Revision Tracking + Requirements Export
 
 ### Goal
-Flag stale requirements when source documents are revised, and generate formatted
-requirements documents for inclusion in specification packages.
+Introduce classification subtypes from NASA TP-3642 Figure 5 to give users finer
+visibility into the nature of each requirement and guideline. Flag stale
+requirements when source documents are revised. Generate formatted requirements
+documents for inclusion in specification packages.
+
+### Backend — Database (Classification Subtypes)
+- [ ] Alembic migration: add `classification_subtype` column to `requirements` table (enum, nullable):
+  - Values when classification = Requirement: Performance Requirement, Design Requirement, Derived Requirement
+  - Values when classification = Guideline: Lesson Learned, Procedure, Code
+  - NULL is allowed (subtype is optional and informational)
+- [ ] Add database-level CHECK constraint: if classification_subtype is not null, it must be consistent with classification (e.g., "Lesson Learned" only valid when classification = "Guideline")
+- [ ] Alembic migration: add `suggested_classification_subtype` column (enum, nullable) to `extraction_candidates` table
+
+### Backend — API Updates (Classification Subtypes)
+- [ ] Update `POST /api/requirements` and `PUT /api/requirements/{id}` to accept and validate `classification_subtype`
+- [ ] Update `GET /api/requirements` and `GET /api/requirements/{id}` to return `classification_subtype`
+- [ ] Extend `GET /api/requirements` filter parameters to include `classification_subtype` (single select — options filtered by selected classification, or all subtypes if no classification filter active)
+- [ ] Update `GET /api/reports/orphans` response to include `classification` and `classification_subtype` per requirement
+- [ ] Update extraction candidates endpoints to return and accept `suggested_classification_subtype`
+
+### Backend — LLM Prompt Updates (Classification Subtypes)
+- [ ] Update the **extraction prompt** (from Stage 7) to additionally suggest a classification subtype for each candidate:
+  - For Requirements, suggest one of:
+    - Performance Requirement — plant-peculiar "what's" (reliability, operating envelopes, throughput, capacity)
+    - Design Requirement — standards (industry-level hardware/process specs) and discipline requirements (margins, redundancy, environments, material specs, safety factors)
+    - Derived Requirement — requirements that evolve during design to meet performance requirements (e.g., load relief controls, interface constraints)
+  - For Guidelines, suggest one of:
+    - Lesson Learned — experience-based guidance, historical knowledge, "good things to do"
+    - Procedure — implementation steps, methods, fabrication/inspection sequences
+    - Code — reference to industry codes, tools, handbooks, computer programs, engineering equations
+- [ ] Update the extraction JSON schema to include `suggested_classification_subtype`
+- [ ] Test updated prompt against a Kiewit equipment spec and a Fervo BOD to verify reasonable subtype suggestions
+
+### Frontend — Classification Subtype UI
+- [ ] Requirement Detail/Edit View: add Classification Subtype dropdown below Classification, with options filtered by the selected Classification value:
+  - If Classification = Requirement → Performance Requirement, Design Requirement, Derived Requirement
+  - If Classification = Guideline → Lesson Learned, Procedure, Code
+  - Changing Classification clears the subtype; field is optional (nullable)
+- [ ] Requirements Table View: add "Classification Subtype" column (hidden by default, user can show via column toggle)
+- [ ] Table filter bar: add Classification Subtype filter (options update based on Classification filter if active)
+- [ ] Orphan Report table: add Classification and Classification Subtype columns
+- [ ] Extraction Candidate Review Panel: display suggested classification subtype alongside classification for each candidate
+- [ ] Gap Analysis view: show parent requirement's classification subtype in the header for context
 
 ### Backend — Document Revision Tracking
 - [ ] Add `superseded_by_id` (nullable self-FK) column to `source_documents` table
@@ -590,9 +631,9 @@ requirements documents for inclusion in specification packages.
 - [ ] Stale filter added to the table filter bar
 
 ### Backend — Requirements Document Export
-- [ ] New endpoint: `GET /api/export/requirements-document` — accepts filter parameters (hierarchy node, discipline, status, etc.) and returns a formatted PDF or Word document
+- [ ] New endpoint: `GET /api/export/requirements-document` — accepts filter parameters (hierarchy node, discipline, status, classification_subtype, etc.) and returns a formatted PDF or Word document
 - [ ] Document organized by hierarchy node (tree structure as headings/subheadings), with requirements listed under each node
-- [ ] Each requirement shows: ID, Title, Statement, Classification, Source Document, Source Clause, Owner, Status
+- [ ] Each requirement shows: ID, Title, Statement, Classification, Classification Subtype, Source Document, Source Clause, Owner, Status
 - [ ] Use a Python library like `python-docx` (Word) or `reportlab` / `weasyprint` (PDF)
 
 ### Frontend — Export
@@ -601,12 +642,19 @@ requirements documents for inclusion in specification packages.
 - [ ] Download triggers immediately after generation
 
 ### Stage 11 Verification
+- [ ] Add Classification Subtype to an existing requirement (e.g., set a "shall" requirement to Design Requirement) — verify it saves and displays in table and detail views
+- [ ] Change a requirement's Classification from Requirement to Guideline — verify subtype clears and dropdown shows Guideline subtypes (Lesson Learned, Procedure, Code)
+- [ ] Set subtype to Procedure — save — verify it persists across page refresh
+- [ ] Filter the requirements table by Classification Subtype = Design Requirement — verify only matching requirements appear
+- [ ] Run LLM extraction on a document — verify candidates include a suggested classification subtype
+- [ ] Accept a candidate — verify the created requirement has the suggested subtype pre-populated
+- [ ] Open the Orphan Report — verify Classification and Classification Subtype columns are visible
 - [ ] Register a source document at Rev A with several derived requirements
 - [ ] Upload Rev B as a new revision — verify all Rev A requirements are flagged as stale
 - [ ] Verify stale indicator appears in table and detail views
 - [ ] Verify stale filter works in the table
 - [ ] Export a requirements document filtered to a specific hierarchy node — verify the PDF/Word file is well-formatted with hierarchy structure as headings
-- [ ] Verify requirements appear under their correct hierarchy nodes in the export
+- [ ] Verify requirements appear under their correct hierarchy nodes in the export with Classification Subtype shown
 
 ---
 

@@ -72,8 +72,10 @@ def _requirement_to_dict(
         "requirement_id": req.requirement_id,
         "title": req.title,
         "classification": req.classification,
+        "classification_subtype": req.classification_subtype,
         "owner": req.owner,
         "status": req.status,
+        "stale": req.stale,
         "discipline": req.discipline,
         "created_by": req.created_by,
         "created_date": req.created_date.isoformat() if req.created_date else None,
@@ -255,6 +257,8 @@ def list_requirements(
     modified_date_from: Optional[str] = Query(None),
     modified_date_to: Optional[str] = Query(None),
     has_open_conflicts: Optional[bool] = Query(None),
+    classification_subtype: Optional[str] = Query(None),
+    stale: Optional[bool] = Query(None),
     db: Session = Depends(get_db),
 ):
     """
@@ -321,6 +325,12 @@ def list_requirements(
         base_q = base_q.filter(Requirement.last_modified_date >= modified_date_from)
     if modified_date_to:
         base_q = base_q.filter(Requirement.last_modified_date <= modified_date_to)
+
+    if classification_subtype:
+        base_q = base_q.filter(Requirement.classification_subtype == classification_subtype)
+
+    if stale is not None:
+        base_q = base_q.filter(Requirement.stale == stale)
 
     if has_open_conflicts is not None:
         from models import conflict_record_requirements as crr_table

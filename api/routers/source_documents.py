@@ -72,6 +72,7 @@ def _doc_to_dict(doc: SourceDocument, include_text: bool = False) -> dict[str, A
         "disciplines": doc.disciplines or [],
         "has_file": doc.file_path is not None,
         "is_stub": bool(doc.is_stub),
+        "superseded_by_id": str(doc.superseded_by_id) if doc.superseded_by_id else None,
         "created_at": doc.created_at.isoformat(),
         "updated_at": doc.updated_at.isoformat(),
     }
@@ -286,3 +287,65 @@ def download_pdf(doc_id: UUID, db: Session = Depends(get_db)):
             "Content-Disposition": f'inline; filename="{doc.document_id}.pdf"'
         },
     )
+
+
+@router.post("/source-documents/{doc_id}/new-revision", status_code=201)
+def create_new_revision(
+    doc_id: UUID,
+    data: SourceDocumentCreate,
+    db: Session = Depends(get_db),
+):
+    """Register a new revision of an existing document.
+
+    Creates a new source_documents row for the new revision, links the old
+    document to it via superseded_by_id, then bulk-marks all requirements
+    derived from the old document as stale=True so engineers know to review them.
+
+    This is intentionally non-destructive: the old document and its requirements
+    remain in the database — the stale flag is the signal, not deletion.
+    """
+    old_doc = db.get(SourceDocument, doc_id)
+    if not old_doc:
+        raise HTTPException(status_code=404, detail="Source document not found")
+    if old_doc.superseded_by_id:
+        raise HTTPException(
+            status_code=409,
+            detail="This document has already been superseded by a newer revision.",
+        )
+
+    # Create the new revision document
+    new_doc = SourceDocument(
+        document_id=data.document_id,
+        title=data.title,
+        document_type=data.document_type,
+        revision=data.revision,
+        issuing_organization=data.issuing_organization,
+        disciplines=data.disciplines,
+    )
+    db.add(new_doc)
+    try:
+        db.flush()  # assigns new_doc.id without committing
+    except IntegrityError:
+        db.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail=f"A document with ID '{data.document_id}' already exists.",
+        )
+
+    # Link old → new
+    old_doc.superseded_by_id = new_doc.id
+    old_doc.updated_at = datetime.utcnow()
+
+    # Bulk-mark all requirements derived from the old document as stale
+    stale_count = (
+        db.query(Requirement)
+        .filter(Requirement.source_document_id == old_doc.id)
+        .update({"stale": True}, synchronize_session=False)
+    )
+
+    db.commit()
+    db.refresh(new_doc)
+
+    result = _full_response(new_doc, db)
+    result["stale_requirements_flagged"] = stale_count
+    return result

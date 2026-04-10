@@ -78,6 +78,7 @@ class CandidateOut(BaseModel):
     statement: str
     source_clause: Optional[str]
     suggested_classification: Optional[str]
+    suggested_classification_subtype: Optional[str]
     suggested_discipline: Optional[str]
     status: str
     accepted_requirement_id: Optional[str]
@@ -95,10 +96,11 @@ class CandidateUpdate(BaseModel):
 
 class AcceptCandidateRequest(BaseModel):
     owner: str
-    title: Optional[str] = None          # override suggested title
-    statement: Optional[str] = None      # override suggested statement
-    classification: Optional[str] = None # override suggested classification
-    discipline: Optional[str] = None     # override suggested discipline
+    title: Optional[str] = None                  # override suggested title
+    statement: Optional[str] = None              # override suggested statement
+    classification: Optional[str] = None         # override suggested classification
+    classification_subtype: Optional[str] = None # override suggested subtype
+    discipline: Optional[str] = None             # override suggested discipline
     hierarchy_node_ids: List[str] = []
     site_ids: List[str] = []
     unit_ids: List[str] = []
@@ -134,6 +136,7 @@ def _candidate_to_dict(c: ExtractionCandidate) -> dict:
         "statement": c.statement,
         "source_clause": c.source_clause,
         "suggested_classification": c.suggested_classification,
+        "suggested_classification_subtype": c.suggested_classification_subtype,
         "suggested_discipline": c.suggested_discipline,
         "status": c.status,
         "accepted_requirement_id": str(c.accepted_requirement_id) if c.accepted_requirement_id else None,
@@ -486,6 +489,7 @@ def extract(
             statement=raw["statement"],
             source_clause=raw.get("source_clause"),
             suggested_classification=raw.get("suggested_classification", "Requirement"),
+            suggested_classification_subtype=raw.get("suggested_classification_subtype"),
             suggested_discipline=raw.get("suggested_discipline", "General"),
             status="Pending",
             accepted_requirement_id=None,
@@ -566,6 +570,7 @@ def accept_candidate(
     title = (body.title or c.title)[:120]
     statement = body.statement or c.statement
     classification = body.classification or c.suggested_classification or "Requirement"
+    classification_subtype = body.classification_subtype or c.suggested_classification_subtype
     discipline = body.discipline or c.suggested_discipline or "General"
 
     req_id = _next_requirement_id(discipline, db)
@@ -597,6 +602,7 @@ def accept_candidate(
         title=title,
         statement=statement,
         classification=classification,
+        classification_subtype=classification_subtype,
         owner=body.owner,
         source_type="Derived from Document",
         status="Draft",

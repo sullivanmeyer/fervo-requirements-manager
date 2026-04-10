@@ -26,12 +26,25 @@ class SourceDocument(Base):
     extracted_text = Column(Text, nullable=True)
     # True = auto-detected reference stub; cleared when user saves real metadata
     is_stub = Column(Boolean, default=False, nullable=False)
+    # When this document is superseded, point to the newer revision
+    superseded_by_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("source_documents.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(
         DateTime,
         default=datetime.utcnow,
         onupdate=datetime.utcnow,
         nullable=False,
+    )
+
+    superseded_by = relationship(
+        "SourceDocument",
+        remote_side="SourceDocument.id",
+        foreign_keys=[superseded_by_id],
+        backref=backref("superseded_documents", lazy="select"),
     )
 
 
@@ -180,6 +193,8 @@ class Requirement(Base):
         nullable=True,
     )
     source_clause = Column(Text, nullable=True)
+    classification_subtype = Column(Text, nullable=True)
+    stale = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(
         DateTime,
@@ -299,6 +314,7 @@ class ExtractionCandidate(Base):
     statement = Column(Text, nullable=False)
     source_clause = Column(Text, nullable=True)
     suggested_classification = Column(Text, nullable=True)   # Requirement / Guideline
+    suggested_classification_subtype = Column(Text, nullable=True)
     suggested_discipline = Column(Text, nullable=True)
     # Pending / Accepted / Rejected / Edited
     status = Column(Text, nullable=False, default="Pending")

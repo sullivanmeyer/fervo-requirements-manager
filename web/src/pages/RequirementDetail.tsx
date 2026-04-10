@@ -53,6 +53,10 @@ import TagInput from '../components/TagInput'
 // ---------------------------------------------------------------------------
 
 const CLASSIFICATIONS = ['Requirement', 'Guideline']
+const CLASSIFICATION_SUBTYPES: Record<string, string[]> = {
+  Requirement: ['Performance Requirement', 'Design Requirement', 'Derived Requirement'],
+  Guideline: ['Lesson Learned', 'Procedure', 'Code'],
+}
 const SOURCE_TYPES = ['Manual Entry', 'Derived from Document']
 const STATUSES = ['Draft', 'Under Review', 'Approved', 'Superseded', 'Withdrawn']
 const DISCIPLINES = [
@@ -96,6 +100,7 @@ interface FormState {
   title: string
   statement: string
   classification: string
+  classification_subtype: string
   owner: string
   source_type: string
   status: string
@@ -122,6 +127,7 @@ function emptyForm(userName: string, initialStatement = '', initialSourceDocumen
     title: '',
     statement: initialStatement,
     classification: 'Requirement',
+    classification_subtype: '',
     owner: userName,
     source_type: initialSourceDocumentId ? 'Derived from Document' : 'Manual Entry',
     status: 'Draft',
@@ -147,6 +153,7 @@ function formFromDetail(req: ReqDetail): FormState {
     title: req.title,
     statement: req.statement,
     classification: req.classification,
+    classification_subtype: req.classification_subtype ?? '',
     owner: req.owner,
     source_type: req.source_type,
     status: req.status,
@@ -362,6 +369,9 @@ export default function RequirementDetail({
   const [conflictSaving, setConflictSaving] = useState(false)
   const [conflictError, setConflictError] = useState<string | null>(null)
 
+  // Stale flag (separate from form state — not editable by users directly)
+  const [reqStale, setReqStale] = useState(false)
+
   // Gap analysis state
   const [gapAnalysis, setGapAnalysis] = useState<GapAnalysisResult | null>(null)
   const [gapLoading, setGapLoading] = useState(false)
@@ -394,6 +404,7 @@ export default function RequirementDetail({
             fetchAttachments(requirementId!),
           ])
           setForm(formFromDetail(req))
+          setReqStale(req.stale ?? false)
           setExistingReqId(req.requirement_id)
           setSavedDbId(req.id)
 
@@ -454,6 +465,8 @@ export default function RequirementDetail({
       change_history: form.change_history || undefined,
       rationale: form.rationale || undefined,
       verification_method: form.verification_method || undefined,
+      // Empty string means "no subtype" — send null so the DB stores NULL
+      classification_subtype: form.classification_subtype || null,
     }
 
     try {
@@ -649,6 +662,19 @@ export default function RequirementDetail({
         </div>
       </div>
 
+      {/* Stale banner */}
+      {reqStale && (
+        <div className="px-4 py-2 bg-amber-50 border-b border-amber-200 text-sm text-amber-800 flex items-center gap-2 shrink-0">
+          <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+          </svg>
+          <span>
+            <strong>Stale requirement</strong> — the source document this was derived from has been superseded by a new revision.
+            Review this requirement and update or re-approve as needed.
+          </span>
+        </div>
+      )}
+
       {/* Error banner */}
       {error && (
         <div className="px-4 py-2 bg-red-50 border-b border-red-200 text-sm text-red-700">
@@ -679,8 +705,23 @@ export default function RequirementDetail({
                 <SelectInput
                   value={form.classification}
                   options={CLASSIFICATIONS}
-                  onChange={(v) => set('classification', v)}
+                  onChange={(v) => {
+                    set('classification', v)
+                    set('classification_subtype', '')  // clear subtype when classification changes
+                  }}
                 />
+              </Field>
+              <Field label="Classification Subtype">
+                <select
+                  value={form.classification_subtype}
+                  onChange={(e) => set('classification_subtype', e.target.value)}
+                  className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white"
+                >
+                  <option value="">— None —</option>
+                  {(CLASSIFICATION_SUBTYPES[form.classification] ?? []).map((opt) => (
+                    <option key={opt} value={opt}>{opt}</option>
+                  ))}
+                </select>
               </Field>
               <Field label="Discipline" required>
                 <SelectInput
@@ -999,7 +1040,10 @@ export default function RequirementDetail({
                 <div className="space-y-4">
                   <p className="text-xs text-gray-400">
                     Showing hierarchy nodes tagged with <strong>{gapAnalysis.requirement.discipline}</strong> discipline (or universal).
-                    Covered = at least one direct child requirement assigned to that node.
+                    {gapAnalysis.requirement.classification_subtype && (
+                      <> Requirement type: <strong>{gapAnalysis.requirement.classification_subtype}</strong>.</>
+                    )}
+                    {' '}Covered = at least one direct child requirement assigned to that node.
                   </p>
                   <div className="grid grid-cols-2 gap-4">
                     {/* Covered */}

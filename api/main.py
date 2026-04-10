@@ -13,6 +13,7 @@ import routers.extraction as extraction
 import routers.document_references as document_references
 import routers.reports as reports
 import routers.search as search
+import routers.export as export_router
 
 
 @asynccontextmanager
@@ -47,6 +48,7 @@ app.include_router(extraction.router, prefix="/api", tags=["extraction"])
 app.include_router(document_references.router, prefix="/api", tags=["document-references"])
 app.include_router(reports.router, prefix="/api", tags=["reports"])
 app.include_router(search.router, prefix="/api", tags=["search"])
+app.include_router(export_router.router, prefix="/api", tags=["export"])
 
 
 @app.get("/health")

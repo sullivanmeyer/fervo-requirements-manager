@@ -59,8 +59,10 @@ export interface RequirementListItem {
   requirement_id: string
   title: string
   classification: string
+  classification_subtype: string | null
   owner: string
   status: string
+  stale: boolean
   discipline: string
   created_by: string
   created_date: string
@@ -120,6 +122,7 @@ export interface SourceDocumentListItem {
   disciplines: string[]
   has_file: boolean
   is_stub: boolean
+  superseded_by_id: string | null
   created_at: string
   updated_at: string
 }
@@ -154,6 +157,7 @@ export interface RequirementCreatePayload {
   title: string
   statement: string
   classification: string
+  classification_subtype?: string | null
   owner: string
   source_type: string
   status: string
@@ -263,6 +267,7 @@ export interface ExtractionCandidate {
   statement: string
   source_clause: string | null
   suggested_classification: string | null
+  suggested_classification_subtype: string | null
   suggested_discipline: string | null
   status: 'Pending' | 'Accepted' | 'Rejected' | 'Edited'
   accepted_requirement_id: string | null
@@ -277,10 +282,25 @@ export interface OrphanRequirement {
   id: string
   requirement_id: string
   title: string
+  classification: string
+  classification_subtype: string | null
   discipline: string
   status: string
   owner: string
   hierarchy_nodes: { id: string; name: string }[]
+}
+
+export interface ExportParams {
+  format: 'word' | 'pdf'
+  doc_title?: string
+  status?: string[]
+  classification?: string
+  classification_subtype?: string
+  discipline?: string[]
+  owner?: string
+  hierarchy_node_id?: string
+  include_descendants?: boolean
+  stale?: boolean
 }
 
 export interface GapNodeStub {

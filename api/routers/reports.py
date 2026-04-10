@@ -24,6 +24,8 @@ def _req_stub(r: Requirement) -> dict[str, Any]:
         "id": str(r.id),
         "requirement_id": r.requirement_id,
         "title": r.title,
+        "classification": r.classification,
+        "classification_subtype": r.classification_subtype,
         "discipline": r.discipline,
         "status": r.status,
         "owner": r.owner,

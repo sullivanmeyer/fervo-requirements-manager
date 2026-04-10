@@ -1,4 +1,5 @@
 import type {
+  ExportParams,
   RequirementCreatePayload,
   RequirementDetail,
   RequirementLink,
@@ -105,6 +106,8 @@ export type FilterConfig = {
   modified_date_from?: string
   modified_date_to?: string
   has_open_conflicts?: boolean
+  classification_subtype?: string
+  stale?: boolean
 }
 
 export async function fetchRequirementsFiltered(
@@ -134,6 +137,8 @@ export async function fetchRequirementsFiltered(
   if (filters.modified_date_from) params.set('modified_date_from', filters.modified_date_from)
   if (filters.modified_date_to) params.set('modified_date_to', filters.modified_date_to)
   if (filters.has_open_conflicts !== undefined) params.set('has_open_conflicts', String(filters.has_open_conflicts))
+  if (filters.classification_subtype) params.set('classification_subtype', filters.classification_subtype)
+  if (filters.stale !== undefined) params.set('stale', String(filters.stale))
 
   const res = await fetch(`${BASE}/requirements?${params.toString()}`)
   if (!res.ok) throw new Error(`Failed to load requirements (${res.status})`)
@@ -197,4 +202,26 @@ export async function fetchUnits(): Promise<Unit[]> {
   const res = await fetch(`${BASE}/units`)
   if (!res.ok) throw new Error(`Failed to load units (${res.status})`)
   return res.json() as Promise<Unit[]>
+}
+
+/**
+ * Trigger a requirements document export and download the file.
+ * This bypasses fetch and uses a direct URL navigation so the browser
+ * handles the Save As dialog automatically — the same pattern as PDF download.
+ */
+export function exportRequirementsDocument(params: ExportParams): void {
+  const qs = new URLSearchParams()
+  qs.set('format', params.format)
+  if (params.doc_title) qs.set('doc_title', params.doc_title)
+  if (params.status?.length) params.status.forEach((v) => qs.append('status', v))
+  if (params.classification) qs.set('classification', params.classification)
+  if (params.classification_subtype) qs.set('classification_subtype', params.classification_subtype)
+  if (params.discipline?.length) params.discipline.forEach((v) => qs.append('discipline', v))
+  if (params.owner) qs.set('owner', params.owner)
+  if (params.hierarchy_node_id) {
+    qs.set('hierarchy_node_id', params.hierarchy_node_id)
+    qs.set('include_descendants', String(params.include_descendants ?? false))
+  }
+  if (params.stale !== undefined) qs.set('stale', String(params.stale))
+  window.open(`${BASE}/export/requirements-document?${qs.toString()}`, '_blank')
 }

@@ -111,6 +111,8 @@ export default function OrphanReport({ onOpenRequirement }: Props) {
               <tr className="border-b border-gray-200 bg-gray-50 sticky top-0">
                 <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider w-28">ID</th>
                 <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider">Title</th>
+                <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider w-28">Classification</th>
+                <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider w-36">Subtype</th>
                 <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider w-24">Discipline</th>
                 <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider w-24">Status</th>
                 <th className="px-4 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider w-32">Owner</th>
@@ -128,6 +130,10 @@ export default function OrphanReport({ onOpenRequirement }: Props) {
                     {req.requirement_id}
                   </td>
                   <td className="px-4 py-2.5 text-sm text-gray-800">{req.title}</td>
+                  <td className="px-4 py-2.5 text-xs text-gray-600">{req.classification}</td>
+                  <td className="px-4 py-2.5 text-xs text-gray-500 italic">
+                    {req.classification_subtype ?? '—'}
+                  </td>
                   <td className="px-4 py-2.5 text-xs text-gray-600">{req.discipline}</td>
                   <td className="px-4 py-2.5">
                     <span className={`text-xs px-2 py-0.5 rounded-full font-medium ${
