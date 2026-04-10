@@ -135,20 +135,44 @@ def get_gaps(
         )
         covered_node_ids = {str(row[0]) for row in rows}
 
-    # All non-archived hierarchy nodes — filter by discipline compatibility
-    all_nodes = (
-        db.query(HierarchyNode)
-        .filter(HierarchyNode.archived == False)  # noqa: E712
-        .order_by(HierarchyNode.name)
-        .all()
-    )
+    # Scope: only descendants of the nodes the requirement is assigned to.
+    # A requirement that "controls the ACC" should only surface gaps within
+    # the ACC subtree — not the entire plant hierarchy.
+    assigned_node_ids = {str(n.id) for n in req.hierarchy_nodes}
+    if not assigned_node_ids:
+        # Requirement isn't placed in the hierarchy at all — nothing to analyze.
+        return {"requirement": _req_stub(req), "covered": [], "gaps": []}
+
+    # BFS to collect all descendant node IDs (including the assigned nodes themselves)
+    all_nodes_index: dict[str, HierarchyNode] = {
+        str(n.id): n
+        for n in db.query(HierarchyNode).filter(HierarchyNode.archived == False).all()  # noqa: E712
+    }
+    # Build parent→children map
+    children_map: dict[str, list[str]] = {nid: [] for nid in all_nodes_index}
+    for n in all_nodes_index.values():
+        if n.parent_id and str(n.parent_id) in children_map:
+            children_map[str(n.parent_id)].append(str(n.id))
+
+    scope_ids: set[str] = set()
+    queue = list(assigned_node_ids)
+    while queue:
+        nid = queue.pop()
+        if nid in scope_ids:
+            continue
+        scope_ids.add(nid)
+        queue.extend(children_map.get(nid, []))
 
     req_discipline = req.discipline
     relevant_nodes = [
-        n for n in all_nodes
-        if not (n.applicable_disciplines or [])  # null/empty = universal
-        or req_discipline in (n.applicable_disciplines or [])
+        all_nodes_index[nid] for nid in scope_ids
+        if nid in all_nodes_index
+        and (
+            not (all_nodes_index[nid].applicable_disciplines or [])  # universal
+            or req_discipline in (all_nodes_index[nid].applicable_disciplines or [])
+        )
     ]
+    relevant_nodes.sort(key=lambda n: n.name)
 
     covered = [n for n in relevant_nodes if str(n.id) in covered_node_ids]
     gaps = [n for n in relevant_nodes if str(n.id) not in covered_node_ids]
