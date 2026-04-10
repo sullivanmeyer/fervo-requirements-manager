@@ -19,9 +19,10 @@ depends_on = None
 
 def upgrade() -> None:
     # Requirements: title + statement + rationale + owner + tags
+    # Cast 'english' to regconfig so PostgreSQL recognises the expression as IMMUTABLE.
     op.execute(sa.text("""
         CREATE INDEX idx_requirements_fts ON requirements USING GIN (
-            to_tsvector('english',
+            to_tsvector('english'::regconfig,
                 coalesce(title, '') || ' ' ||
                 coalesce(statement, '') || ' ' ||
                 coalesce(rationale, '') || ' ' ||
@@ -34,7 +35,7 @@ def upgrade() -> None:
     # Source documents: title + document_id
     op.execute(sa.text("""
         CREATE INDEX idx_source_documents_fts ON source_documents USING GIN (
-            to_tsvector('english', coalesce(title, '') || ' ' || coalesce(document_id, ''))
+            to_tsvector('english'::regconfig, coalesce(title, '') || ' ' || coalesce(document_id, ''))
         )
     """))
 

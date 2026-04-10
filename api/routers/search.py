@@ -16,7 +16,7 @@ SELF_DERIVED_ID = "SELF-000"
 # ---------------------------------------------------------------------------
 
 _REQ_TSVEC = """
-    to_tsvector('english',
+    to_tsvector('english'::regconfig,
         coalesce(title, '') || ' ' ||
         coalesce(statement, '') || ' ' ||
         coalesce(rationale, '') || ' ' ||
@@ -26,7 +26,7 @@ _REQ_TSVEC = """
 """
 
 _DOC_TSVEC = """
-    to_tsvector('english', coalesce(title, '') || ' ' || coalesce(document_id, ''))
+    to_tsvector('english'::regconfig, coalesce(title, '') || ' ' || coalesce(document_id, ''))
 """
 
 
