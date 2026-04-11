@@ -79,7 +79,7 @@ const STATUS_CLASSES: Record<string, string> = {
 const STATUSES = ['Draft', 'Under Review', 'Approved', 'Superseded', 'Withdrawn']
 const CLASSIFICATIONS = ['Requirement', 'Guideline']
 const SOURCE_TYPES = ['Manual Entry', 'Derived from Document']
-const DISCIPLINES = ['Mechanical', 'Electrical', 'I&C', 'Civil/Structural', 'Process', 'Fire Protection', 'General']
+const DISCIPLINES = ['Mechanical', 'Electrical', 'I&C', 'Civil/Structural', 'Process', 'Fire Protection', 'General', 'Build', 'Operations']
 
 // ---------------------------------------------------------------------------
 // Helpers
