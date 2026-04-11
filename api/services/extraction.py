@@ -136,7 +136,12 @@ Rules:
                     | "Code" (reference to industry codes, standards, handbooks,
                         engineering equations, computer programs)
     suggested_discipline              : one of Mechanical / Electrical / I&C /
-                                        Civil/Structural / Process / Fire Protection / General
+                                        Civil/Structural / Process / Fire Protection / General /
+                                        Build / Operations
+                                        (Build covers fabrication, construction, installation,
+                                        assembly, quality hold points; Operations covers startup,
+                                        shutdown, maintenance, inspection intervals, operating
+                                        procedures)
     source_block_index                : 0-based index of the block in the list below
 
 Return ONLY a JSON array.  If no requirements are found, return [].

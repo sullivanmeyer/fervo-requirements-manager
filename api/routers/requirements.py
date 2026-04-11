@@ -28,6 +28,8 @@ DISCIPLINE_PREFIXES: dict[str, str] = {
     "Process": "PROC",
     "Fire Protection": "FP",
     "General": "GEN",
+    "Build": "BUILD",
+    "Operations": "OPS",
 }
 
 
@@ -167,6 +169,9 @@ def _requirement_to_dict(
                 "rationale": req.rationale,
                 "verification_method": req.verification_method,
                 "tags": req.tags or [],
+                "comments": req.comments,
+                "superseded_by_id": str(req.superseded_by_id) if req.superseded_by_id else None,
+                "superseded_by_req_id": req.superseded_by.requirement_id if req.superseded_by else None,
                 "created_at": req.created_at.isoformat(),
                 "updated_at": req.updated_at.isoformat(),
                 "parent_requirements": parent_reqs,
@@ -514,3 +519,140 @@ def update_requirement(
     db.commit()
     db.refresh(req)
     return _requirement_to_dict(req, detail=True, db=db)
+
+
+# ---------------------------------------------------------------------------
+# Discipline transfer
+# ---------------------------------------------------------------------------
+
+@router.post("/requirements/{req_id}/transfer-discipline", status_code=201)
+def transfer_discipline(
+    req_id: UUID,
+    target_discipline: str,
+    db: Session = Depends(get_db),
+):
+    """
+    Transfer a requirement to a different discipline.
+
+    Because requirement IDs are discipline-prefixed (MECH-001, ELEC-003, …) a
+    discipline change requires a new ID.  This endpoint atomically:
+      1. Creates a new requirement under the target discipline with all fields,
+         relationships, and traceability links copied from the original.
+      2. Sets the original requirement's status to Superseded and records the
+         new requirement ID in superseded_by_id.
+
+    The entire operation runs in a single transaction; any failure rolls back.
+    Returns the new requirement's full detail dict.
+    """
+    original = db.get(Requirement, req_id)
+    if not original:
+        raise HTTPException(status_code=404, detail="Requirement not found")
+    if original.requirement_id == SELF_DERIVED_ID:
+        raise HTTPException(status_code=403, detail="Cannot transfer the Self-Derived record")
+    if target_discipline not in DISCIPLINE_PREFIXES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown discipline '{target_discipline}'. Valid values: {', '.join(DISCIPLINE_PREFIXES)}",
+        )
+    if target_discipline == original.discipline:
+        raise HTTPException(status_code=400, detail="Target discipline is the same as the current discipline")
+
+    new_req_id = _generate_requirement_id(target_discipline, db)
+
+    transfer_note = (
+        f"Transferred from {original.requirement_id} — "
+        f"discipline changed from {original.discipline} to {target_discipline}"
+    )
+    history = f"{transfer_note}\n{original.change_history}" if original.change_history else transfer_note
+
+    new_req = Requirement(
+        requirement_id=new_req_id,
+        title=original.title,
+        statement=original.statement,
+        classification=original.classification,
+        classification_subtype=original.classification_subtype,
+        owner=original.owner,
+        source_type=original.source_type,
+        status=original.status,
+        discipline=target_discipline,
+        created_by=original.created_by,
+        created_date=original.created_date,
+        last_modified_by=original.last_modified_by,
+        last_modified_date=original.last_modified_date,
+        change_history=history,
+        rationale=original.rationale,
+        verification_method=original.verification_method,
+        tags=list(original.tags) if original.tags else None,
+        source_document_id=original.source_document_id,
+        source_clause=original.source_clause,
+        comments=original.comments,
+        stale=original.stale,
+    )
+
+    # Copy M2M relationships
+    new_req.hierarchy_nodes = list(original.hierarchy_nodes)
+    new_req.sites = list(original.sites)
+    new_req.units = list(original.units)
+
+    db.add(new_req)
+    db.flush()  # assigns new_req.id without committing
+
+    # Copy parent traceability links (new_req inherits the same parents)
+    parent_links = (
+        db.query(RequirementLink)
+        .filter(RequirementLink.child_requirement_id == original.id)
+        .all()
+    )
+    for lnk in parent_links:
+        db.add(RequirementLink(
+            parent_requirement_id=lnk.parent_requirement_id,
+            child_requirement_id=new_req.id,
+        ))
+
+    # Copy child traceability links (new_req inherits the same children)
+    child_links = (
+        db.query(RequirementLink)
+        .filter(RequirementLink.parent_requirement_id == original.id)
+        .all()
+    )
+    for lnk in child_links:
+        db.add(RequirementLink(
+            parent_requirement_id=new_req.id,
+            child_requirement_id=lnk.child_requirement_id,
+        ))
+
+    # Copy conflict record associations
+    conflict_records = (
+        db.query(ConflictRecord)
+        .filter(ConflictRecord.requirements.any(Requirement.id == original.id))
+        .all()
+    )
+    for cr in conflict_records:
+        cr.requirements.append(new_req)
+
+    # Copy file attachment records (references to the same MinIO objects)
+    from models import RequirementAttachment
+    attachments = (
+        db.query(RequirementAttachment)
+        .filter(RequirementAttachment.requirement_id == original.id)
+        .all()
+    )
+    for att in attachments:
+        db.add(RequirementAttachment(
+            requirement_id=new_req.id,
+            file_name=att.file_name,
+            file_path=att.file_path,
+            file_size=att.file_size,
+            content_type=att.content_type,
+            uploaded_by=att.uploaded_by,
+            uploaded_at=att.uploaded_at,
+        ))
+
+    # Supersede the original
+    original.status = "Superseded"
+    original.superseded_by_id = new_req.id
+    original.updated_at = datetime.utcnow()
+
+    db.commit()
+    db.refresh(new_req)
+    return _requirement_to_dict(new_req, detail=True, db=db)

@@ -123,6 +123,9 @@ export interface RequirementDetail extends RequirementListItem {
   rationale: string | null
   verification_method: string | null
   tags: string[]
+  comments: string | null
+  superseded_by_id: string | null
+  superseded_by_req_id: string | null
   created_at: string
   updated_at: string
   parent_requirements: RequirementStub[]
@@ -202,6 +205,7 @@ export interface RequirementCreatePayload {
   rationale?: string
   verification_method?: string
   tags?: string[]
+  comments?: string
   hierarchy_node_ids: string[]
   site_ids: string[]
   unit_ids: string[]
