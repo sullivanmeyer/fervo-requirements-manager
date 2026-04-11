@@ -119,6 +119,8 @@ function hasActiveFilters(f: FilterConfig): boolean {
 }
 
 const EMPTY_FILTERS: FilterConfig = {}
+// On first load, hide terminal statuses — users can clear this to see everything.
+const DEFAULT_FILTERS: FilterConfig = { status: ['Draft', 'Under Review', 'Approved'] }
 
 // ---------------------------------------------------------------------------
 // Cell renderer
@@ -389,8 +391,8 @@ export default function RequirementsTable({
   // Filter state — pre-seed hierarchy filter when navigated from the block diagram
   const [filters, setFilters] = useState<FilterConfig>(
     initialHierarchyNodeId
-      ? { ...EMPTY_FILTERS, hierarchy_node_id: initialHierarchyNodeId, include_descendants: true }
-      : EMPTY_FILTERS
+      ? { ...DEFAULT_FILTERS, hierarchy_node_id: initialHierarchyNodeId, include_descendants: true }
+      : DEFAULT_FILTERS
   )
   const [ownerInput, setOwnerInput] = useState('')
   const [showFilterBar, setShowFilterBar] = useState(!!initialHierarchyNodeId)
@@ -468,7 +470,7 @@ export default function RequirementsTable({
 
   const clearFilters = () => {
     setPage(1)
-    setFilters(EMPTY_FILTERS)
+    setFilters(DEFAULT_FILTERS)
     setOwnerInput('')
   }
 
