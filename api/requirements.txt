@@ -10,3 +10,5 @@ azure-storage-blob==12.22.0
 pdfplumber==0.11.0
 python-multipart==0.0.9
 google-genai
+python-docx==1.1.2
+reportlab==4.2.2

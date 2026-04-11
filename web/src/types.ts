@@ -3,6 +3,7 @@ export interface HierarchyNode {
   parent_id: string | null
   name: string
   description: string | null
+  applicable_disciplines: string[]
   archived: boolean
   sort_order: number
   created_at: string
@@ -13,6 +14,37 @@ export interface HierarchyNode {
 export interface FlatNode {
   node: HierarchyNode
   depth: number
+}
+
+// ---------------------------------------------------------------------------
+// Block diagram (Stage 12)
+// ---------------------------------------------------------------------------
+
+export interface AncestorNode {
+  id: string
+  name: string
+}
+
+export interface BlockViewReq {
+  id: string
+  requirement_id: string
+  title: string
+  status: string
+}
+
+export interface BlockViewChild {
+  id: string
+  name: string
+  description: string | null
+  has_children: boolean
+  children_preview: string[]
+  performance_requirements: BlockViewReq[]
+}
+
+export interface BlockView {
+  node: { id: string; name: string; description: string | null }
+  performance_requirements: BlockViewReq[]
+  children: BlockViewChild[]
 }
 
 // ---------------------------------------------------------------------------
@@ -34,20 +66,41 @@ export interface Unit {
 // Requirements
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Conflict records
+// ---------------------------------------------------------------------------
+
+export interface ConflictRecord {
+  id: string
+  description: string
+  status: 'Open' | 'Under Discussion' | 'Resolved' | 'Deferred'
+  resolution_notes: string | null
+  created_by: string
+  created_at: string
+  requirements: { id: string; requirement_id: string; title: string; status: string }[]
+}
+
+// ---------------------------------------------------------------------------
+// Requirements
+// ---------------------------------------------------------------------------
+
 /** Minimal record returned in the paginated list view */
 export interface RequirementListItem {
   id: string
   requirement_id: string
   title: string
   classification: string
+  classification_subtype: string | null
   owner: string
   status: string
+  stale: boolean
   discipline: string
   created_by: string
   created_date: string
   hierarchy_nodes: { id: string; name: string }[]
   sites: { id: string; name: string }[]
   units: { id: string; name: string }[]
+  open_conflict_count: number
 }
 
 /** Minimal stub used in parent/child link lists */
@@ -74,6 +127,7 @@ export interface RequirementDetail extends RequirementListItem {
   updated_at: string
   parent_requirements: RequirementStub[]
   child_requirements: RequirementStub[]
+  conflict_records: ConflictRecord[]
 }
 
 // ---------------------------------------------------------------------------
@@ -99,6 +153,8 @@ export interface SourceDocumentListItem {
   disciplines: string[]
   has_file: boolean
   is_stub: boolean
+  archived: boolean
+  superseded_by_id: string | null
   created_at: string
   updated_at: string
 }
@@ -133,6 +189,7 @@ export interface RequirementCreatePayload {
   title: string
   statement: string
   classification: string
+  classification_subtype?: string | null
   owner: string
   source_type: string
   status: string
@@ -220,6 +277,7 @@ export interface GraphNode {
   out_count: number   // edges going out (this doc cites)
   in_count: number    // edges coming in (others cite this doc)
   is_stub: boolean    // auto-detected; not yet fully registered
+  archived: boolean   // soft-deleted; hidden from active workflows
 }
 
 export interface GraphEdge {
@@ -242,8 +300,76 @@ export interface ExtractionCandidate {
   statement: string
   source_clause: string | null
   suggested_classification: string | null
+  suggested_classification_subtype: string | null
   suggested_discipline: string | null
   status: 'Pending' | 'Accepted' | 'Rejected' | 'Edited'
   accepted_requirement_id: string | null
   created_at: string
+}
+
+// ---------------------------------------------------------------------------
+// Reports
+// ---------------------------------------------------------------------------
+
+export interface OrphanRequirement {
+  id: string
+  requirement_id: string
+  title: string
+  classification: string
+  classification_subtype: string | null
+  discipline: string
+  status: string
+  owner: string
+  hierarchy_nodes: { id: string; name: string }[]
+}
+
+export interface ExportParams {
+  format: 'word' | 'pdf'
+  doc_title?: string
+  status?: string[]
+  classification?: string
+  classification_subtype?: string
+  discipline?: string[]
+  owner?: string
+  hierarchy_node_id?: string
+  include_descendants?: boolean
+  stale?: boolean
+}
+
+export interface GapNodeStub {
+  id: string
+  name: string
+  applicable_disciplines: string[]
+  parent_id: string | null
+}
+
+export interface GapAnalysisResult {
+  requirement: OrphanRequirement
+  covered: GapNodeStub[]
+  gaps: GapNodeStub[]
+}
+
+// ---------------------------------------------------------------------------
+// Global search
+// ---------------------------------------------------------------------------
+
+export interface SearchRequirementResult {
+  id: string
+  requirement_id: string
+  title: string
+  discipline: string
+  status: string
+  owner: string
+}
+
+export interface SearchDocumentResult {
+  id: string
+  document_id: string
+  title: string
+  document_type: string
+}
+
+export interface SearchResults {
+  requirements: SearchRequirementResult[]
+  source_documents: SearchDocumentResult[]
 }

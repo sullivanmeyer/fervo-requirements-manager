@@ -118,14 +118,26 @@ Rules:
   atomic statements — one per output object.
 - Ignore boilerplate blocks entirely.
 - For each extracted requirement include:
-    title                   : concise human-readable summary (≤120 characters)
-    statement               : the full, verbatim or lightly cleaned requirement text,
-                              beginning with the subject ("The [subject] shall …")
-    source_clause           : clause_number of the source block, or null
-    suggested_classification: "Requirement" or "Guideline"
-    suggested_discipline    : one of Mechanical / Electrical / I&C /
-                              Civil/Structural / Process / Fire Protection / General
-    source_block_index      : 0-based index of the block in the list below
+    title                             : concise human-readable summary (≤120 characters)
+    statement                         : the full, verbatim or lightly cleaned requirement text,
+                                        beginning with the subject ("The [subject] shall …")
+    source_clause                     : clause_number of the source block, or null
+    suggested_classification          : "Requirement" or "Guideline"
+    suggested_classification_subtype  : one of the following, based on classification:
+      If Requirement → "Performance Requirement" (plant-peculiar what's: reliability,
+                          capacity, operating envelopes, throughput)
+                      | "Design Requirement" (standards, margins, redundancy, material
+                          specs, safety factors, interface constraints from codes)
+                      | "Derived Requirement" (requirements that evolve during design
+                          to meet performance requirements: e.g. load relief controls,
+                          interface control specs)
+      If Guideline  → "Lesson Learned" (experience-based guidance, historical knowledge)
+                    | "Procedure" (steps, methods, fabrication/inspection sequences)
+                    | "Code" (reference to industry codes, standards, handbooks,
+                        engineering equations, computer programs)
+    suggested_discipline              : one of Mechanical / Electrical / I&C /
+                                        Civil/Structural / Process / Fire Protection / General
+    source_block_index                : 0-based index of the block in the list below
 
 Return ONLY a JSON array.  If no requirements are found, return [].
 

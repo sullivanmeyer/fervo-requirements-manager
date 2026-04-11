@@ -20,6 +20,11 @@ DOCUMENT_TYPES = {
 }
 
 CLASSIFICATIONS = {"Requirement", "Guideline"}
+
+CLASSIFICATION_SUBTYPES: dict[str, list[str]] = {
+    "Requirement": ["Performance Requirement", "Design Requirement", "Derived Requirement"],
+    "Guideline": ["Lesson Learned", "Procedure", "Code"],
+}
 SOURCE_TYPES = {"Manual Entry", "Derived from Document"}
 STATUSES = {"Draft", "Under Review", "Approved", "Superseded", "Withdrawn"}
 DISCIPLINES = {
@@ -98,6 +103,7 @@ class HierarchyNodeCreate(BaseModel):
     description: Optional[str] = None
     parent_id: Optional[UUID] = None
     sort_order: int = 0
+    applicable_disciplines: Optional[List[str]] = None
 
 
 class HierarchyNodeUpdate(BaseModel):
@@ -105,6 +111,7 @@ class HierarchyNodeUpdate(BaseModel):
     description: Optional[str] = None
     parent_id: Optional[UUID] = None
     sort_order: Optional[int] = None
+    applicable_disciplines: Optional[List[str]] = None
 
 
 # ---------------------------------------------------------------------------
@@ -129,6 +136,7 @@ class RequirementCreate(BaseModel):
     tags: Optional[List[str]] = None
     source_document_id: Optional[UUID] = None
     source_clause: Optional[str] = None
+    classification_subtype: Optional[str] = None
     hierarchy_node_ids: List[UUID] = []
     site_ids: List[UUID] = []
     unit_ids: List[UUID] = []
@@ -175,6 +183,13 @@ class RequirementCreate(BaseModel):
             raise ValueError(
                 "source_document_id is required when source_type is 'Derived from Document'"
             )
+        if self.classification_subtype is not None:
+            valid = CLASSIFICATION_SUBTYPES.get(self.classification, [])
+            if self.classification_subtype not in valid:
+                raise ValueError(
+                    f"classification_subtype '{self.classification_subtype}' is not valid for "
+                    f"classification '{self.classification}'. Valid options: {', '.join(valid)}"
+                )
 
 
 class RequirementUpdate(BaseModel):
@@ -195,6 +210,8 @@ class RequirementUpdate(BaseModel):
     tags: Optional[List[str]] = None
     source_document_id: Optional[UUID] = None
     source_clause: Optional[str] = None
+    classification_subtype: Optional[str] = None
+    stale: Optional[bool] = None
     hierarchy_node_ids: Optional[List[UUID]] = None
     site_ids: Optional[List[UUID]] = None
     unit_ids: Optional[List[UUID]] = None

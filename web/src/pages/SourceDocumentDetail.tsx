@@ -19,6 +19,7 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import {
+  archiveSourceDocument,
   createSourceDocument,
   fetchSourceDocument,
   fetchSourceDocuments,
@@ -221,6 +222,7 @@ export default function SourceDocumentDetail({
   const [addRefContext, setAddRefContext] = useState('')
   const [savingRef, setSavingRef] = useState(false)
   const [detectingRefs, setDetectingRefs] = useState(false)
+
 
   // Inline edit state for "Edit & Accept"
   const [editingCandidateId, setEditingCandidateId] = useState<string | null>(null)
@@ -592,6 +594,25 @@ export default function SourceDocumentDetail({
           {isNew ? 'Register Document' : (doc?.document_id ?? documentId)}
         </span>
         <div className="ml-auto flex gap-2">
+          {!isNew && doc && (
+            <button
+              onClick={async () => {
+                try {
+                  const updated = await archiveSourceDocument(doc.id, !doc.archived)
+                  setDoc(updated)
+                } catch (e) {
+                  setError(e instanceof Error ? e.message : 'Failed to update archive status')
+                }
+              }}
+              className={`px-3 py-1.5 text-sm border rounded ${
+                doc.archived
+                  ? 'border-gray-300 text-gray-600 hover:bg-gray-50'
+                  : 'border-red-200 text-red-600 hover:bg-red-50'
+              }`}
+            >
+              {doc.archived ? 'Restore Document' : 'Archive Document'}
+            </button>
+          )}
           <button
             onClick={onCancel}
             className="px-3 py-1.5 text-sm border border-gray-300 text-gray-600 rounded hover:bg-gray-50"
@@ -607,6 +628,18 @@ export default function SourceDocumentDetail({
           </button>
         </div>
       </div>
+
+      {doc?.archived && (
+        <div className="px-4 py-2 bg-gray-100 border-b border-gray-300 text-sm text-gray-600 flex items-center gap-2">
+          <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8l1 12a2 2 0 002 2h8a2 2 0 002-2L19 8" />
+          </svg>
+          <span>
+            <strong>Archived document.</strong> This document is hidden from active workflows.
+            Existing requirement links are preserved. Use "Restore Document" to make it active again.
+          </span>
+        </div>
+      )}
 
       {doc?.is_stub && (
         <div className="px-4 py-2 bg-amber-50 border-b border-amber-200 text-sm text-amber-800 flex items-center gap-2">
@@ -678,6 +711,11 @@ export default function SourceDocumentDetail({
               placeholder="7th Edition, Rev 2, etc."
               className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
             />
+            {!isNew && doc && form.revision && form.revision !== (doc.revision ?? '') && (
+              <p className="mt-1 text-xs text-amber-600">
+                Saving a new revision value will flag all derived requirements as stale.
+              </p>
+            )}
           </Field>
 
           <Field label="Issuing Organization">
@@ -736,6 +774,7 @@ export default function SourceDocumentDetail({
               </button>
             </div>
           )}
+
 
           {/* Linked requirements list */}
           {!isNew && doc && doc.linked_requirements.length > 0 && (
@@ -1061,6 +1100,11 @@ export default function SourceDocumentDetail({
                                             : 'bg-yellow-100 text-yellow-700'
                                         }`}>
                                           {c.suggested_classification}
+                                        </span>
+                                      )}
+                                      {c.suggested_classification_subtype && (
+                                        <span className="text-xs bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded italic">
+                                          {c.suggested_classification_subtype}
                                         </span>
                                       )}
                                       {c.suggested_discipline && (

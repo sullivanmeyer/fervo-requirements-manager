@@ -26,12 +26,28 @@ class SourceDocument(Base):
     extracted_text = Column(Text, nullable=True)
     # True = auto-detected reference stub; cleared when user saves real metadata
     is_stub = Column(Boolean, default=False, nullable=False)
+    # Soft-delete: archived documents are hidden from active workflows but
+    # retained so that requirement traceability links remain intact
+    archived = Column(Boolean, default=False, nullable=False)
+    # When this document is superseded, point to the newer revision
+    superseded_by_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("source_documents.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(
         DateTime,
         default=datetime.utcnow,
         onupdate=datetime.utcnow,
         nullable=False,
+    )
+
+    superseded_by = relationship(
+        "SourceDocument",
+        remote_side="SourceDocument.id",
+        foreign_keys=[superseded_by_id],
+        backref=backref("superseded_documents", lazy="select"),
     )
 
 
@@ -50,6 +66,7 @@ class HierarchyNode(Base):
     )
     name = Column(Text, nullable=False)
     description = Column(Text, nullable=True)
+    applicable_disciplines = Column(ARRAY(Text), nullable=True)
     archived = Column(Boolean, default=False, nullable=False)
     sort_order = Column(Integer, default=0, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -179,6 +196,8 @@ class Requirement(Base):
         nullable=True,
     )
     source_clause = Column(Text, nullable=True)
+    classification_subtype = Column(Text, nullable=True)
+    stale = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(
         DateTime,
@@ -298,6 +317,7 @@ class ExtractionCandidate(Base):
     statement = Column(Text, nullable=False)
     source_clause = Column(Text, nullable=True)
     suggested_classification = Column(Text, nullable=True)   # Requirement / Guideline
+    suggested_classification_subtype = Column(Text, nullable=True)
     suggested_discipline = Column(Text, nullable=True)
     # Pending / Accepted / Rejected / Edited
     status = Column(Text, nullable=False, default="Pending")
@@ -378,4 +398,56 @@ class RequirementLink(Base):
             "parent_requirement_id != child_requirement_id",
             name="ck_requirement_links_no_self_loop",
         ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Conflict records
+# ---------------------------------------------------------------------------
+
+conflict_record_requirements = Table(
+    "conflict_record_requirements",
+    Base.metadata,
+    Column(
+        "conflict_record_id",
+        UUID(as_uuid=True),
+        ForeignKey("conflict_records.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column(
+        "requirement_id",
+        UUID(as_uuid=True),
+        ForeignKey("requirements.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+)
+
+
+class ConflictRecord(Base):
+    """
+    A flagged contradiction between two or more requirements.
+    Lifecycle: Open → Under Discussion → Resolved / Deferred.
+    Soft-deleted via archived flag (never physically removed).
+    """
+    __tablename__ = "conflict_records"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    description = Column(Text, nullable=False)
+    # Open / Under Discussion / Resolved / Deferred
+    status = Column(Text, nullable=False, default="Open")
+    resolution_notes = Column(Text, nullable=True)
+    created_by = Column(Text, nullable=False)
+    archived = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    requirements = relationship(
+        "Requirement",
+        secondary=conflict_record_requirements,
+        lazy="joined",
     )

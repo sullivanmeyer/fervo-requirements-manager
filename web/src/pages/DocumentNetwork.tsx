@@ -355,7 +355,7 @@ export default function DocumentNetwork({ focusDocumentId, onOpenDocument }: Pro
       const isSelected = n.id === selId
       const isDimmed = hovId && !connectedIds.has(n.id)
 
-      ctx.globalAlpha = isDimmed ? 0.2 : 1
+      ctx.globalAlpha = isDimmed ? 0.2 : n.archived ? 0.35 : 1
       const color = nodeColor(n.document_type, n.is_stub)
 
       // Shadow / glow for selected
@@ -370,10 +370,11 @@ export default function DocumentNetwork({ focusDocumentId, onOpenDocument }: Pro
       ctx.fillStyle = color
       ctx.fill()
 
-      // Stroke — stubs get a dashed border to signal "not yet registered"
+      // Stroke — stubs: dashed border; archived: longer dash pattern
       ctx.lineWidth = isSelected ? 3 : isHovered ? 2 : 1.5
       ctx.strokeStyle = isSelected ? '#fff' : isHovered ? '#fff' : n.is_stub ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.5)'
-      if (n.is_stub) ctx.setLineDash([4, 3])
+      if (n.archived) ctx.setLineDash([6, 4])
+      else if (n.is_stub) ctx.setLineDash([4, 3])
       ctx.stroke()
       ctx.setLineDash([])
 
@@ -720,7 +721,7 @@ export default function DocumentNetwork({ focusDocumentId, onOpenDocument }: Pro
           <div className="px-4 py-3 border-b border-gray-200 flex items-start gap-2">
             <span
               className="w-3 h-3 rounded-full mt-0.5 shrink-0"
-              style={{ backgroundColor: nodeColor(selectedNode.document_type) }}
+              style={{ backgroundColor: nodeColor(selectedNode.document_type, selectedNode.is_stub) }}
             />
             <div className="flex-1 min-w-0">
               <p className="text-sm font-semibold text-gray-800 break-words leading-tight">

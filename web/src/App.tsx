@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { fetchHierarchy } from './api/hierarchy'
-import type { FlatNode, HierarchyNode } from './types'
+import { globalSearch } from './api/search'
+import type { FlatNode, HierarchyNode, SearchResults } from './types'
 import HierarchyTree from './components/HierarchyTree'
 import SidePanel from './components/SidePanel'
 import UserIdentity from './components/UserIdentity'
@@ -11,6 +12,7 @@ import BlockDiagram from './pages/BlockDiagram'
 import SourceDocumentRegistry from './pages/SourceDocumentRegistry'
 import SourceDocumentDetail from './pages/SourceDocumentDetail'
 import DocumentNetwork from './pages/DocumentNetwork'
+import OrphanReport from './pages/OrphanReport'
 
 export function flattenTree(nodes: HierarchyNode[], depth = 0): FlatNode[] {
   const result: FlatNode[] = []
@@ -27,12 +29,151 @@ export function flattenTree(nodes: HierarchyNode[], depth = 0): FlatNode[] {
 
 type AppView =
   | { page: 'hierarchy' }
-  | { page: 'requirements' }
-  | { page: 'requirement-detail'; requirementId: string | null; initialParentIds?: string[]; initialStatement?: string; initialSourceDocumentId?: string; backFrom?: 'document-detail'; backDocumentId?: string }
+  | { page: 'requirements'; initialHierarchyNodeId?: string }
+  | { page: 'requirement-detail'; requirementId: string | null; initialParentIds?: string[]; initialStatement?: string; initialSourceDocumentId?: string; backFrom?: 'document-detail' | 'orphan-report'; backDocumentId?: string }
   | { page: 'derivation-tree'; focusId: string | null }
   | { page: 'documents' }
   | { page: 'document-detail'; documentId: string | null }
   | { page: 'document-network'; focusDocumentId?: string | null }
+  | { page: 'orphan-report' }
+
+// ---------------------------------------------------------------------------
+// Global search bar
+// ---------------------------------------------------------------------------
+
+function SearchBar({ onOpenRequirement, onOpenDocument }: {
+  onOpenRequirement: (id: string) => void
+  onOpenDocument: (id: string) => void
+}) {
+  const [query, setQuery] = useState('')
+  const [results, setResults] = useState<SearchResults | null>(null)
+  const [loading, setLoading] = useState(false)
+  const [open, setOpen] = useState(false)
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const containerRef = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (query.length < 3) {
+      setResults(null)
+      setOpen(false)
+      return
+    }
+    if (debounceRef.current) clearTimeout(debounceRef.current)
+    debounceRef.current = setTimeout(async () => {
+      setLoading(true)
+      try {
+        const r = await globalSearch(query)
+        setResults(r)
+        setOpen(true)
+      } catch {
+        // silently ignore
+      } finally {
+        setLoading(false)
+      }
+    }, 400)
+    return () => {
+      if (debounceRef.current) clearTimeout(debounceRef.current)
+    }
+  }, [query])
+
+  // Close dropdown when clicking outside
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (containerRef.current && !containerRef.current.contains(e.target as Node)) {
+        setOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [])
+
+  const totalResults = (results?.requirements.length ?? 0) + (results?.source_documents.length ?? 0)
+
+  return (
+    <div ref={containerRef} className="relative w-64">
+      <div className="relative">
+        <svg
+          className="absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-gray-400 pointer-events-none"
+          fill="none"
+          stroke="currentColor"
+          viewBox="0 0 24 24"
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+        </svg>
+        <input
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          onFocus={() => { if (results && totalResults > 0) setOpen(true) }}
+          placeholder="Search requirements & docs…"
+          className="w-full pl-8 pr-3 py-1.5 text-xs border border-gray-300 rounded focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white"
+        />
+        {loading && (
+          <span className="absolute right-2.5 top-1/2 -translate-y-1/2 text-gray-400 text-xs">…</span>
+        )}
+      </div>
+
+      {open && results && (
+        <div className="absolute top-full mt-1 left-0 w-96 bg-white border border-gray-200 rounded shadow-xl z-50 max-h-96 overflow-y-auto">
+          {totalResults === 0 ? (
+            <p className="px-4 py-3 text-xs text-gray-400">No results for "{query}"</p>
+          ) : (
+            <>
+              {results.requirements.length > 0 && (
+                <div>
+                  <p className="px-3 py-1.5 text-[10px] font-semibold text-gray-400 uppercase tracking-wider border-b border-gray-100 bg-gray-50">
+                    Requirements ({results.requirements.length})
+                  </p>
+                  {results.requirements.map((r) => (
+                    <button
+                      key={r.id}
+                      className="w-full text-left px-3 py-2 hover:bg-blue-50 flex items-start gap-2 border-b border-gray-50"
+                      onClick={() => {
+                        setOpen(false)
+                        setQuery('')
+                        onOpenRequirement(r.id)
+                      }}
+                    >
+                      <span className="font-mono text-xs text-blue-600 shrink-0 pt-0.5">{r.requirement_id}</span>
+                      <span className="text-xs text-gray-800 leading-tight line-clamp-2">{r.title}</span>
+                      <span className="ml-auto text-[10px] text-gray-400 shrink-0 pt-0.5">{r.discipline}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+              {results.source_documents.length > 0 && (
+                <div>
+                  <p className="px-3 py-1.5 text-[10px] font-semibold text-gray-400 uppercase tracking-wider border-b border-gray-100 bg-gray-50">
+                    Source Documents ({results.source_documents.length})
+                  </p>
+                  {results.source_documents.map((d) => (
+                    <button
+                      key={d.id}
+                      className="w-full text-left px-3 py-2 hover:bg-blue-50 flex items-start gap-2"
+                      onClick={() => {
+                        setOpen(false)
+                        setQuery('')
+                        onOpenDocument(d.id)
+                      }}
+                    >
+                      <span className="font-mono text-xs text-indigo-600 shrink-0 pt-0.5">{d.document_id}</span>
+                      <span className="text-xs text-gray-800 leading-tight line-clamp-2">{d.title}</span>
+                      <span className="ml-auto text-[10px] text-gray-400 shrink-0 pt-0.5">{d.document_type}</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// App
+// ---------------------------------------------------------------------------
 
 export default function App() {
   const [view, setView] = useState<AppView>({ page: 'hierarchy' })
@@ -98,7 +239,9 @@ export default function App() {
           ? 'documents'
           : view.page === 'document-network'
             ? 'document-network'
-            : 'requirements'
+            : view.page === 'orphan-report'
+              ? 'orphan-report'
+              : 'requirements'
 
   return (
     <div className="flex flex-col h-screen bg-gray-50">
@@ -117,6 +260,7 @@ export default function App() {
               { id: 'documents', label: 'Documents' },
               { id: 'document-network', label: 'Doc Network' },
               { id: 'derivation-tree', label: 'Derivation Tree' },
+              { id: 'orphan-report', label: 'Orphan Report' },
             ] as const
           ).map((tab) => (
             <button
@@ -126,18 +270,29 @@ export default function App() {
                 else if (tab.id === 'requirements') setView({ page: 'requirements' })
                 else if (tab.id === 'documents') setView({ page: 'documents' })
                 else if (tab.id === 'document-network') setView({ page: 'document-network' })
+                else if (tab.id === 'orphan-report') setView({ page: 'orphan-report' })
                 else setView({ page: 'derivation-tree', focusId: null })
               }}
               className={`px-3 py-1.5 text-sm rounded transition-colors ${
                 activeTab === tab.id
-                  ? 'bg-blue-600 text-white'
-                  : 'text-gray-600 hover:bg-gray-100'
+                  ? tab.id === 'orphan-report'
+                    ? 'bg-amber-500 text-white'
+                    : 'bg-blue-600 text-white'
+                  : tab.id === 'orphan-report'
+                    ? 'text-amber-700 hover:bg-amber-50'
+                    : 'text-gray-600 hover:bg-gray-100'
               }`}
             >
               {tab.label}
             </button>
           ))}
         </nav>
+
+        {/* Global search */}
+        <SearchBar
+          onOpenRequirement={(id) => setView({ page: 'requirement-detail', requirementId: id })}
+          onOpenDocument={(id) => setView({ page: 'document-detail', documentId: id })}
+        />
 
         <div className="ml-auto">
           <UserIdentity userName={userName} onChange={handleUserNameChange} />
@@ -186,12 +341,15 @@ export default function App() {
                 onOpenDetail={(id) =>
                   setView({ page: 'requirement-detail', requirementId: id })
                 }
+                onViewAllRequirements={(nodeId) =>
+                  setView({ page: 'requirements', initialHierarchyNodeId: nodeId })
+                }
               />
             </section>
 
             {/* Right: node detail / edit panel — slides in when a node is selected */}
             {selectedNode && (
-              <aside className="w-72 bg-white border-l border-gray-200 flex flex-col overflow-hidden shrink-0">
+              <aside className="w-72 bg-white border-l border-gray-200 flex flex-col overflow-hidden shrink-0 overflow-y-auto p-4">
                 <SidePanel
                   node={selectedNode}
                   flatNodes={flatNodes}
@@ -207,16 +365,19 @@ export default function App() {
         {/* Requirements table                                                   */}
         {/* ------------------------------------------------------------------ */}
         {view.page === 'requirements' && (
-          <RequirementsTable
-            hierarchyNodes={nodes}
-            userName={userName}
-            onOpenDetail={(id) =>
-              setView({ page: 'requirement-detail', requirementId: id })
-            }
-            onCreateNew={() =>
-              setView({ page: 'requirement-detail', requirementId: null })
-            }
-          />
+          <div className="flex-1 overflow-hidden flex flex-col">
+            <RequirementsTable
+              hierarchyNodes={nodes}
+              userName={userName}
+              initialHierarchyNodeId={view.page === 'requirements' ? view.initialHierarchyNodeId : undefined}
+              onOpenDetail={(id) =>
+                setView({ page: 'requirement-detail', requirementId: id })
+              }
+              onCreateNew={() =>
+                setView({ page: 'requirement-detail', requirementId: null })
+              }
+            />
+          </div>
         )}
 
         {/* ------------------------------------------------------------------ */}
@@ -235,14 +396,20 @@ export default function App() {
               initialParentIds={view.initialParentIds}
               initialStatement={view.initialStatement}
               initialSourceDocumentId={view.initialSourceDocumentId}
-              backLabel={view.backFrom === 'document-detail' ? 'Document' : 'Requirements'}
+              backLabel={
+                view.backFrom === 'document-detail' ? 'Document'
+                : view.backFrom === 'orphan-report' ? 'Orphan Report'
+                : 'Requirements'
+              }
               onSaved={(savedId) => {
                 setView({ page: 'requirement-detail', requirementId: savedId })
               }}
               onCancel={() =>
                 view.backFrom === 'document-detail' && view.backDocumentId
                   ? setView({ page: 'document-detail', documentId: view.backDocumentId })
-                  : setView({ page: 'requirements' })
+                  : view.backFrom === 'orphan-report'
+                    ? setView({ page: 'orphan-report' })
+                    : setView({ page: 'requirements' })
               }
               onViewInTree={(id) =>
                 setView({ page: 'derivation-tree', focusId: id })
@@ -256,6 +423,13 @@ export default function App() {
               }
               onOpenDocument={(docId) =>
                 setView({ page: 'document-detail', documentId: docId })
+              }
+              onCreateChildForGap={(parentId, hierarchyNodeId) =>
+                setView({
+                  page: 'requirement-detail',
+                  requirementId: null,
+                  initialParentIds: [parentId],
+                })
               }
             />
           </div>
@@ -339,6 +513,23 @@ export default function App() {
                 setView({ page: 'document-network', focusDocumentId: docId })
               }
               userName={userName}
+            />
+          </div>
+        )}
+
+        {/* ------------------------------------------------------------------ */}
+        {/* Orphan report                                                        */}
+        {/* ------------------------------------------------------------------ */}
+        {view.page === 'orphan-report' && (
+          <div className="flex-1 overflow-hidden flex flex-col">
+            <OrphanReport
+              onOpenRequirement={(id) =>
+                setView({
+                  page: 'requirement-detail',
+                  requirementId: id,
+                  backFrom: 'orphan-report',
+                })
+              }
             />
           </div>
         )}
