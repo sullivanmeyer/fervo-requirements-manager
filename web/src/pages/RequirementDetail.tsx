@@ -16,6 +16,7 @@ import {
   fetchSites,
   fetchUnits,
   removeLink,
+  transferDiscipline,
   updateRequirement,
 } from '../api/requirements'
 import { fetchSourceDocuments } from '../api/sourceDocuments'
@@ -67,6 +68,8 @@ const DISCIPLINES = [
   'Process',
   'Fire Protection',
   'General',
+  'Build',
+  'Operations',
 ]
 const VERIFICATION_METHODS = [
   'Analysis',
@@ -111,6 +114,7 @@ interface FormState {
   last_modified_date: string
   change_history: string
   rationale: string
+  comments: string
   verification_method: string
   tags: string[]
   source_document_id: string
@@ -138,6 +142,7 @@ function emptyForm(userName: string, initialStatement = '', initialSourceDocumen
     last_modified_date: '',
     change_history: '',
     rationale: '',
+    comments: '',
     verification_method: '',
     tags: [],
     source_document_id: initialSourceDocumentId,
@@ -164,6 +169,7 @@ function formFromDetail(req: ReqDetail): FormState {
     last_modified_date: req.last_modified_date ?? '',
     change_history: req.change_history ?? '',
     rationale: req.rationale ?? '',
+    comments: req.comments ?? '',
     verification_method: req.verification_method ?? '',
     tags: req.tags ?? [],
     source_document_id: req.source_document_id ?? '',
@@ -378,6 +384,16 @@ export default function RequirementDetail({
   const [gapError, setGapError] = useState<string | null>(null)
   const [showGaps, setShowGaps] = useState(false)
 
+  // Discipline transfer dialog
+  const [showTransfer, setShowTransfer] = useState(false)
+  const [transferTarget, setTransferTarget] = useState('')
+  const [transferring, setTransferring] = useState(false)
+  const [transferError, setTransferError] = useState<string | null>(null)
+
+  // Superseded-by banner (populated when loading an existing superseded requirement)
+  const [supersededByReqId, setSupersededByReqId] = useState<string | null>(null)
+  const [supersededById, setSupersededById] = useState<string | null>(null)
+
   // -------------------------------------------------------------------------
   // Load on mount
   // -------------------------------------------------------------------------
@@ -419,6 +435,8 @@ export default function RequirementDetail({
           setUnits(u)
           setAttachments(atts)
           setConflictRecords(req.conflict_records ?? [])
+          setSupersededByReqId(req.superseded_by_req_id ?? null)
+          setSupersededById(req.superseded_by_id ?? null)
         } catch (e) {
           setError(e instanceof Error ? e.message : 'Failed to load requirement')
         } finally {
@@ -464,6 +482,7 @@ export default function RequirementDetail({
       last_modified_date: form.last_modified_date || undefined,
       change_history: form.change_history || undefined,
       rationale: form.rationale || undefined,
+      comments: form.comments || undefined,
       verification_method: form.verification_method || undefined,
       // Empty string means "no subtype" — send null so the DB stores NULL
       classification_subtype: form.classification_subtype || null,
@@ -646,6 +665,15 @@ export default function RequirementDetail({
               )}
             </div>
           )}
+          {!isNew && (
+            <button
+              onClick={() => { setTransferTarget(''); setTransferError(null); setShowTransfer(true) }}
+              className="px-3 py-1.5 text-sm border border-orange-200 text-orange-700 rounded hover:bg-orange-50"
+              title="Transfer this requirement to a different discipline (creates a new ID)"
+            >
+              Transfer Discipline
+            </button>
+          )}
           <button
             onClick={onCancel}
             className="px-3 py-1.5 text-sm border border-gray-300 text-gray-600 rounded hover:bg-gray-50"
@@ -684,6 +712,25 @@ export default function RequirementDetail({
           >
             Mark as Reviewed
           </button>
+        </div>
+      )}
+
+      {/* Superseded banner */}
+      {supersededByReqId && (
+        <div className="px-4 py-2 bg-orange-50 border-b border-orange-200 text-sm text-orange-800 flex items-center gap-2 shrink-0">
+          <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M12 2a10 10 0 110 20A10 10 0 0112 2z" />
+          </svg>
+          <span className="flex-1">
+            This requirement was transferred to{' '}
+            <button
+              onClick={() => supersededById && onSaved(supersededById)}
+              className="font-mono font-semibold underline hover:text-orange-900"
+            >
+              {supersededByReqId}
+            </button>
+            {' '}— it is now <strong>Superseded</strong>.
+          </span>
         </div>
       )}
 
@@ -902,6 +949,18 @@ export default function RequirementDetail({
                   onChange={(e) => set('rationale', e.target.value)}
                   rows={3}
                   placeholder="Why does this requirement exist?"
+                  className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400 resize-y"
+                />
+              </Field>
+            </div>
+            <div className="mt-4">
+              <Field label="Comments">
+                <p className="text-xs text-gray-400 mb-1">Notes, discussion, or context — not included in formal exports</p>
+                <textarea
+                  value={form.comments}
+                  onChange={(e) => set('comments', e.target.value)}
+                  rows={3}
+                  placeholder="Working notes, open questions, reviewer feedback…"
                   className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400 resize-y"
                 />
               </Field>
@@ -1305,6 +1364,76 @@ export default function RequirementDetail({
 
         </div>
       </div>
+
+      {/* ---- Transfer Discipline modal ---- */}
+      {showTransfer && savedDbId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md mx-4 p-6 space-y-4">
+            <h2 className="text-base font-semibold text-gray-800">Transfer Discipline</h2>
+            <p className="text-sm text-gray-600">
+              Select the target discipline. A new requirement will be created under the new discipline prefix,
+              and <strong>{existingReqId}</strong> will be marked as <strong>Superseded</strong>.
+              All traceability links, conflict records, and attachments will be carried over.
+            </p>
+
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+                New Discipline
+              </label>
+              <select
+                value={transferTarget}
+                onChange={(e) => setTransferTarget(e.target.value)}
+                className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white"
+              >
+                <option value="">— Select discipline —</option>
+                {DISCIPLINES.filter((d) => d !== form.discipline).map((d) => (
+                  <option key={d} value={d}>{d}</option>
+                ))}
+              </select>
+            </div>
+
+            {transferTarget && (
+              <div className="bg-orange-50 border border-orange-200 rounded px-3 py-2 text-sm text-orange-800">
+                <strong>{existingReqId}</strong> → new ID under <strong>{transferTarget}</strong>
+                {' '}(auto-assigned on save)
+              </div>
+            )}
+
+            {transferError && (
+              <p className="text-sm text-red-600">{transferError}</p>
+            )}
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                onClick={() => setShowTransfer(false)}
+                className="px-3 py-1.5 text-sm border border-gray-300 text-gray-600 rounded hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                disabled={!transferTarget || transferring}
+                onClick={async () => {
+                  if (!transferTarget || !savedDbId) return
+                  setTransferring(true)
+                  setTransferError(null)
+                  try {
+                    const newReq = await transferDiscipline(savedDbId, transferTarget)
+                    setShowTransfer(false)
+                    onSaved(newReq.id)
+                  } catch (e) {
+                    setTransferError(e instanceof Error ? e.message : 'Transfer failed')
+                  } finally {
+                    setTransferring(false)
+                  }
+                }}
+                className="px-4 py-1.5 text-sm bg-orange-600 text-white rounded hover:bg-orange-700 disabled:opacity-50"
+              >
+                {transferring ? 'Transferring…' : 'Confirm Transfer'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

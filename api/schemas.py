@@ -35,6 +35,8 @@ DISCIPLINES = {
     "Process",
     "Fire Protection",
     "General",
+    "Build",
+    "Operations",
 }
 VERIFICATION_METHODS = {
     "Analysis",
@@ -137,6 +139,7 @@ class RequirementCreate(BaseModel):
     source_document_id: Optional[UUID] = None
     source_clause: Optional[str] = None
     classification_subtype: Optional[str] = None
+    comments: Optional[str] = None
     hierarchy_node_ids: List[UUID] = []
     site_ids: List[UUID] = []
     unit_ids: List[UUID] = []
@@ -212,6 +215,7 @@ class RequirementUpdate(BaseModel):
     source_clause: Optional[str] = None
     classification_subtype: Optional[str] = None
     stale: Optional[bool] = None
+    comments: Optional[str] = None
     hierarchy_node_ids: Optional[List[UUID]] = None
     site_ids: Optional[List[UUID]] = None
     unit_ids: Optional[List[UUID]] = None

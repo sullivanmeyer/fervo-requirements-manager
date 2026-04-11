@@ -198,6 +198,14 @@ class Requirement(Base):
     source_clause = Column(Text, nullable=True)
     classification_subtype = Column(Text, nullable=True)
     stale = Column(Boolean, default=False, nullable=False)
+    # Free-form working notes; excluded from formal exports
+    comments = Column(Text, nullable=True)
+    # Set when this requirement is superseded by a transfer to another discipline
+    superseded_by_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("requirements.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(
         DateTime,
@@ -207,6 +215,13 @@ class Requirement(Base):
     )
 
     source_document = relationship("SourceDocument", lazy="joined")
+    superseded_by = relationship(
+        "Requirement",
+        remote_side="Requirement.id",
+        foreign_keys="[Requirement.superseded_by_id]",
+        uselist=False,
+        lazy="joined",
+    )
 
     hierarchy_nodes = relationship(
         "HierarchyNode",

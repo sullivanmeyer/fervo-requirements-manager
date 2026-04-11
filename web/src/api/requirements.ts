@@ -80,6 +80,21 @@ export async function updateRequirement(
   return res.json() as Promise<RequirementDetail>
 }
 
+export async function transferDiscipline(
+  id: string,
+  targetDiscipline: string,
+): Promise<RequirementDetail> {
+  const params = new URLSearchParams({ target_discipline: targetDiscipline })
+  const res = await fetch(`${BASE}/requirements/${id}/transfer-discipline?${params}`, {
+    method: 'POST',
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(extractDetail(err, `Transfer failed (${res.status})`))
+  }
+  return res.json() as Promise<RequirementDetail>
+}
+
 /** Fetch all requirements without pagination — used to populate search dropdowns. */
 export async function fetchAllRequirements(): Promise<RequirementListItem[]> {
   // page_size=200 is the API max; for Stage 3 this covers any realistic dataset.
