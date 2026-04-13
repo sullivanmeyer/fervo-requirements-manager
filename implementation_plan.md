@@ -795,79 +795,59 @@ has been removed. User authentication is handled externally via Microsoft SSO
 through the organization's Azure AD implementation.
  
 ### Backend — Table Detection Pipeline (new service: `services/table_extraction.py`)
-- [ ] Add `pdfplumber` to backend dependencies for ruled-line table detection in PDFs
-- [ ] **Step 1 — Page-level table detection**: for each PDF page, run pdfplumber's `find_tables()` to identify table bounding boxes and extract structured cell data (list of rows, each a list of cell strings)
-- [ ] **Step 2 — Table reconstruction**: convert each detected table into a serialized format (Markdown table syntax or JSON `{headers, rows}`) with the table's caption and surrounding context paragraph identified via spatial proximity analysis
-- [ ] **Step 3 — Region classification**: classify each page region as "prose" or "table," producing a mixed-content page map that preserves reading order
-- [ ] **Step 4 — Composite block assembly**: for pages with mixed content (prose → table → prose forming a single logical requirement), group adjacent regions into composite blocks with the prose as context and the table as specification data
+- [x] `pdfplumber==0.11.0` already in `requirements.txt` — no new dependency needed
+- [x] **Page-level table detection**: `find_tables()` detects ruled-line table bounding boxes per page
+- [x] **Table reconstruction**: each detected table serialized as Markdown with `[TABLE BLOCK — Page N]` / `[END TABLE BLOCK]` envelope markers; prose extracted with table regions filtered via bounding-box filter
+- [x] **Region classification**: prose and tables interleaved in page reading order
+- [x] Graceful fallback: returns `None` if PDF appears image-only (<200 chars), triggering File API path; also catches pdfplumber exceptions without crashing
  
 ### Backend — Database
-- [ ] Alembic migration: extend `document_blocks.block_type` enum — add `table_block` (full table treated as one block) alongside existing `heading`, `requirement_clause`, `table_row`, `informational`, `boilerplate` types
-- [ ] Alembic migration: add `table_data` JSONB column to `document_blocks` (nullable) — stores `{caption: string, headers: string[], rows: string[][], context_note: string}` for `table_block` type blocks
-- [ ] Alembic migration: add `suggested_type` enum column to `extraction_candidates` (values: `prose`, `tabular`; default `prose`)
-- [ ] Alembic migration: add `requirement_content_type` enum column to `requirements` (values: `prose`, `tabular`; default `prose`)
-- [ ] Alembic migration: add `table_data` JSONB column to `requirements` (nullable) — same schema as `document_blocks.table_data`
+- [x] Migration 018: `table_block` added as valid `block_type` string value (stored as Text — no enum change needed)
+- [x] Migration 018: `table_data` JSONB column added to `document_blocks` (nullable) — stores `{caption, headers, rows, context_note}` for `table_block` type blocks
+- [ ] `suggested_type` on `extraction_candidates` — deferred; tabular detection handled via source block lookup in the frontend instead
+- [ ] `requirement_content_type` and `table_data` on `requirements` — deferred to a future stage
  
 ### Backend — Updated Decomposition Pipeline
-- [ ] Modify `POST /api/source-documents/{id}/decompose` to run the table detection pipeline before sending content to the LLM
-- [ ] Pre-processing pass: extract all tables from the PDF using pdfplumber; serialize each as a Markdown table wrapped in semantic envelope markers:
-  ```
-  [TABLE BLOCK — Source: Section {clause}, Page {page}]
-  Context: {surrounding_paragraph_text}
- 
-  | Header1 | Header2 | Header3 |
-  |---------|---------|---------|
-  | Cell    | Cell    | Cell    |
- 
-  [END TABLE BLOCK]
-  ```
-- [ ] Send the reconstructed page content (prose + envelope-wrapped tables) to the Gemini decomposition prompt with updated instructions:
-  - [ ] When encountering a `[TABLE BLOCK]`, preserve it as a single block with `block_type = table_block`
-  - [ ] Do NOT decompose `table_block` into individual rows or cells
-  - [ ] Extract the table's structured data (headers, rows) into the `table_data` JSON field
-  - [ ] Identify the table's parent clause for hierarchy placement
+- [x] `decompose_document()` runs pdfplumber pre-processing before calling Gemini
+- [x] **Text path (primary)**: pdfplumber extracts text with `[TABLE BLOCK]` markers → sent as text prompt to Gemini; removes need for File API upload for digital PDFs
+- [x] **File API fallback**: if pdfplumber yields <200 chars (scanned PDF), original File API path used unchanged
+- [x] `_run_decomposition` persists `table_data` from raw block dicts when writing `DocumentBlock` rows
+- [x] Updated `DECOMPOSE_USER` prompt: documents `table_block` type and `table_data` JSON schema; instructs Gemini to output each `[TABLE BLOCK]` as a single block; includes worked examples for prose and table output
  
 ### Backend — Updated Extraction Prompt
-- [ ] Update the requirement extraction prompt to handle `table_block` type blocks:
-  - [ ] If a table contains requirement-like content (parameters with shall/should language, acceptance criteria, material specifications), propose it as a single candidate requirement with `suggested_type = tabular`
-  - [ ] Preserve the full table structure in the candidate's `table_data` field
-  - [ ] Use the table's context paragraph and caption to generate the candidate title and statement
-  - [ ] Do NOT split a table into separate per-row requirements unless the rows represent genuinely independent obligations (e.g., a table listing unrelated equipment items with separate shall-statements per row)
+- [x] `EXTRACT_USER_TEMPLATE` already receives `block_type` per block — Gemini will see `table_block` type and use the caption/context_note to generate title and statement for the candidate
+- [ ] Explicit `suggested_type = tabular` in extraction output — deferred with `suggested_type` column
  
 ### Backend — API Endpoint Changes
-- [ ] `POST /api/extraction-candidates/{id}/accept` — when accepting a tabular candidate, copy `table_data` into the created requirement record and set `requirement_content_type = tabular`
-- [ ] `GET /api/requirements/{id}` — include `table_data` and `requirement_content_type` in the detail response
-- [ ] `GET /api/requirements` (list) — include `requirement_content_type` for table column rendering
+- [x] `BlockOut` schema includes `table_data: Optional[dict]`; `_block_to_dict` exposes it in all block responses
+- [x] `_next_requirement_id` in extraction router updated to include Build (`BUILD`) and Operations (`OPS`) prefixes
+- [ ] `accept` endpoint copying `table_data` to requirement — deferred with `requirement_content_type` column
  
 ### Frontend — Block Viewer Updates
-- [ ] Table blocks in the block-based document viewer render as formatted HTML tables (not raw Markdown or JSON)
-- [ ] Table blocks show a "Table" type badge (distinct color, e.g., purple) alongside the existing heading/requirement_clause/informational/boilerplate badges
-- [ ] Table blocks are selectable via checkbox for targeted extraction (same as prose blocks)
-- [ ] Inline editing of table blocks: clicking a cell opens an editable text input for correcting OCR/parsing errors in individual cells
+- [x] `table_block` added to `BLOCK_TYPE_STYLES` (purple) and `BLOCK_TYPE_LABELS` (`'Table'`)
+- [x] Table blocks with `table_data` render as formatted HTML tables (purple header, alternating rows, scrollable); fall back to text content if `table_data` is null
+- [x] Table blocks selectable via checkbox for targeted extraction (existing mechanism, no change needed)
+- [ ] Inline cell editing — deferred
  
 ### Frontend — Candidate Review Panel Updates
-- [ ] Tabular candidates display a "Tabular" badge next to the suggested classification badge
-- [ ] The candidate statement area renders as a formatted table preview (not a text blob)
-- [ ] "Edit & Accept" for tabular candidates provides a table editor: add/remove rows and columns, edit cell values, edit caption, before creating the requirement
+- [x] Tabular candidates (source block is `table_block` with `table_data`) show purple **Tabular** badge and `TablePreview` component instead of truncated text statement
+- [x] `TableData` type exported from `types.ts`; `DocumentBlock.block_type` union updated to include `table_block`
+- [ ] "Edit & Accept" table editor — deferred
  
 ### Frontend — Requirement Detail View Updates
-- [ ] Requirements with `requirement_content_type = tabular` display the statement as a formatted, read-only table in the detail view
-- [ ] Edit mode provides the same table editor as the candidate review panel
-- [ ] Requirements document export (PDF and Word) renders tabular requirements as properly formatted tables with the caption as the requirement title
+- [ ] Tabular requirement rendering — deferred with `requirement_content_type` column
+- [ ] Table editor in edit mode — deferred
+- [ ] Export rendering as formatted tables — deferred
  
 ### Stage 14 Verification
-- [ ] Upload a Kiewit MSPEC-KIE document containing tables (e.g., material property table, dimensional tolerance table) — verify tables are detected and appear as single `table_block` entries in the block viewer
-- [ ] Verify table blocks render as formatted HTML tables, not as fragmented rows
-- [ ] Verify table blocks show the purple "Table" type badge
-- [ ] Select a table block and click "Extract Requirements from Selected" — verify the LLM proposes it as a single tabular candidate (not N separate per-cell candidates)
-- [ ] Verify the tabular candidate shows a table preview in the candidate review panel
-- [ ] Accept the tabular candidate — verify the created requirement has `requirement_content_type = tabular` and `table_data` populated
-- [ ] Open the requirement detail view — verify the statement renders as a formatted table
-- [ ] Edit the tabular requirement — verify the table editor allows adding/removing rows and editing cell values
-- [ ] Upload a Fervo BOD document with mixed prose + table content on the same page — verify the composite block assembly groups them correctly
-- [ ] Export a requirements document containing tabular requirements — verify the PDF/Word output includes properly formatted tables
-- [ ] Re-decompose a previously decomposed document — verify existing `table_block` data is replaced cleanly (no duplicate blocks)
-- [ ] Verify that pure-prose documents (no tables) still decompose identically to the pre-Stage 14 behavior (no regressions)
+- [ ] Upload a document containing tables — verify tables appear as single `table_block` entries (not fragmented rows) in the block viewer
+- [ ] Verify table blocks render as formatted HTML tables with purple header row
+- [ ] Verify table blocks show the purple "Table" badge
+- [ ] Select a table block and click "Extract Requirements from Selected" — verify the LLM proposes it as a single tabular candidate
+- [ ] Verify the tabular candidate shows a table preview + Tabular badge in the candidate review panel
+- [ ] Re-decompose a previously decomposed document — verify existing blocks replaced cleanly (no duplicates)
+- [ ] Verify pure-prose documents still decompose correctly (no regressions)
+- [ ] Upload a scanned / image-only PDF — verify the File API fallback path is used (check API container logs for "[decompose] pdfplumber returned no text — falling back to File API")
  
 ---
  
