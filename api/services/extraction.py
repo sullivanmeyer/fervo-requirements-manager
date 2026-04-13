@@ -276,6 +276,7 @@ def decompose_document(pdf_bytes: bytes) -> list[dict]:
             ],
             config=types.GenerateContentConfig(
                 system_instruction=DECOMPOSE_SYSTEM,
+                response_mime_type="application/json",
             ),
         )
     else:
@@ -313,6 +314,7 @@ def decompose_document(pdf_bytes: bytes) -> list[dict]:
                 ],
                 config=types.GenerateContentConfig(
                     system_instruction=DECOMPOSE_SYSTEM,
+                    response_mime_type="application/json",
                 ),
             )
         finally:
