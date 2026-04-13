@@ -84,6 +84,23 @@ export interface ConflictRecord {
 // Requirements
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Block-linked requirements (Stage 15)
+// ---------------------------------------------------------------------------
+
+/** A document block linked to a requirement as part of its body */
+export interface LinkedBlock {
+  id: string
+  source_document_id: string
+  clause_number: string | null
+  heading: string | null
+  content: string
+  block_type: string
+  table_data: TableData | null
+  depth: number
+  sort_order: number
+}
+
 /** Minimal record returned in the paginated list view */
 export interface RequirementListItem {
   id: string
@@ -95,6 +112,7 @@ export interface RequirementListItem {
   status: string
   stale: boolean
   discipline: string
+  content_source: 'manual' | 'block_linked'
   created_by: string
   created_date: string
   hierarchy_nodes: { id: string; name: string }[]
@@ -131,6 +149,8 @@ export interface RequirementDetail extends RequirementListItem {
   parent_requirements: RequirementStub[]
   child_requirements: RequirementStub[]
   conflict_records: ConflictRecord[]
+  /** Populated when content_source === 'block_linked' */
+  linked_blocks: LinkedBlock[]
 }
 
 // ---------------------------------------------------------------------------

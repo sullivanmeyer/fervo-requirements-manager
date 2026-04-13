@@ -38,11 +38,13 @@ import type {
   GapAnalysisResult,
   GapNodeStub,
   HierarchyNode,
+  LinkedBlock,
   RequirementDetail as ReqDetail,
   RequirementListItem,
   RequirementStub,
   Site,
   SourceDocumentListItem,
+  TableData,
   Unit,
 } from '../types'
 import HierarchyNodePicker from '../components/HierarchyNodePicker'
@@ -178,6 +180,90 @@ function formFromDetail(req: ReqDetail): FormState {
     site_ids: req.sites.map((s) => s.id),
     unit_ids: req.units.map((u) => u.id),
   }
+}
+
+// ---------------------------------------------------------------------------
+// Block renderer — renders linked source blocks in the requirement body
+// ---------------------------------------------------------------------------
+
+function TablePreview({ data }: { data: TableData }) {
+  return (
+    <div className="overflow-x-auto max-h-64 overflow-y-auto">
+      {data.caption && (
+        <p className="text-xs text-gray-500 italic mb-1">{data.caption}</p>
+      )}
+      <table className="text-xs border-collapse w-full">
+        <thead>
+          <tr className="bg-purple-50">
+            {data.headers.map((h, i) => (
+              <th
+                key={i}
+                className="border border-purple-200 px-2 py-1 text-left font-semibold text-purple-800 whitespace-nowrap"
+              >
+                {h || '—'}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {data.rows.map((row, ri) => (
+            <tr key={ri} className={ri % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+              {row.map((cell, ci) => (
+                <td key={ci} className="border border-gray-200 px-2 py-1 text-gray-700">
+                  {cell || ''}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  )
+}
+
+function BlockRenderer({ blocks }: { blocks: LinkedBlock[] }) {
+  if (blocks.length === 0) {
+    return (
+      <p className="text-xs text-gray-400 italic">No source blocks linked.</p>
+    )
+  }
+  return (
+    <div className="space-y-3">
+      {blocks.map((block) => {
+        const prefix = block.clause_number ? (
+          <span className="text-xs font-mono text-gray-400 mr-2">{block.clause_number}</span>
+        ) : null
+
+        if (block.block_type === 'heading') {
+          return (
+            <div key={block.id} className="flex items-baseline gap-1">
+              {prefix}
+              <p className="text-sm font-semibold text-gray-700">{block.heading || block.content}</p>
+            </div>
+          )
+        }
+
+        if (block.block_type === 'table_block' && block.table_data) {
+          return (
+            <div key={block.id}>
+              {prefix && <div className="mb-1">{prefix}</div>}
+              <TablePreview data={block.table_data} />
+            </div>
+          )
+        }
+
+        // requirement_clause, informational, or anything else — render as prose
+        return (
+          <div key={block.id} className="flex items-baseline gap-1">
+            {prefix}
+            <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">
+              {block.content}
+            </p>
+          </div>
+        )
+      })}
+    </div>
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -378,6 +464,10 @@ export default function RequirementDetail({
   // Stale flag (separate from form state — not editable by users directly)
   const [reqStale, setReqStale] = useState(false)
 
+  // Block-linked body (Stage 15)
+  const [contentSource, setContentSource] = useState<'manual' | 'block_linked'>('manual')
+  const [linkedBlocks, setLinkedBlocks] = useState<LinkedBlock[]>([])
+
   // Gap analysis state
   const [gapAnalysis, setGapAnalysis] = useState<GapAnalysisResult | null>(null)
   const [gapLoading, setGapLoading] = useState(false)
@@ -437,6 +527,8 @@ export default function RequirementDetail({
           setConflictRecords(req.conflict_records ?? [])
           setSupersededByReqId(req.superseded_by_req_id ?? null)
           setSupersededById(req.superseded_by_id ?? null)
+          setContentSource(req.content_source ?? 'manual')
+          setLinkedBlocks(req.linked_blocks ?? [])
         } catch (e) {
           setError(e instanceof Error ? e.message : 'Failed to load requirement')
         } finally {
@@ -460,8 +552,12 @@ export default function RequirementDetail({
   // -------------------------------------------------------------------------
 
   const handleSave = async () => {
-    if (!form.title.trim() || !form.statement.trim()) {
-      setError('Title and Statement are required.')
+    if (!form.title.trim()) {
+      setError('Title is required.')
+      return
+    }
+    if (contentSource === 'manual' && !form.statement.trim()) {
+      setError('Statement is required.')
       return
     }
     if (form.source_type === 'Derived from Document' && !form.source_document_id) {
@@ -933,15 +1029,39 @@ export default function RequirementDetail({
             <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4 pb-1 border-b border-gray-100">
               Requirement Statement
             </h2>
-            <Field label="Statement" required>
-              <textarea
-                value={form.statement}
-                onChange={(e) => set('statement', e.target.value)}
-                rows={5}
-                placeholder="The system shall…"
-                className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400 resize-y"
-              />
-            </Field>
+            {contentSource === 'block_linked' ? (
+              <div>
+                {/* Badge */}
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-800">
+                    Linked to source document
+                  </span>
+                  {form.source_document_id && onOpenDocument && (
+                    <button
+                      type="button"
+                      onClick={() => onOpenDocument(form.source_document_id)}
+                      className="text-xs text-blue-600 hover:underline"
+                    >
+                      View source document →
+                    </button>
+                  )}
+                </div>
+                {/* Block content rendered from linked blocks */}
+                <div className="border border-purple-200 rounded p-3 bg-purple-50/40">
+                  <BlockRenderer blocks={linkedBlocks} />
+                </div>
+              </div>
+            ) : (
+              <Field label="Statement" required>
+                <textarea
+                  value={form.statement}
+                  onChange={(e) => set('statement', e.target.value)}
+                  rows={5}
+                  placeholder="The system shall…"
+                  className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400 resize-y"
+                />
+              </Field>
+            )}
             <div className="mt-4">
               <Field label="Rationale">
                 <textarea

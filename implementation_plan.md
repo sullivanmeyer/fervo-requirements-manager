@@ -840,14 +840,115 @@ through the organization's Azure AD implementation.
 - [ ] Export rendering as formatted tables — deferred
  
 ### Stage 14 Verification
-- [ ] Upload a document containing tables — verify tables appear as single `table_block` entries (not fragmented rows) in the block viewer
-- [ ] Verify table blocks render as formatted HTML tables with purple header row
-- [ ] Verify table blocks show the purple "Table" badge
-- [ ] Select a table block and click "Extract Requirements from Selected" — verify the LLM proposes it as a single tabular candidate
-- [ ] Verify the tabular candidate shows a table preview + Tabular badge in the candidate review panel
-- [ ] Re-decompose a previously decomposed document — verify existing blocks replaced cleanly (no duplicates)
-- [ ] Verify pure-prose documents still decompose correctly (no regressions)
-- [ ] Upload a scanned / image-only PDF — verify the File API fallback path is used (check API container logs for "[decompose] pdfplumber returned no text — falling back to File API")
+- [x] Upload a document containing tables — verify tables appear as single `table_block` entries (not fragmented rows) in the block viewer
+- [x] Verify table blocks render as formatted HTML tables with purple header row
+- [x] Verify table blocks show the purple "Table" badge
+- [skip] Select a table block and click "Extract Requirements from Selected" — verify the LLM proposes it as a single tabular candidate
+- [skip] Verify the tabular candidate shows a table preview + Tabular badge in the candidate review panel
+- [skip] Re-decompose a previously decomposed document — verify existing blocks replaced cleanly (no duplicates)
+- [skip] Verify pure-prose documents still decompose correctly (no regressions)
+- [skip] Upload a scanned / image-only PDF — verify the File API fallback path is used (check API container logs for "[decompose] pdfplumber returned no text — falling back to File API")
+ 
+---
+ 
+## Stage 15 — Block-Linked Requirements (Replace Text-Copy with Block Ownership)
+ 
+### Goal
+The current extraction pipeline copies a flattened text string from the LLM's
+candidate into the requirement's `statement` field. This destroys the rich
+structure that the decomposition pipeline (Stage 7) and table detection pipeline
+(Stage 14) worked to preserve — tables become text blobs, numbered sub-clauses
+lose their hierarchy, and multi-paragraph requirement descriptions collapse into
+a single string. Editing the requirement text then diverges from the source
+document, and there is no way to recover the original structure.
+ 
+Stage 15 replaces this text-copy handoff with direct block linkage. When a
+candidate is accepted, the requirement links to its source block(s) rather than
+copying their content. The block content becomes the authoritative requirement
+body, rendered natively in the detail view using the same block renderer built
+for the document viewer. The `statement` text field is retained as a fallback
+for manually-created requirements that have no source blocks.
+ 
+This eliminates the LLM rewriting/paraphrasing step for requirement body text —
+the original document text is preserved verbatim. The LLM's role in extraction
+shifts to identifying *which blocks* constitute requirements and suggesting
+metadata (title, classification, discipline, subtype), not rewriting content.
+ 
+### Backend — Database
+- [x] Alembic migration 019: new `requirement_blocks` junction table (id UUID, requirement_id FK to `requirements`, block_id FK to `document_blocks`, sort_order integer, created_at). Unique constraint on (requirement_id, block_id).
+- [x] Alembic migration 019: add `content_source` TEXT column to `requirements` (values: `manual`, `block_linked`; server default `manual`). `RequirementBlock` ORM model added to `models.py`.
+- [x] Existing `statement` text column retained — serves as editable body for `manual` requirements; populated with a plain-text search-index fallback for `block_linked` requirements.
+- [x] `source_block_ids` multi-block column **deferred** — single-block linkage via existing `source_block_id` FK is sufficient for Stage 15. Multi-block candidates are a future enhancement.
+ 
+### Backend — Candidate Acceptance (updated `POST /api/extraction-candidates/{id}/accept`)
+- [x] When accepting a candidate that has a `source_block_id`:
+  - [x] Set `requirement.content_source = 'block_linked'`
+  - [x] Create a `requirement_blocks` junction record linking the requirement to the source block
+  - [x] Populate `requirement.statement` with plain-text fallback from block content (pipe-delimited for table blocks; verbatim text for prose blocks)
+  - [x] Copy LLM-suggested metadata as before: title, classification, classification_subtype, discipline, source_clause
+  - [x] Set Owner = current user, Status = Draft
+ 
+### Backend — Requirement Detail Endpoint (updated `GET /api/requirements/{id}`)
+- [x] If `content_source = 'block_linked'`, include a `linked_blocks` array in the response (id, clause_number, heading, content, block_type, table_data, depth) ordered by `requirement_blocks.sort_order`
+- [x] Include `content_source` in both list and detail responses
+ 
+### Backend — Requirement List Endpoint (updated `GET /api/requirements`)
+- [x] `content_source` included in list response; table view uses `statement` plain-text fallback for display — no extra block queries
+ 
+### Backend — Block Editing Propagation
+- [ ] `PUT /api/document-blocks/{id}`: regenerate plain-text `statement` fallback on all linked requirements after block edit — **deferred to future stage**
+ 
+### Backend — Updated Extraction Prompt
+- [ ] Simplify extraction prompt so LLM identifies block indices rather than rewriting body text — **deferred; current prompt still functional, body rewriting produces the candidate.statement used for preview**
+ 
+### Frontend — Requirement Detail View (Block Renderer)
+- [x] `BlockRenderer` component added to `RequirementDetail.tsx`: renders heading, prose (`requirement_clause`, `informational`), and table (`table_block`) blocks with clause number prefix and `TablePreview` for tabular data
+- [x] Statement section: if `content_source === 'block_linked'`, renders `BlockRenderer` inside a purple-bordered panel with "Linked to source document" badge and "View source document →" link; otherwise renders the existing textarea
+- [x] `contentSource` and `linkedBlocks` state variables; populated from loaded detail response
+- [x] Save validation: statement is only required for `manual` requirements; block-linked requirements skip the statement check
+- [x] `LinkedBlock` and `TableData` types imported from `types.ts`
+ 
+### Frontend — Block Editing in Requirement Detail
+- [ ] Inline block editing (click-to-edit prose and table cells) — **deferred to future stage**
+ 
+### Frontend — "Merge to Requirement" Rewiring
+- [ ] "Merge to Requirement" currently concatenates text → statement; rewire to create block-linked requirement — **deferred to future stage**
+ 
+### Frontend — Post-Acceptance Block Linking (Add/Remove Source Blocks)
+- [ ] Add/Remove source blocks UI on requirement detail — **deferred to future stage**
+ 
+### Frontend — Candidate Review Panel Updates
+- [ ] Show source block content via BlockRenderer in candidate card (currently shows LLM statement preview) — **deferred to future stage**
+ 
+### Frontend — Requirements Table View
+- [x] No changes required — `statement` plain-text fallback populates the Statement column for both `manual` and `block_linked` requirements
+ 
+### Frontend — Requirements Document Export (PDF and Word)
+- [ ] Export renderer reads `linked_blocks` for `block_linked` requirements — **deferred to future stage**
+ 
+### Backend — Migration of Existing Stage 14 Requirements
+- [ ] One-time migration script for any existing Stage 14 tabular requirements — **deferred; no such requirements exist in production yet**
+ 
+### Stage 15 Verification
+- [ ] Upload a Kiewit MSPEC-KIE document, decompose, and extract requirements — accept a prose candidate — verify the created requirement has `content_source = 'block_linked'` and the detail view renders the original block content (not a rewritten statement)
+- [ ] Accept a tabular candidate (table_block) — verify the detail view renders a formatted table directly from the linked block, not from a `table_data` copy on the requirement
+- [ ] Accept a multi-block candidate (prose + table) — verify the detail view renders both blocks in order with appropriate spacing
+- [ ] Select a prose block (e.g., §6.2.3 "Field butt welds shall be prepared...") and its associated table block (e.g., Table 1) via checkboxes — click "Merge to Requirement" — verify a single requirement is created with both blocks linked (not concatenated into a text string)
+- [ ] Verify the merged requirement's detail view renders the prose paragraph followed by the formatted table, preserving the original document structure
+- [ ] Verify the merged requirement's `statement` field contains a plain-text fallback (for search), not the rendered body
+- [ ] On a block-linked requirement, click "Add Source Block" — select an additional block from the source document — verify it appends to the requirement body in the detail view
+- [ ] On a block-linked requirement with 3+ blocks, remove a middle block — verify the remaining blocks re-render in order with no gap
+- [ ] Remove all blocks from a block-linked requirement — verify the warning appears and the requirement converts to `content_source = 'manual'` with the statement fallback as editable body
+- [ ] Edit the body of a block-linked requirement — verify the edit saves to the `document_blocks` record and the change is visible both in the requirement detail view and in the source document's block viewer
+- [ ] Verify the warning banner appears when editing a shared block
+- [ ] Create a manual requirement (no source document) — verify it uses the `statement` text field, has `content_source = 'manual'`, and the detail view renders the text area as before
+- [ ] Search for a term that appears in a block-linked requirement's body — verify the full-text search finds it (via the `statement` plain-text fallback)
+- [ ] Open the requirements table — verify block-linked and manual requirements both display correctly in the Statement column
+- [ ] Export a requirements document containing both block-linked and manual requirements — verify prose blocks export as paragraphs, table blocks export as formatted tables, and manual requirements export as before
+- [ ] Click "Source Block" link on a block-linked requirement — verify navigation to the document viewer with the correct block highlighted
+- [ ] Run the Stage 14 migration script — verify any existing tabular requirements are converted to block-linked where source block linkage exists
+- [ ] Verify that accepting a candidate for a compound requirement (single block with multiple obligations) creates separate requirements that each link to the same source block but have different metadata
+- [ ] Re-extract requirements from a document that already has accepted candidates — verify no duplicate `requirement_blocks` records are created
  
 ---
  

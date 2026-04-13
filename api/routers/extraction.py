@@ -31,6 +31,7 @@ from models import (
     DocumentReference,
     ExtractionCandidate,
     Requirement,
+    RequirementBlock,
     RequirementLink,
     SourceDocument,
 )
@@ -161,6 +162,19 @@ def _build_block_tree(blocks: list[DocumentBlock]) -> list[dict]:
         else:
             roots.append(d)
     return roots
+
+
+def _block_plain_text(block: DocumentBlock) -> str:
+    """Return a plain-text representation of a block for search-index fallback."""
+    if block.block_type == "table_block" and block.table_data:
+        td = block.table_data
+        headers = td.get("headers") or []
+        rows = td.get("rows") or []
+        lines = [" | ".join(str(h) for h in headers)]
+        for row in rows:
+            lines.append(" | ".join(str(c) for c in row))
+        return "\n".join(lines)
+    return block.content
 
 
 def _get_doc_or_404(doc_id: str, db: Session) -> SourceDocument:
@@ -601,6 +615,22 @@ def accept_candidate(
         if body.unit_ids else []
     )
 
+    # Determine content_source and statement before creating the requirement.
+    # If the candidate has a source block we link to it; the statement becomes a
+    # plain-text search-index fallback derived from the block's content.
+    content_source = "manual"
+    if c.source_block_id:
+        source_block = db.query(DocumentBlock).filter(
+            DocumentBlock.id == c.source_block_id
+        ).first()
+        if source_block:
+            content_source = "block_linked"
+            # Override statement with the plain-text fallback (unless the user
+            # explicitly provided a statement override — which we still allow as
+            # the search fallback so it doesn't lose the body content entirely)
+            if not body.statement:
+                statement = _block_plain_text(source_block)
+
     req = Requirement(
         id=uuid.uuid4(),
         requirement_id=req_id,
@@ -616,12 +646,24 @@ def accept_candidate(
         created_date=date.today(),
         source_document_id=c.source_document_id,
         source_clause=c.source_clause,
+        content_source=content_source,
         hierarchy_nodes=hier_nodes,
         sites=sites,
         units=units,
     )
     db.add(req)
     db.flush()
+
+    # Create block linkage record for extraction-originated requirements
+    if content_source == "block_linked" and c.source_block_id:
+        req_block = RequirementBlock(
+            id=uuid.uuid4(),
+            requirement_id=req.id,
+            block_id=c.source_block_id,
+            sort_order=0,
+            created_at=datetime.utcnow(),
+        )
+        db.add(req_block)
 
     # Add parent traceability links
     for parent_id_str in body.parent_requirement_ids:
@@ -649,6 +691,7 @@ def accept_candidate(
             "owner": req.owner,
             "source_document_id": str(req.source_document_id),
             "source_clause": req.source_clause,
+            "content_source": req.content_source,
         },
         "candidate": _candidate_to_dict(c),
     }

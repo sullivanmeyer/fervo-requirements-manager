@@ -206,6 +206,8 @@ class Requirement(Base):
         ForeignKey("requirements.id", ondelete="SET NULL"),
         nullable=True,
     )
+    # 'manual' (typed by user) or 'block_linked' (body comes from document blocks)
+    content_source = Column(Text, nullable=False, default="manual")
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(
         DateTime,
@@ -344,6 +346,34 @@ class ExtractionCandidate(Base):
         ForeignKey("requirements.id", ondelete="SET NULL"),
         nullable=True,
     )
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+# ---------------------------------------------------------------------------
+# Requirement ↔ DocumentBlock junction (Stage 15 block-linked requirements)
+# ---------------------------------------------------------------------------
+
+class RequirementBlock(Base):
+    """
+    Links a requirement to one or more document blocks that constitute its body.
+    For requirements with content_source='block_linked', the block content is
+    the authoritative body; requirement.statement is a plain-text search fallback.
+    sort_order controls the display sequence when multiple blocks are linked.
+    """
+    __tablename__ = "requirement_blocks"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    requirement_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("requirements.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    block_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("document_blocks.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    sort_order = Column(Integer, default=0, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 

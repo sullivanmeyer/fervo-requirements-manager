@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from database import get_db
-from models import ConflictRecord, HierarchyNode, Requirement, RequirementLink, Site, SourceDocument, Unit
+from models import ConflictRecord, DocumentBlock, HierarchyNode, Requirement, RequirementBlock, RequirementLink, Site, SourceDocument, Unit
 from schemas import RequirementCreate, RequirementUpdate
 
 router = APIRouter()
@@ -79,6 +79,7 @@ def _requirement_to_dict(
         "status": req.status,
         "stale": req.stale,
         "discipline": req.discipline,
+        "content_source": req.content_source,
         "created_by": req.created_by,
         "created_date": req.created_date.isoformat() if req.created_date else None,
         "hierarchy_nodes": [
@@ -152,6 +153,29 @@ def _requirement_to_dict(
                     ],
                 })
 
+        # Linked source blocks for block_linked requirements
+        linked_blocks: list[dict] = []
+        if req.content_source == "block_linked" and db is not None:
+            rb_rows = (
+                db.query(RequirementBlock, DocumentBlock)
+                .join(DocumentBlock, RequirementBlock.block_id == DocumentBlock.id)
+                .filter(RequirementBlock.requirement_id == req.id)
+                .order_by(RequirementBlock.sort_order)
+                .all()
+            )
+            for rb, blk in rb_rows:
+                linked_blocks.append({
+                    "id": str(blk.id),
+                    "source_document_id": str(blk.source_document_id),
+                    "clause_number": blk.clause_number,
+                    "heading": blk.heading,
+                    "content": blk.content,
+                    "block_type": blk.block_type,
+                    "table_data": blk.table_data,
+                    "depth": blk.depth,
+                    "sort_order": rb.sort_order,
+                })
+
         base.update(
             {
                 "statement": req.statement,
@@ -177,6 +201,7 @@ def _requirement_to_dict(
                 "parent_requirements": parent_reqs,
                 "child_requirements": child_reqs,
                 "conflict_records": conflict_records,
+                "linked_blocks": linked_blocks,
             }
         )
     return base
