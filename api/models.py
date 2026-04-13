@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, Date, ForeignKey, Integer, Table, Text
-from sqlalchemy.dialects.postgresql import ARRAY, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import backref, relationship
 
 from database import Base
@@ -296,8 +296,11 @@ class DocumentBlock(Base):
     clause_number = Column(Text, nullable=True)
     heading = Column(Text, nullable=True)
     content = Column(Text, nullable=False)
-    # heading / requirement_clause / table_row / informational / boilerplate
+    # heading / requirement_clause / table_block / informational / boilerplate
     block_type = Column(Text, nullable=False)
+    # Populated for table_block type only:
+    # {caption, headers: [str], rows: [[str]], context_note}
+    table_data = Column(JSONB, nullable=True)
     sort_order = Column(Integer, default=0, nullable=False)
     depth = Column(Integer, default=0, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)

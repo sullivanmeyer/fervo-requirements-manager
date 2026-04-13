@@ -56,6 +56,7 @@ class BlockOut(BaseModel):
     heading: Optional[str]
     content: str
     block_type: str
+    table_data: Optional[dict] = None
     sort_order: int
     depth: int
     children: List["BlockOut"] = []
@@ -120,6 +121,7 @@ def _block_to_dict(block: DocumentBlock, include_children: bool = True) -> dict:
         "heading": block.heading,
         "content": block.content,
         "block_type": block.block_type,
+        "table_data": block.table_data,
         "sort_order": block.sort_order,
         "depth": block.depth,
         "children": [],
@@ -178,6 +180,8 @@ def _next_requirement_id(discipline: str, db: Session) -> str:
         "Process": "PROC",
         "Fire Protection": "FP",
         "General": "GEN",
+        "Build": "BUILD",
+        "Operations": "OPS",
     }
     prefix = prefixes.get(discipline, "GEN")
     existing = (
@@ -322,6 +326,7 @@ def _run_decomposition(doc_id: str, file_path: str):
                 heading=raw.get("heading"),
                 content=raw.get("content", ""),
                 block_type=raw.get("block_type", "informational"),
+                table_data=raw.get("table_data"),
                 sort_order=raw.get("sort_order", 0),
                 depth=raw.get("depth", 0),
                 created_at=datetime.utcnow(),

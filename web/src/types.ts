@@ -240,6 +240,13 @@ export interface Attachment {
 // Document blocks (LLM decomposition)
 // ---------------------------------------------------------------------------
 
+export interface TableData {
+  caption: string | null
+  headers: string[]
+  rows: string[][]
+  context_note: string | null
+}
+
 export interface DocumentBlock {
   id: string
   source_document_id: string
@@ -247,7 +254,8 @@ export interface DocumentBlock {
   clause_number: string | null
   heading: string | null
   content: string
-  block_type: 'heading' | 'requirement_clause' | 'table_row' | 'informational' | 'boilerplate'
+  block_type: 'heading' | 'requirement_clause' | 'table_block' | 'informational' | 'boilerplate'
+  table_data: TableData | null
   sort_order: number
   depth: number
   children: DocumentBlock[]

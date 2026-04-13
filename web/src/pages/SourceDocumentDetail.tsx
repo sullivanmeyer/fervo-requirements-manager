@@ -48,6 +48,7 @@ import type {
   ExtractionCandidate,
   SourceDocumentDetail as DocDetail,
   SourceDocumentListItem,
+  TableData,
 } from '../types'
 
 // ---------------------------------------------------------------------------
@@ -71,12 +72,14 @@ const DISCIPLINES = [
   'Process',
   'Fire Protection',
   'General',
+  'Build',
+  'Operations',
 ]
 
 const BLOCK_TYPE_STYLES: Record<string, string> = {
   heading: 'bg-blue-100 text-blue-700',
   requirement_clause: 'bg-green-100 text-green-700',
-  table_row: 'bg-purple-100 text-purple-700',
+  table_block: 'bg-purple-100 text-purple-700',
   informational: 'bg-gray-100 text-gray-600',
   boilerplate: 'bg-gray-50 text-gray-400',
 }
@@ -84,7 +87,7 @@ const BLOCK_TYPE_STYLES: Record<string, string> = {
 const BLOCK_TYPE_LABELS: Record<string, string> = {
   heading: 'Heading',
   requirement_clause: 'Requirement',
-  table_row: 'Table',
+  table_block: 'Table',
   informational: 'Info',
   boilerplate: 'Boilerplate',
 }
@@ -146,6 +149,45 @@ function BlockTypeBadge({ type }: { type: string }) {
     <span className={`text-xs font-medium px-1.5 py-0.5 rounded shrink-0 ${cls}`}>
       {label}
     </span>
+  )
+}
+
+/** Render structured table_data as a compact HTML table. */
+function TablePreview({ data, compact = false }: { data: TableData; compact?: boolean }) {
+  return (
+    <div className={`overflow-x-auto ${compact ? 'max-h-32' : 'max-h-64'} overflow-y-auto`}>
+      {data.caption && (
+        <p className="text-xs text-gray-500 italic mb-1">{data.caption}</p>
+      )}
+      <table className="text-xs border-collapse w-full">
+        <thead>
+          <tr className="bg-purple-50">
+            {data.headers.map((h, i) => (
+              <th
+                key={i}
+                className="border border-purple-200 px-2 py-1 text-left font-semibold text-purple-800 whitespace-nowrap"
+              >
+                {h || '—'}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {data.rows.map((row, ri) => (
+            <tr key={ri} className={ri % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+              {row.map((cell, ci) => (
+                <td
+                  key={ci}
+                  className="border border-gray-200 px-2 py-1 text-gray-700"
+                >
+                  {cell || ''}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
   )
 }
 
@@ -999,13 +1041,17 @@ export default function SourceDocumentDetail({
                                   )}
                                   <BlockTypeBadge type={block.block_type} />
                                 </div>
-                                <p className={`text-xs leading-relaxed line-clamp-2 ${
-                                  block.block_type === 'heading'
-                                    ? 'font-semibold text-gray-800'
-                                    : 'text-gray-700'
-                                }`}>
-                                  {block.heading ?? block.content}
-                                </p>
+                                {block.block_type === 'table_block' && block.table_data ? (
+                                  <TablePreview data={block.table_data} compact />
+                                ) : (
+                                  <p className={`text-xs leading-relaxed line-clamp-2 ${
+                                    block.block_type === 'heading'
+                                      ? 'font-semibold text-gray-800'
+                                      : 'text-gray-700'
+                                  }`}>
+                                    {block.heading ?? block.content}
+                                  </p>
+                                )}
                               </div>
                             </div>
                           )
@@ -1081,7 +1127,22 @@ export default function SourceDocumentDetail({
                                 <div className="flex items-start gap-2 mb-2">
                                   <div className="flex-1 min-w-0">
                                     <p className="text-xs font-semibold text-gray-800 mb-0.5">{c.title}</p>
-                                    <p className="text-xs text-gray-600 line-clamp-2">{c.statement}</p>
+                                    {/* If the candidate came from a table block, render a table preview */}
+                                    {(() => {
+                                      const srcBlock = c.source_block_id
+                                        ? blocks.find((b) => b.id === c.source_block_id)
+                                        : null
+                                      return srcBlock?.block_type === 'table_block' && srcBlock.table_data ? (
+                                        <div className="mt-1">
+                                          <span className="text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded font-medium mr-1">
+                                            Tabular
+                                          </span>
+                                          <TablePreview data={srcBlock.table_data} compact />
+                                        </div>
+                                      ) : (
+                                        <p className="text-xs text-gray-600 line-clamp-2">{c.statement}</p>
+                                      )
+                                    })()}
                                     <div className="flex items-center gap-1.5 mt-1 flex-wrap">
                                       {c.source_clause && (
                                         <button
