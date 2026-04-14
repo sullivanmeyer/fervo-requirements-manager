@@ -907,12 +907,54 @@ metadata (title, classification, discipline, subtype), not rewriting content.
 - [x] `contentSource` and `linkedBlocks` state variables; populated from loaded detail response
 - [x] Save validation: statement is only required for `manual` requirements; block-linked requirements skip the statement check
 - [x] `LinkedBlock` and `TableData` types imported from `types.ts`
+
+### Backend — Vision-Assisted Table Parsing (Merged Cell Handling)
+- [x] pdfplumber's role is reduced to **table detection only** — use `find_tables()` to identify table bounding boxes and page locations, but do NOT rely on its cell-level text extraction for the final table structure
+- [x] For each detected table bounding box, **rasterize the table region** from the PDF page at 200+ DPI using pdfplumber's `.to_image()` cropped to the table's bounding box plus an 8-point margin (to capture caption text directly above)
+- [x] Send each rasterized table image to Gemini's vision API with a structured prompt requesting `headers: string[][]`, `rows`, `caption`, and `footnotes`; `response_mime_type="application/json"` enforced
+- [x] Parse Gemini's JSON response and store in the `table_data` JSONB field on the `document_block` — `table_data` schema extended:
+  ```
+  {
+    caption: string | null,
+    headers: string[][],          // array of arrays for multi-level headers
+    rows: string[][],
+    footnotes: string | null,     // new field
+    context_note: string | null,
+    table_parse_quality: 'vision' | 'fallback'   // new field
+  }
+  ```
+- [x] Fallback: if Gemini vision fails or returns unparseable JSON, fall back to pdfplumber's raw cell extraction; fallback `headers` is still wrapped as `string[][]` (`[padded[0]]`); `table_parse_quality` set to `'fallback'`
+- [x] `Pillow>=10.0.0` added to `api/requirements.txt` (required by pdfplumber `.to_image()`)
+ 
+### Backend — Table Detection Pipeline Updates
+- [x] Updated `services/table_extraction.py` — new pipeline:
+  - [x] **Step 1 — Bounding box detection**: pdfplumber `find_tables()` (unchanged)
+  - [x] **Step 2 — Table rasterization**: `_crop_table_image()` crops each table region and returns PNG bytes at 200 DPI
+  - [x] **Step 3 — Vision extraction**: `_vision_extract_table()` sends each PNG to Gemini Vision; normalises flat-array response to `string[][]`
+  - [x] **Step 4 — Region classification / prose extraction**: unchanged
+  - [x] **Step 5 — Text assembly**: prose sections interleaved with `[TABLE BLOCK — Page N, ID: TABLE_PN_IX]` markers; vision-extracted `table_data` embedded inline under `TABLE_DATA:` prefix for downstream Gemini to copy
+- [x] `extract_content_with_tables` return type changed to `tuple[str | None, dict[str, dict]]` (text + table_map); caller updated
+- [x] `decompose_document` in `extraction.py` post-processes blocks after LLM call: matches each `table_block` to its pre-extracted vision `table_data` by marker ID (primary) or positional order (fallback), replacing LLM-generated `table_data`
+- [x] DECOMPOSE_USER prompt updated: instructs Gemini to copy embedded `TABLE_DATA:` JSON verbatim; example updated to show `headers: string[][]` format
+ 
+### Frontend — Multi-Level Header Rendering
+- [x] `normalizeHeaders(headers: string[] | string[][]): string[][]` helper coerces legacy flat arrays to `[headers]` so both old and new DB records render identically
+- [x] `colspanGroups(row: string[]): {value, colspan}[]` helper compresses consecutive identical non-empty cells for `colspan` rendering
+- [x] `TablePreview` in `SourceDocumentDetail.tsx` updated: each inner array renders as a `<tr>` in `<thead>`; top row gets darker purple background when multi-level; `colspan` applied via `colspanGroups`
+- [x] `BlockRenderer` table section in `RequirementDetail.tsx` updated with the same logic
+- [x] `TypeScript TableData.headers` changed to `string[] | string[][]` in `types.ts`
+- [ ] The inline table editor for multi-level headers — **partially deferred**: in edit mode, multi-level headers are flattened to the leaf row for editing; header rows are read-only with a note; full per-row header editing (with colspan propagation) is a future enhancement
+ 
+### Frontend — Table Parse Quality Indicator
+- [x] Amber warning badge ("Table parsed with reduced accuracy — review for errors") shown above any table with `table_parse_quality === 'fallback'`
+- [x] Fallback tables have an amber left border (`border-l-2 border-l-amber-400`) in both `TablePreview` and `BlockRenderer`
+- [x] Vision-parsed tables display with no indicator (no visual noise when parsing succeeded)
  
 ### Frontend — Block Editing in Requirement Detail
 - [ ] Inline block editing (click-to-edit prose and table cells) — **deferred to future stage**
  
 ### Frontend — "Merge to Requirement" Rewiring
-- [ ] "Merge to Requirement" currently concatenates text → statement; rewire to create block-linked requirement — **deferred to future stage**
+- [x] "Merge to Requirement" currently concatenates text → statement; rewire to create block-linked requirement — **deferred to future stage**
  
 ### Frontend — Post-Acceptance Block Linking (Add/Remove Source Blocks)
 - [ ] Add/Remove source blocks UI on requirement detail — **deferred to future stage**
@@ -930,11 +972,11 @@ metadata (title, classification, discipline, subtype), not rewriting content.
 - [ ] One-time migration script for any existing Stage 14 tabular requirements — **deferred; no such requirements exist in production yet**
  
 ### Stage 15 Verification
-- [ ] Upload a Kiewit MSPEC-KIE document, decompose, and extract requirements — accept a prose candidate — verify the created requirement has `content_source = 'block_linked'` and the detail view renders the original block content (not a rewritten statement)
-- [ ] Accept a tabular candidate (table_block) — verify the detail view renders a formatted table directly from the linked block, not from a `table_data` copy on the requirement
+- [x] Upload a Kiewit MSPEC-KIE document, decompose, and extract requirements — accept a prose candidate — verify the created requirement has `content_source = 'block_linked'` and the detail view renders the original block content (not a rewritten statement)
+- [x] Accept a tabular candidate (table_block) — verify the detail view renders a formatted table directly from the linked block, not from a `table_data` copy on the requirement
 - [ ] Accept a multi-block candidate (prose + table) — verify the detail view renders both blocks in order with appropriate spacing
-- [ ] Select a prose block (e.g., §6.2.3 "Field butt welds shall be prepared...") and its associated table block (e.g., Table 1) via checkboxes — click "Merge to Requirement" — verify a single requirement is created with both blocks linked (not concatenated into a text string)
-- [ ] Verify the merged requirement's detail view renders the prose paragraph followed by the formatted table, preserving the original document structure
+- [x] Select a prose block (e.g., §6.2.3 "Field butt welds shall be prepared...") and its associated table block (e.g., Table 1) via checkboxes — click "Merge to Requirement" — verify a single requirement is created with both blocks linked (not concatenated into a text string)
+- [x] Verify the merged requirement's detail view renders the prose paragraph followed by the formatted table, preserving the original document structure
 - [ ] Verify the merged requirement's `statement` field contains a plain-text fallback (for search), not the rendered body
 - [ ] On a block-linked requirement, click "Add Source Block" — select an additional block from the source document — verify it appends to the requirement body in the detail view
 - [ ] On a block-linked requirement with 3+ blocks, remove a middle block — verify the remaining blocks re-render in order with no gap

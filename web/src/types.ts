@@ -263,9 +263,14 @@ export interface Attachment {
 
 export interface TableData {
   caption: string | null
-  headers: string[]
+  /** Flat single-row headers (legacy) OR array-of-rows for multi-level headers */
+  headers: string[] | string[][]
   rows: string[][]
   context_note: string | null
+  /** Footnotes / notes printed below the table body */
+  footnotes?: string | null
+  /** 'vision' = parsed by Gemini Vision; 'fallback' = pdfplumber cell extraction */
+  table_parse_quality?: 'vision' | 'fallback'
 }
 
 export interface DocumentBlock {

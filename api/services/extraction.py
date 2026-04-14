@@ -50,8 +50,9 @@ Rules:
 - For each block include:
     clause_number   : string like "5.3.1" or "Table 4", or null if none
     heading         : the heading/title text if this block IS a heading, else null
-    content         : the full verbatim text of this block (for table_block, include
-                      the Markdown table as-is from the [TABLE BLOCK] marker)
+    content         : the full verbatim text of this block.
+                      For table_block: include the marker line verbatim,
+                      e.g. "[TABLE BLOCK — Page 3, ID: TABLE_P3_I0]"
     block_type      : one of:
                         "heading"            – section title, no substantive content
                         "requirement_clause" – contains SHALL / SHOULD / MAY obligations
@@ -59,13 +60,17 @@ Rules:
                         "informational"      – explanatory or descriptive text
                         "boilerplate"        – TOC, revision history, signatures,
                                                distribution lists, legal notices
-    table_data      : ONLY for table_block — a JSON object:
-                        {
-                          "caption": "Table title or null",
-                          "headers": ["Col1", "Col2", ...],
-                          "rows": [["Cell", "Cell"], ...],
-                          "context_note": "brief note on what this table specifies"
-                        }
+    table_data      : ONLY for table_block — either:
+                        (a) If the marker contains "TABLE_DATA: {...}", copy that
+                            JSON object verbatim as the table_data value.
+                        (b) Otherwise parse the Markdown table and produce:
+                            {
+                              "caption": "Table title or null",
+                              "headers": [["Col1", "Col2", ...]],
+                              "rows": [["Cell", "Cell"], ...],
+                              "context_note": "brief note on what this table specifies"
+                            }
+                            Note: headers is an array of arrays (even single-row).
                       For all other block types, set table_data to null.
     parent_clause_number : clause_number of the immediate parent block, or null
     depth           : nesting depth (0 = top-level section, 1 = sub-section, etc.)
@@ -90,15 +95,15 @@ Prose requirement:
   "depth": 2
 }
 
-Table block:
+Table block (pre-parsed TABLE_DATA path):
 {
   "clause_number": "Table 3",
   "heading": "Design Parameters",
-  "content": "| Parameter | Value | Unit |\\n|---|---|---|\\n| Design Pressure | 150 | psig |",
+  "content": "[TABLE BLOCK — Page 2, ID: TABLE_P2_I0]",
   "block_type": "table_block",
   "table_data": {
     "caption": "Table 3 — Design Parameters",
-    "headers": ["Parameter", "Value", "Unit"],
+    "headers": [["Parameter", "Value", "Unit"]],
     "rows": [["Design Pressure", "150", "psig"]],
     "context_note": "Specifies minimum design parameters for the pressure vessel"
   },
@@ -262,16 +267,25 @@ def decompose_document(pdf_bytes: bytes) -> list[dict]:
     client = _get_client()
 
     # ------------------------------------------------------------------
-    # Path 1: pdfplumber text extraction (handles tables structurally)
+    # Path 1: pdfplumber + Gemini Vision pre-processing
     # ------------------------------------------------------------------
     from services.table_extraction import extract_content_with_tables
 
-    extracted_text = extract_content_with_tables(pdf_bytes)
+    # Pass the Gemini client so table_extraction can call vision API for
+    # each table region.  Returns (text, table_map) where table_map maps
+    # marker IDs like "TABLE_P3_I0" → pre-extracted table_data dicts.
+    extracted_text, table_map = extract_content_with_tables(
+        pdf_bytes, gemini_client=client
+    )
 
     if extracted_text:
+        vision_count = sum(
+            1 for v in table_map.values()
+            if v.get("table_parse_quality") == "vision"
+        )
         print(
             f"[decompose] pdfplumber extracted {len(extracted_text)} chars — "
-            "using text-based path"
+            f"using text-based path ({vision_count}/{len(table_map)} tables via vision)"
         )
         prompt = f"=== DOCUMENT CONTENT ===\n{extracted_text}\n\n{DECOMPOSE_USER}"
         response = _generate_with_retry(
@@ -348,6 +362,32 @@ def decompose_document(pdf_bytes: bytes) -> list[dict]:
             "depth": int(b.get("depth", 0)),
             "sort_order": i,
         })
+
+    # ------------------------------------------------------------------
+    # Inject pre-extracted vision table_data into table_block entries.
+    #
+    # The vision data is authoritative — it handles merged/multi-level
+    # headers that the LLM text-parsing cannot recover.  We match by:
+    #   1. Exact marker ID embedded in block.content  (primary)
+    #   2. Positional order among table_blocks        (fallback)
+    # ------------------------------------------------------------------
+    if table_map:
+        table_ids_in_order = list(table_map.keys())
+        positional_index = 0
+
+        for block in normalised:
+            if block["block_type"] != "table_block":
+                continue
+
+            content = block.get("content", "")
+            # Try exact match: look for "ID: TABLE_P3_I0" in content
+            id_match = re.search(r"ID:\s*(TABLE_P\d+_I\d+)", content)
+            if id_match and id_match.group(1) in table_map:
+                block["table_data"] = table_map[id_match.group(1)]
+            elif positional_index < len(table_ids_in_order):
+                block["table_data"] = table_map[table_ids_in_order[positional_index]]
+
+            positional_index += 1
     return normalised
 
 

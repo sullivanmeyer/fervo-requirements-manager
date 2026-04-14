@@ -188,10 +188,41 @@ function formFromDetail(req: ReqDetail): FormState {
 // Block renderer — renders linked source blocks in the requirement body
 // ---------------------------------------------------------------------------
 
-/** Regenerate Markdown table text from structured table_data (keeps block.content in sync). */
+/** Normalise headers to string[][] for uniform rendering. */
+function normalizeHeaders(headers: string[] | string[][]): string[][] {
+  if (!headers.length) return []
+  return typeof headers[0] === 'string'
+    ? [headers as string[]]
+    : (headers as string[][])
+}
+
+/** Compress consecutive identical non-empty cells into colspan groups. */
+function colspanGroups(row: string[]): { value: string; colspan: number }[] {
+  const result: { value: string; colspan: number }[] = []
+  for (const cell of row) {
+    if (
+      result.length > 0 &&
+      cell !== '' &&
+      result[result.length - 1].value === cell
+    ) {
+      result[result.length - 1].colspan++
+    } else {
+      result.push({ value: cell, colspan: 1 })
+    }
+  }
+  return result
+}
+
+/**
+ * Regenerate Markdown table text from structured table_data.
+ * Uses the last (leaf) header row as the column names so the plain-text
+ * search-index fallback is as useful as possible.
+ */
 function tableDataToMarkdown(td: TableData): string {
-  const header = '| ' + td.headers.join(' | ') + ' |'
-  const sep = '| ' + td.headers.map(() => '---').join(' | ') + ' |'
+  const headerRows = normalizeHeaders(td.headers)
+  const leafHeaders = headerRows[headerRows.length - 1] ?? []
+  const header = '| ' + leafHeaders.join(' | ') + ' |'
+  const sep = '| ' + leafHeaders.map(() => '---').join(' | ') + ' |'
   const rows = td.rows.map((row) => '| ' + row.join(' | ') + ' |')
   return [header, sep, ...rows].join('\n')
 }
@@ -212,8 +243,17 @@ function BlockRenderer({
   const startEdit = (block: LinkedBlock) => {
     setEditingId(block.id)
     setEditContent(block.content)
-    // Deep-copy so edits don't mutate the display state before saving
-    setEditTableData(block.table_data ? JSON.parse(JSON.stringify(block.table_data)) : null)
+    if (block.table_data) {
+      // Deep-copy so edits don't mutate the display state before saving.
+      // Flatten multi-level headers to the leaf row (last row) for the edit
+      // inputs — multi-level header restructuring isn't supported inline.
+      const td: TableData = JSON.parse(JSON.stringify(block.table_data))
+      const rows = normalizeHeaders(td.headers)
+      td.headers = rows[rows.length - 1] ?? []
+      setEditTableData(td)
+    } else {
+      setEditTableData(null)
+    }
     setSaveError(null)
   }
 
@@ -270,36 +310,66 @@ function BlockRenderer({
         if (block.block_type === 'table_block') {
           const td = isEditing ? editTableData : block.table_data
           if (!td) return null
+          const headerRows = normalizeHeaders(td.headers)
+          const isMultiLevel = headerRows.length > 1
+          const isFallback = td.table_parse_quality === 'fallback'
           return (
             <div key={block.id}>
               {prefix && <div className="mb-1">{prefix}</div>}
+              {isFallback && (
+                <p className="text-xs bg-amber-50 text-amber-700 border border-amber-200 rounded px-1.5 py-0.5 mb-1">
+                  Table parsed with reduced accuracy — review for errors
+                </p>
+              )}
               {td.caption && (
                 <p className="text-xs text-gray-500 italic mb-1">{td.caption}</p>
               )}
-              <div className="overflow-x-auto">
+              <div className={`overflow-x-auto ${isFallback ? 'border-l-2 border-l-amber-400 pl-1' : ''}`}>
                 <table className="text-xs border-collapse w-full">
                   <thead>
-                    <tr className="bg-purple-50">
-                      {td.headers.map((h, ci) =>
-                        isEditing ? (
-                          <th key={ci} className="border border-purple-200 px-1 py-1">
-                            <input
-                              value={h}
-                              onChange={(e) => {
-                                const nh = [...editTableData!.headers]
-                                nh[ci] = e.target.value
-                                setEditTableData({ ...editTableData!, headers: nh })
-                              }}
-                              className="w-full min-w-[80px] bg-white border border-purple-300 rounded px-1 py-0.5 text-xs font-semibold text-purple-800 focus:outline-none focus:ring-1 focus:ring-purple-400"
-                            />
-                          </th>
-                        ) : (
-                          <th key={ci} className="border border-purple-200 px-2 py-1 text-left font-semibold text-purple-800 whitespace-nowrap">
-                            {h || '—'}
-                          </th>
-                        )
-                      )}
-                    </tr>
+                    {headerRows.map((row, rowIdx) => (
+                      <tr key={rowIdx} className={rowIdx === 0 && isMultiLevel ? 'bg-purple-100' : 'bg-purple-50'}>
+                        {isEditing && !isMultiLevel
+                          /* Edit mode: flat single-row headers become inputs */
+                          ? row.map((h, ci) => (
+                              <th key={ci} className="border border-purple-200 px-1 py-1">
+                                <input
+                                  value={h}
+                                  onChange={(e) => {
+                                    // editTableData.headers is always string[] in edit mode
+                                    const nh = [...(editTableData!.headers as string[])]
+                                    nh[ci] = e.target.value
+                                    setEditTableData({ ...editTableData!, headers: nh })
+                                  }}
+                                  className="w-full min-w-[80px] bg-white border border-purple-300 rounded px-1 py-0.5 text-xs font-semibold text-purple-800 focus:outline-none focus:ring-1 focus:ring-purple-400"
+                                />
+                              </th>
+                            ))
+                          /* Display mode or multi-level: render with colspan */
+                          : colspanGroups(row).map(({ value, colspan }, ci) => (
+                              <th
+                                key={ci}
+                                colSpan={colspan}
+                                className={`border border-purple-200 px-2 py-1 text-left text-purple-800 whitespace-nowrap ${
+                                  rowIdx === 0 && isMultiLevel ? 'font-bold' : 'font-semibold'
+                                }`}
+                              >
+                                {value || '—'}
+                              </th>
+                            ))
+                        }
+                      </tr>
+                    ))}
+                    {isEditing && isMultiLevel && (
+                      <tr>
+                        <td
+                          colSpan={headerRows[headerRows.length - 1]?.length ?? 1}
+                          className="px-2 py-1 text-xs text-amber-600 bg-amber-50 border border-amber-200"
+                        >
+                          Multi-level headers are read-only — edit body cells below
+                        </td>
+                      </tr>
+                    )}
                   </thead>
                   <tbody>
                     {td.rows.map((row, ri) => (
@@ -329,6 +399,9 @@ function BlockRenderer({
                   </tbody>
                 </table>
               </div>
+              {td.footnotes && (
+                <p className="text-xs text-gray-500 italic mt-1">{td.footnotes}</p>
+              )}
               {/* Edit controls */}
               <div className="mt-1 flex items-center gap-2">
                 {isEditing ? (

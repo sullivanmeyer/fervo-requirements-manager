@@ -153,25 +153,70 @@ function BlockTypeBadge({ type }: { type: string }) {
   )
 }
 
+/**
+ * Normalise headers to always be string[][] so the renderer is uniform.
+ * Legacy flat string[] (old DB records) get wrapped in an outer array.
+ */
+function normalizeHeaders(headers: string[] | string[][]): string[][] {
+  if (!headers.length) return []
+  return typeof headers[0] === 'string'
+    ? [headers as string[]]
+    : (headers as string[][])
+}
+
+/**
+ * Compress consecutive identical non-empty cells in a single header row
+ * into colspan groups.  Empty strings are never merged (they represent
+ * deliberately blank sub-header cells).
+ */
+function colspanGroups(row: string[]): { value: string; colspan: number }[] {
+  const result: { value: string; colspan: number }[] = []
+  for (const cell of row) {
+    if (
+      result.length > 0 &&
+      cell !== '' &&
+      result[result.length - 1].value === cell
+    ) {
+      result[result.length - 1].colspan++
+    } else {
+      result.push({ value: cell, colspan: 1 })
+    }
+  }
+  return result
+}
+
 /** Render structured table_data as a compact HTML table. */
 function TablePreview({ data, compact = false }: { data: TableData; compact?: boolean }) {
+  const headerRows = normalizeHeaders(data.headers)
+  const isFallback = data.table_parse_quality === 'fallback'
+
   return (
     <div className={`overflow-x-auto ${compact ? 'max-h-32' : 'max-h-64'} overflow-y-auto`}>
+      {isFallback && (
+        <p className="text-xs bg-amber-50 text-amber-700 border border-amber-200 rounded px-1.5 py-0.5 mb-1">
+          Table parsed with reduced accuracy — review for errors
+        </p>
+      )}
       {data.caption && (
         <p className="text-xs text-gray-500 italic mb-1">{data.caption}</p>
       )}
-      <table className="text-xs border-collapse w-full">
+      <table className={`text-xs border-collapse w-full ${isFallback ? 'border-l-2 border-l-amber-400' : ''}`}>
         <thead>
-          <tr className="bg-purple-50">
-            {data.headers.map((h, i) => (
-              <th
-                key={i}
-                className="border border-purple-200 px-2 py-1 text-left font-semibold text-purple-800 whitespace-nowrap"
-              >
-                {h || '—'}
-              </th>
-            ))}
-          </tr>
+          {headerRows.map((row, rowIdx) => (
+            <tr key={rowIdx} className={rowIdx === 0 && headerRows.length > 1 ? 'bg-purple-100' : 'bg-purple-50'}>
+              {colspanGroups(row).map(({ value, colspan }, ci) => (
+                <th
+                  key={ci}
+                  colSpan={colspan}
+                  className={`border border-purple-200 px-2 py-1 text-left text-purple-800 whitespace-nowrap ${
+                    rowIdx === 0 && headerRows.length > 1 ? 'font-bold' : 'font-semibold'
+                  }`}
+                >
+                  {value || '—'}
+                </th>
+              ))}
+            </tr>
+          ))}
         </thead>
         <tbody>
           {data.rows.map((row, ri) => (
@@ -188,6 +233,9 @@ function TablePreview({ data, compact = false }: { data: TableData; compact?: bo
           ))}
         </tbody>
       </table>
+      {data.footnotes && (
+        <p className="text-xs text-gray-500 italic mt-1">{data.footnotes}</p>
+      )}
     </div>
   )
 }
