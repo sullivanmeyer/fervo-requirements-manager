@@ -6,7 +6,7 @@ from uuid import UUID
 
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from database import get_db
@@ -80,6 +80,7 @@ def _requirement_to_dict(
         "stale": req.stale,
         "discipline": req.discipline,
         "content_source": req.content_source,
+        "archived": req.archived,
         "created_by": req.created_by,
         "created_date": req.created_date.isoformat() if req.created_date else None,
         "hierarchy_nodes": [
@@ -289,6 +290,7 @@ def list_requirements(
     has_open_conflicts: Optional[bool] = Query(None),
     classification_subtype: Optional[str] = Query(None),
     stale: Optional[bool] = Query(None),
+    include_archived: bool = Query(False),
     db: Session = Depends(get_db),
 ):
     """
@@ -303,6 +305,8 @@ def list_requirements(
     base_q = db.query(Requirement).filter(
         Requirement.requirement_id != SELF_DERIVED_ID
     )
+    if not include_archived:
+        base_q = base_q.filter(Requirement.archived == False)  # noqa: E712
 
     if status:
         base_q = base_q.filter(Requirement.status.in_(status))
@@ -437,6 +441,28 @@ def get_requirement(req_id: UUID, db: Session = Depends(get_db)):
     req = db.get(Requirement, req_id)
     if not req:
         raise HTTPException(status_code=404, detail="Requirement not found")
+    return _requirement_to_dict(req, detail=True, db=db)
+
+
+@router.patch("/requirements/{req_id}/archive")
+def toggle_archive(
+    req_id: UUID,
+    archived: bool = Body(..., embed=True),
+    db: Session = Depends(get_db),
+):
+    """Archive or restore a requirement (soft delete).
+
+    Pass { "archived": true } to archive, { "archived": false } to restore.
+    All traceability links, block linkages, and history are preserved.
+    """
+    req = db.get(Requirement, req_id)
+    if not req:
+        raise HTTPException(status_code=404, detail="Requirement not found")
+    if req.requirement_id == SELF_DERIVED_ID:
+        raise HTTPException(status_code=403, detail="The Self-Derived record cannot be archived")
+    req.archived = archived
+    db.commit()
+    db.refresh(req)
     return _requirement_to_dict(req, detail=True, db=db)
 
 

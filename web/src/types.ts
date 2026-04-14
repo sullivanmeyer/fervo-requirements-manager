@@ -113,6 +113,7 @@ export interface RequirementListItem {
   stale: boolean
   discipline: string
   content_source: 'manual' | 'block_linked'
+  archived: boolean
   created_by: string
   created_date: string
   hierarchy_nodes: { id: string; name: string }[]

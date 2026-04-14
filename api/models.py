@@ -208,6 +208,9 @@ class Requirement(Base):
     )
     # 'manual' (typed by user) or 'block_linked' (body comes from document blocks)
     content_source = Column(Text, nullable=False, default="manual")
+    # Soft-delete: archived requirements are hidden from list/filter views but all
+    # traceability links and history are preserved
+    archived = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(
         DateTime,

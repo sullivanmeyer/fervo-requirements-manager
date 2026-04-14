@@ -80,6 +80,22 @@ export async function updateRequirement(
   return res.json() as Promise<RequirementDetail>
 }
 
+export async function archiveRequirement(
+  id: string,
+  archived: boolean,
+): Promise<RequirementDetail> {
+  const res = await fetch(`${BASE}/requirements/${id}/archive`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ archived }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(extractDetail(err, `Archive failed (${res.status})`))
+  }
+  return res.json() as Promise<RequirementDetail>
+}
+
 export async function transferDiscipline(
   id: string,
   targetDiscipline: string,

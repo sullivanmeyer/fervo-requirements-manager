@@ -10,6 +10,7 @@
 import { type ChangeEvent, useEffect, useRef, useState, useCallback } from 'react'
 import {
   addLink,
+  archiveRequirement,
   createRequirement,
   fetchAllRequirements,
   fetchRequirement,
@@ -612,6 +613,11 @@ export default function RequirementDetail({
   const [contentSource, setContentSource] = useState<'manual' | 'block_linked'>('manual')
   const [linkedBlocks, setLinkedBlocks] = useState<LinkedBlock[]>([])
 
+  // Archive state
+  const [isArchived, setIsArchived] = useState(false)
+  const [archiving, setArchiving] = useState(false)
+  const [archiveError, setArchiveError] = useState<string | null>(null)
+
   // Gap analysis state
   const [gapAnalysis, setGapAnalysis] = useState<GapAnalysisResult | null>(null)
   const [gapLoading, setGapLoading] = useState(false)
@@ -673,6 +679,7 @@ export default function RequirementDetail({
           setSupersededById(req.superseded_by_id ?? null)
           setContentSource(req.content_source ?? 'manual')
           setLinkedBlocks(req.linked_blocks ?? [])
+          setIsArchived(req.archived ?? false)
         } catch (e) {
           setError(e instanceof Error ? e.message : 'Failed to load requirement')
         } finally {
@@ -914,6 +921,38 @@ export default function RequirementDetail({
               Transfer Discipline
             </button>
           )}
+          {!isNew && (
+            <button
+              onClick={async () => {
+                if (!savedDbId) return
+                setArchiving(true)
+                setArchiveError(null)
+                try {
+                  await archiveRequirement(savedDbId, !isArchived)
+                  if (!isArchived) {
+                    // Archiving — navigate away (requirement disappears from list)
+                    onCancel()
+                  } else {
+                    // Restoring — stay on the page, update badge
+                    setIsArchived(false)
+                  }
+                } catch (e) {
+                  setArchiveError(e instanceof Error ? e.message : 'Archive failed')
+                } finally {
+                  setArchiving(false)
+                }
+              }}
+              disabled={archiving}
+              className={
+                isArchived
+                  ? 'px-3 py-1.5 text-sm border border-green-300 text-green-700 rounded hover:bg-green-50 disabled:opacity-50'
+                  : 'px-3 py-1.5 text-sm border border-red-200 text-red-600 rounded hover:bg-red-50 disabled:opacity-50'
+              }
+              title={isArchived ? 'Restore this requirement to active workflows' : 'Archive this requirement (soft delete)'}
+            >
+              {archiving ? '…' : isArchived ? 'Restore' : 'Archive'}
+            </button>
+          )}
           <button
             onClick={onCancel}
             className="px-3 py-1.5 text-sm border border-gray-300 text-gray-600 rounded hover:bg-gray-50"
@@ -978,6 +1017,21 @@ export default function RequirementDetail({
       {error && (
         <div className="px-4 py-2 bg-red-50 border-b border-red-200 text-sm text-red-700">
           {error}
+        </div>
+      )}
+      {archiveError && (
+        <div className="px-4 py-2 bg-red-50 border-b border-red-200 text-sm text-red-700">
+          {archiveError}
+        </div>
+      )}
+
+      {/* Archived banner */}
+      {isArchived && (
+        <div className="px-4 py-2 bg-gray-100 border-b border-gray-300 text-sm text-gray-600 flex items-center gap-2 shrink-0">
+          <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8" />
+          </svg>
+          <span>This requirement is <strong>archived</strong> — it is hidden from the requirements table and exports. Use the Restore button to make it active again.</span>
         </div>
       )}
 
