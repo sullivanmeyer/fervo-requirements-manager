@@ -1,4 +1,4 @@
-import type { DocumentBlock, ExtractionCandidate } from '../types'
+import type { DocumentBlock, ExtractionCandidate, TableData } from '../types'
 
 const BASE = '/api'
 
@@ -26,12 +26,12 @@ export async function fetchBlocks(documentId: string): Promise<DocumentBlock[]> 
 
 export async function updateBlock(
   blockId: string,
-  content: string,
+  updates: { content: string; table_data?: TableData | null },
 ): Promise<DocumentBlock> {
   const res = await fetch(`${BASE}/document-blocks/${blockId}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content }),
+    body: JSON.stringify(updates),
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({})) as { detail?: string }

@@ -7,7 +7,7 @@
  * Pass requirementId=null to create a new requirement.
  * Pass initialParentIds to pre-populate parents (used by "Add Child").
  */
-import { type ChangeEvent, useEffect, useRef, useState } from 'react'
+import { type ChangeEvent, useEffect, useRef, useState, useCallback } from 'react'
 import {
   addLink,
   createRequirement,
@@ -47,6 +47,7 @@ import type {
   TableData,
   Unit,
 } from '../types'
+import { updateBlock } from '../api/extraction'
 import HierarchyNodePicker from '../components/HierarchyNodePicker'
 import RequirementSearch from '../components/RequirementSearch'
 import TagInput from '../components/TagInput'
@@ -186,79 +187,222 @@ function formFromDetail(req: ReqDetail): FormState {
 // Block renderer — renders linked source blocks in the requirement body
 // ---------------------------------------------------------------------------
 
-function TablePreview({ data }: { data: TableData }) {
-  return (
-    <div className="overflow-x-auto max-h-64 overflow-y-auto">
-      {data.caption && (
-        <p className="text-xs text-gray-500 italic mb-1">{data.caption}</p>
-      )}
-      <table className="text-xs border-collapse w-full">
-        <thead>
-          <tr className="bg-purple-50">
-            {data.headers.map((h, i) => (
-              <th
-                key={i}
-                className="border border-purple-200 px-2 py-1 text-left font-semibold text-purple-800 whitespace-nowrap"
-              >
-                {h || '—'}
-              </th>
-            ))}
-          </tr>
-        </thead>
-        <tbody>
-          {data.rows.map((row, ri) => (
-            <tr key={ri} className={ri % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
-              {row.map((cell, ci) => (
-                <td key={ci} className="border border-gray-200 px-2 py-1 text-gray-700">
-                  {cell || ''}
-                </td>
-              ))}
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  )
+/** Regenerate Markdown table text from structured table_data (keeps block.content in sync). */
+function tableDataToMarkdown(td: TableData): string {
+  const header = '| ' + td.headers.join(' | ') + ' |'
+  const sep = '| ' + td.headers.map(() => '---').join(' | ') + ' |'
+  const rows = td.rows.map((row) => '| ' + row.join(' | ') + ' |')
+  return [header, sep, ...rows].join('\n')
 }
 
-function BlockRenderer({ blocks }: { blocks: LinkedBlock[] }) {
-  if (blocks.length === 0) {
-    return (
-      <p className="text-xs text-gray-400 italic">No source blocks linked.</p>
-    )
-  }
-  return (
-    <div className="space-y-3">
-      {blocks.map((block) => {
-        const prefix = block.clause_number ? (
-          <span className="text-xs font-mono text-gray-400 mr-2">{block.clause_number}</span>
-        ) : null
+function BlockRenderer({
+  blocks,
+  onBlockSaved,
+}: {
+  blocks: LinkedBlock[]
+  onBlockSaved: (blockId: string, content: string, tableData: TableData | null) => void
+}) {
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editContent, setEditContent] = useState('')
+  const [editTableData, setEditTableData] = useState<TableData | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
 
+  const startEdit = (block: LinkedBlock) => {
+    setEditingId(block.id)
+    setEditContent(block.content)
+    // Deep-copy so edits don't mutate the display state before saving
+    setEditTableData(block.table_data ? JSON.parse(JSON.stringify(block.table_data)) : null)
+    setSaveError(null)
+  }
+
+  const cancelEdit = () => {
+    setEditingId(null)
+    setSaveError(null)
+  }
+
+  const saveEdit = async (block: LinkedBlock) => {
+    setSaving(true)
+    setSaveError(null)
+    try {
+      const isTable = block.block_type === 'table_block' && editTableData
+      const content = isTable ? tableDataToMarkdown(editTableData!) : editContent
+      const tableData = isTable ? editTableData : null
+      await updateBlock(block.id, { content, table_data: tableData })
+      onBlockSaved(block.id, content, tableData)
+      setEditingId(null)
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : 'Save failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (blocks.length === 0) {
+    return <p className="text-xs text-gray-400 italic">No source blocks linked.</p>
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Warning: edits propagate to the source document viewer */}
+      <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+        Edits here update the block in the source document viewer too — the block is shared, not copied.
+      </p>
+
+      {blocks.map((block) => {
+        const isEditing = editingId === block.id
+        const prefix = block.clause_number
+          ? <span className="text-xs font-mono text-gray-400 shrink-0">{block.clause_number}</span>
+          : null
+
+        // ── Heading — structural, not editable ──────────────────────────────
         if (block.block_type === 'heading') {
           return (
-            <div key={block.id} className="flex items-baseline gap-1">
+            <div key={block.id} className="flex items-baseline gap-2">
               {prefix}
               <p className="text-sm font-semibold text-gray-700">{block.heading || block.content}</p>
             </div>
           )
         }
 
-        if (block.block_type === 'table_block' && block.table_data) {
+        // ── Table block ──────────────────────────────────────────────────────
+        if (block.block_type === 'table_block') {
+          const td = isEditing ? editTableData : block.table_data
+          if (!td) return null
           return (
             <div key={block.id}>
               {prefix && <div className="mb-1">{prefix}</div>}
-              <TablePreview data={block.table_data} />
+              {td.caption && (
+                <p className="text-xs text-gray-500 italic mb-1">{td.caption}</p>
+              )}
+              <div className="overflow-x-auto">
+                <table className="text-xs border-collapse w-full">
+                  <thead>
+                    <tr className="bg-purple-50">
+                      {td.headers.map((h, ci) =>
+                        isEditing ? (
+                          <th key={ci} className="border border-purple-200 px-1 py-1">
+                            <input
+                              value={h}
+                              onChange={(e) => {
+                                const nh = [...editTableData!.headers]
+                                nh[ci] = e.target.value
+                                setEditTableData({ ...editTableData!, headers: nh })
+                              }}
+                              className="w-full min-w-[80px] bg-white border border-purple-300 rounded px-1 py-0.5 text-xs font-semibold text-purple-800 focus:outline-none focus:ring-1 focus:ring-purple-400"
+                            />
+                          </th>
+                        ) : (
+                          <th key={ci} className="border border-purple-200 px-2 py-1 text-left font-semibold text-purple-800 whitespace-nowrap">
+                            {h || '—'}
+                          </th>
+                        )
+                      )}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {td.rows.map((row, ri) => (
+                      <tr key={ri} className={ri % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                        {row.map((cell, ci) =>
+                          isEditing ? (
+                            <td key={ci} className="border border-gray-200 px-1 py-1">
+                              <input
+                                value={cell}
+                                onChange={(e) => {
+                                  const nr = editTableData!.rows.map((r, ridx) =>
+                                    ridx === ri ? r.map((c, cidx) => cidx === ci ? e.target.value : c) : r
+                                  )
+                                  setEditTableData({ ...editTableData!, rows: nr })
+                                }}
+                                className="w-full min-w-[60px] border border-gray-200 rounded px-1 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400"
+                              />
+                            </td>
+                          ) : (
+                            <td key={ci} className="border border-gray-200 px-2 py-1 text-gray-700">
+                              {cell || ''}
+                            </td>
+                          )
+                        )}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {/* Edit controls */}
+              <div className="mt-1 flex items-center gap-2">
+                {isEditing ? (
+                  <>
+                    {saveError && <span className="text-xs text-red-600">{saveError}</span>}
+                    <button
+                      onClick={() => void saveEdit(block)}
+                      disabled={saving}
+                      className="px-2 py-0.5 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+                    >
+                      {saving ? 'Saving…' : 'Save'}
+                    </button>
+                    <button
+                      onClick={cancelEdit}
+                      disabled={saving}
+                      className="px-2 py-0.5 text-xs border border-gray-300 rounded hover:bg-gray-50"
+                    >
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    onClick={() => startEdit(block)}
+                    className="px-2 py-0.5 text-xs border border-gray-300 text-gray-500 rounded hover:bg-gray-50"
+                  >
+                    Edit table
+                  </button>
+                )}
+              </div>
             </div>
           )
         }
 
-        // requirement_clause, informational, or anything else — render as prose
+        // ── Prose block (requirement_clause, informational, etc.) ────────────
         return (
-          <div key={block.id} className="flex items-baseline gap-1">
-            {prefix}
-            <p className="text-sm text-gray-700 leading-relaxed whitespace-pre-wrap">
-              {block.content}
-            </p>
+          <div key={block.id}>
+            <div className="flex items-start gap-2">
+              {prefix}
+              {isEditing ? (
+                <textarea
+                  value={editContent}
+                  onChange={(e) => setEditContent(e.target.value)}
+                  rows={Math.max(3, editContent.split('\n').length + 1)}
+                  className="flex-1 border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400 resize-y"
+                  autoFocus
+                />
+              ) : (
+                <p
+                  className="flex-1 text-sm text-gray-700 leading-relaxed whitespace-pre-wrap cursor-text hover:bg-gray-50 rounded px-1 -mx-1 transition-colors"
+                  title="Click to edit"
+                  onClick={() => startEdit(block)}
+                >
+                  {block.content}
+                </p>
+              )}
+            </div>
+            {isEditing && (
+              <div className="mt-1 flex items-center gap-2 ml-auto">
+                {saveError && <span className="text-xs text-red-600">{saveError}</span>}
+                <button
+                  onClick={() => void saveEdit(block)}
+                  disabled={saving}
+                  className="px-2 py-0.5 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {saving ? 'Saving…' : 'Save'}
+                </button>
+                <button
+                  onClick={cancelEdit}
+                  disabled={saving}
+                  className="px-2 py-0.5 text-xs border border-gray-300 rounded hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
           </div>
         )
       })}
@@ -1046,9 +1190,18 @@ export default function RequirementDetail({
                     </button>
                   )}
                 </div>
-                {/* Block content rendered from linked blocks */}
+                {/* Block content rendered from linked blocks — editable inline */}
                 <div className="border border-purple-200 rounded p-3 bg-purple-50/40">
-                  <BlockRenderer blocks={linkedBlocks} />
+                  <BlockRenderer
+                    blocks={linkedBlocks}
+                    onBlockSaved={(blockId, content, tableData) => {
+                      setLinkedBlocks((prev) =>
+                        prev.map((b) =>
+                          b.id === blockId ? { ...b, content, table_data: tableData } : b
+                        )
+                      )
+                    }}
+                  />
                 </div>
               </div>
             ) : (

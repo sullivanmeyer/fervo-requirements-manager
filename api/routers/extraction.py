@@ -70,6 +70,7 @@ BlockOut.model_rebuild()
 
 class BlockUpdate(BaseModel):
     content: str
+    table_data: Optional[dict] = None  # supplied when editing a table_block
 
 
 class CandidateOut(BaseModel):
@@ -436,11 +437,13 @@ def list_blocks(doc_id: str, db: Session = Depends(get_db)):
 
 @router.put("/document-blocks/{block_id}")
 def update_block(block_id: str, body: BlockUpdate, db: Session = Depends(get_db)):
-    """Edit a block's content (user correction of parsing errors)."""
+    """Edit a block's content (and optionally its table_data for table_block type)."""
     block = db.query(DocumentBlock).filter(DocumentBlock.id == UUID(block_id)).first()
     if not block:
         raise HTTPException(status_code=404, detail="Block not found")
     block.content = body.content
+    if body.table_data is not None:
+        block.table_data = body.table_data
     db.commit()
     db.refresh(block)
     return _block_to_dict(block)
