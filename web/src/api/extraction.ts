@@ -61,6 +61,23 @@ export async function extractRequirements(
   return data.candidates as ExtractionCandidate[]
 }
 
+export async function mergeBlocks(
+  documentId: string,
+  blockIds: string[],
+  owner: string,
+): Promise<{ id: string; requirement_id: string }> {
+  const res = await fetch(`${BASE}/source-documents/${documentId}/merge-blocks`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ block_ids: blockIds, owner }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({})) as { detail?: string }
+    throw new Error(err.detail ?? `Merge failed (${res.status})`)
+  }
+  return res.json()
+}
+
 export async function fetchCandidates(documentId: string): Promise<ExtractionCandidate[]> {
   const res = await fetch(`${BASE}/source-documents/${documentId}/candidates`)
   if (!res.ok) throw new Error(`Failed to load candidates (${res.status})`)

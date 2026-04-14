@@ -33,6 +33,7 @@ import {
   extractRequirements,
   fetchBlocks,
   fetchCandidates,
+  mergeBlocks,
   updateCandidate,
 } from '../api/extraction'
 import {
@@ -524,14 +525,21 @@ export default function SourceDocumentDetail({
   // Merge selected blocks into a new requirement form
   // -------------------------------------------------------------------------
 
-  const handleMergeBlocks = () => {
+  const handleMergeBlocks = async () => {
     if (!documentId || selectedBlockIds.size < 2) return
     // Preserve document order by sorting by sort_order, not selection order
-    const selected = blocks
+    const blockIds = blocks
       .filter((b) => selectedBlockIds.has(b.id))
       .sort((a, b) => a.sort_order - b.sort_order)
-    const merged = selected.map((b) => b.content.trim()).join('\n\n')
-    onCreateRequirement(documentId, merged)
+      .map((b) => b.id)
+    setCandidateError(null)
+    try {
+      const result = await mergeBlocks(documentId, blockIds, userName)
+      // Navigate to the new requirement so the user can fill in metadata
+      onOpenRequirement(result.id)
+    } catch (e) {
+      setCandidateError(e instanceof Error ? e.message : 'Merge failed')
+    }
   }
 
   // -------------------------------------------------------------------------

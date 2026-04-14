@@ -109,6 +109,11 @@ class AcceptCandidateRequest(BaseModel):
     parent_requirement_ids: List[str] = []
 
 
+class MergeBlocksRequest(BaseModel):
+    block_ids: List[str]
+    owner: str
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -695,3 +700,71 @@ def accept_candidate(
         },
         "candidate": _candidate_to_dict(c),
     }
+
+
+@router.post("/source-documents/{doc_id}/merge-blocks", status_code=201)
+def merge_blocks(doc_id: str, body: MergeBlocksRequest, db: Session = Depends(get_db)):
+    """
+    Create a block-linked requirement directly from selected document blocks.
+
+    Loads the requested blocks in document sort_order, creates a Requirement with
+    content_source='block_linked', and writes requirement_blocks junction records
+    so the detail view renders the original block content instead of copied text.
+
+    Returns {id, requirement_id} — the caller should navigate to the requirement
+    detail view so the user can fill in metadata (title, classification, etc.).
+    """
+    _get_doc_or_404(doc_id, db)
+
+    if not body.block_ids:
+        raise HTTPException(status_code=422, detail="block_ids must not be empty")
+
+    # Load blocks in document reading order regardless of selection order
+    blocks = (
+        db.query(DocumentBlock)
+        .filter(
+            DocumentBlock.source_document_id == UUID(doc_id),
+            DocumentBlock.id.in_([UUID(bid) for bid in body.block_ids]),
+        )
+        .order_by(DocumentBlock.sort_order)
+        .all()
+    )
+
+    if not blocks:
+        raise HTTPException(status_code=404, detail="No matching blocks found for this document")
+
+    # Build plain-text statement fallback (used for search indexing, not display)
+    statement = "\n\n".join(_block_plain_text(b) for b in blocks)
+
+    req_id = _next_requirement_id("General", db)
+
+    req = Requirement(
+        id=uuid.uuid4(),
+        requirement_id=req_id,
+        title="Untitled merged requirement",
+        statement=statement,
+        classification="Requirement",
+        owner=body.owner,
+        source_type="Derived from Document",
+        status="Draft",
+        discipline="General",
+        created_by=body.owner,
+        created_date=date.today(),
+        source_document_id=UUID(doc_id),
+        content_source="block_linked",
+    )
+    db.add(req)
+    db.flush()
+
+    for i, block in enumerate(blocks):
+        db.add(RequirementBlock(
+            id=uuid.uuid4(),
+            requirement_id=req.id,
+            block_id=block.id,
+            sort_order=i,
+            created_at=datetime.utcnow(),
+        ))
+
+    db.commit()
+
+    return {"id": str(req.id), "requirement_id": req.requirement_id}
