@@ -33,7 +33,7 @@ type AppView =
   | { page: 'requirement-detail'; requirementId: string | null; initialParentIds?: string[]; initialStatement?: string; initialSourceDocumentId?: string; backFrom?: 'document-detail' | 'orphan-report'; backDocumentId?: string }
   | { page: 'derivation-tree'; focusId: string | null }
   | { page: 'documents' }
-  | { page: 'document-detail'; documentId: string | null }
+  | { page: 'document-detail'; documentId: string | null; highlightBlockIds?: string[] }
   | { page: 'document-network'; focusDocumentId?: string | null }
   | { page: 'orphan-report' }
 
@@ -421,8 +421,8 @@ export default function App() {
                   initialParentIds: [parentId],
                 })
               }
-              onOpenDocument={(docId) =>
-                setView({ page: 'document-detail', documentId: docId })
+              onOpenDocument={(docId, blockIds) =>
+                setView({ page: 'document-detail', documentId: docId, highlightBlockIds: blockIds })
               }
               onCreateChildForGap={(parentId, hierarchyNodeId) =>
                 setView({
@@ -487,6 +487,7 @@ export default function App() {
             <SourceDocumentDetail
               key={view.documentId ?? 'new-document'}
               documentId={view.documentId}
+              initialHighlightBlockIds={view.highlightBlockIds}
               onSaved={(savedId) =>
                 setView({ page: 'document-detail', documentId: savedId })
               }

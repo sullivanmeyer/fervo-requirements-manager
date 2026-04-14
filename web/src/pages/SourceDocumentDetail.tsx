@@ -259,6 +259,8 @@ interface Props {
   onCreateRequirement: (sourceDocumentId: string, initialStatement: string) => void
   onOpenRequirement: (requirementId: string) => void
   onViewInNetwork?: (documentId: string) => void
+  /** Block IDs to scroll to and persistently highlight on initial load (from requirement detail link). */
+  initialHighlightBlockIds?: string[]
 }
 
 // ---------------------------------------------------------------------------
@@ -273,8 +275,15 @@ export default function SourceDocumentDetail({
   onCreateRequirement,
   onOpenRequirement,
   onViewInNetwork,
+  initialHighlightBlockIds,
 }: Props) {
   const isNew = documentId === null
+
+  // Blocks that should be persistently highlighted (linked from a requirement detail view).
+  // Distinct from the temporary 2-second yellow flash used for candidate source-clause links.
+  const [pinnedBlockIds, setPinnedBlockIds] = useState<Set<string>>(
+    new Set(initialHighlightBlockIds ?? [])
+  )
 
   // Core document state
   const [doc, setDoc] = useState<DocDetail | null>(null)
@@ -347,6 +356,15 @@ export default function SourceDocumentDetail({
         setOutRefs(outgoing)
         setInRefs(incoming)
         setAllDocs(docs)
+
+        // If we arrived here from a requirement detail "View source document →" link,
+        // switch to the Document Blocks tab and scroll to the first pinned block.
+        if (initialHighlightBlockIds && initialHighlightBlockIds.length > 0) {
+          setActivePanel('blocks')
+          // scrollToBlock uses a short setTimeout internally; add a small extra
+          // delay to let the panel switch + React render complete first.
+          setTimeout(() => scrollToBlock(initialHighlightBlockIds[0]), 150)
+        }
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Failed to load document')
       } finally {
@@ -1069,6 +1087,7 @@ export default function SourceDocumentDetail({
                         {blocks.map((block) => {
                           const isSelected = selectedBlockIds.has(block.id)
                           const isBoilerplate = block.block_type === 'boilerplate'
+                          const isPinned = pinnedBlockIds.has(block.id)
                           return (
                             <div
                               key={block.id}
@@ -1076,6 +1095,8 @@ export default function SourceDocumentDetail({
                               className={`flex items-start gap-2 px-3 py-2 hover:bg-white cursor-pointer transition-colors ${
                                 highlightedBlockId === block.id
                                   ? 'bg-yellow-100 ring-2 ring-inset ring-yellow-400'
+                                  : isPinned
+                                  ? 'bg-blue-50 ring-2 ring-inset ring-blue-300'
                                   : isSelected ? 'bg-blue-50' : ''
                               } ${isBoilerplate ? 'opacity-50' : ''}`}
                               style={{ paddingLeft: `${12 + block.depth * 16}px` }}

@@ -895,6 +895,10 @@ metadata (title, classification, discipline, subtype), not rewriting content.
 ### Backend — Requirement List Endpoint (updated `GET /api/requirements`)
 - [x] `content_source` included in list response; table view uses `statement` plain-text fallback for display — no extra block queries
  
+### Backend — Block Linkage Management
+- [x] `POST /api/requirement-blocks` — link an existing document block to a requirement; sets `content_source = 'block_linked'`; ignores duplicates; returns updated `linked_blocks`
+- [x] `DELETE /api/requirement-blocks` — unlink a block from a requirement; reverts `content_source` to `'manual'` when the last block is removed; returns updated state
+
 ### Backend — Block Editing Propagation
 - [ ] `PUT /api/document-blocks/{id}`: regenerate plain-text `statement` fallback on all linked requirements after block edit — **deferred to future stage**
  
@@ -904,6 +908,7 @@ metadata (title, classification, discipline, subtype), not rewriting content.
 ### Frontend — Requirement Detail View (Block Renderer)
 - [x] `BlockRenderer` component added to `RequirementDetail.tsx`: renders heading, prose (`requirement_clause`, `informational`), and table (`table_block`) blocks with clause number prefix and `TablePreview` for tabular data
 - [x] Statement section: if `content_source === 'block_linked'`, renders `BlockRenderer` inside a purple-bordered panel with "Linked to source document" badge and "View source document →" link; otherwise renders the existing textarea
+- [x] "View source document →" link passes linked block IDs through navigation; `SourceDocumentDetail` auto-switches to the Document Blocks tab, scrolls to the first linked block, and applies a persistent blue highlight to all linked blocks (distinct from the temporary yellow flash used for candidate source-clause links)
 - [x] `contentSource` and `linkedBlocks` state variables; populated from loaded detail response
 - [x] Save validation: statement is only required for `manual` requirements; block-linked requirements skip the statement check
 - [x] `LinkedBlock` and `TableData` types imported from `types.ts`
@@ -951,13 +956,14 @@ metadata (title, classification, discipline, subtype), not rewriting content.
 - [x] Vision-parsed tables display with no indicator (no visual noise when parsing succeeded)
  
 ### Frontend — Block Editing in Requirement Detail
-- [ ] Inline block editing (click-to-edit prose and table cells) — **deferred to future stage**
+- [x] Inline block editing: click prose block to edit in-place (textarea); table blocks have "Edit table" button with per-cell inputs
  
 ### Frontend — "Merge to Requirement" Rewiring
 - [x] "Merge to Requirement" currently concatenates text → statement; rewire to create block-linked requirement — **deferred to future stage**
  
 ### Frontend — Post-Acceptance Block Linking (Add/Remove Source Blocks)
-- [ ] Add/Remove source blocks UI on requirement detail — **deferred to future stage**
+- [x] Per-block `× Remove` button in `BlockRenderer`; removing the last block converts the requirement back to `content_source = 'manual'` and shows the statement textarea
+- [x] `AddBlockPicker` component below the block panel: fetches all blocks from the linked source document, already-linked blocks shown as disabled, click "Add" to link additional blocks
  
 ### Frontend — Candidate Review Panel Updates
 - [ ] Show source block content via BlockRenderer in candidate card (currently shows LLM statement preview) — **deferred to future stage**
@@ -978,16 +984,16 @@ metadata (title, classification, discipline, subtype), not rewriting content.
 - [x] Select a prose block (e.g., §6.2.3 "Field butt welds shall be prepared...") and its associated table block (e.g., Table 1) via checkboxes — click "Merge to Requirement" — verify a single requirement is created with both blocks linked (not concatenated into a text string)
 - [x] Verify the merged requirement's detail view renders the prose paragraph followed by the formatted table, preserving the original document structure
 - [ ] Verify the merged requirement's `statement` field contains a plain-text fallback (for search), not the rendered body
-- [ ] On a block-linked requirement, click "Add Source Block" — select an additional block from the source document — verify it appends to the requirement body in the detail view
-- [ ] On a block-linked requirement with 3+ blocks, remove a middle block — verify the remaining blocks re-render in order with no gap
-- [ ] Remove all blocks from a block-linked requirement — verify the warning appears and the requirement converts to `content_source = 'manual'` with the statement fallback as editable body
+- [x] On a block-linked requirement, click "Add Source Block" — select an additional block from the source document — verify it appends to the requirement body in the detail view
+- [x] On a block-linked requirement with 3+ blocks, remove a middle block — verify the remaining blocks re-render in order with no gap
+- [x] Remove all blocks from a block-linked requirement — verify it converts to `content_source = 'manual'` with the statement fallback as editable body (no warning — converts silently)
 - [ ] Edit the body of a block-linked requirement — verify the edit saves to the `document_blocks` record and the change is visible both in the requirement detail view and in the source document's block viewer
 - [ ] Verify the warning banner appears when editing a shared block
 - [ ] Create a manual requirement (no source document) — verify it uses the `statement` text field, has `content_source = 'manual'`, and the detail view renders the text area as before
 - [ ] Search for a term that appears in a block-linked requirement's body — verify the full-text search finds it (via the `statement` plain-text fallback)
 - [ ] Open the requirements table — verify block-linked and manual requirements both display correctly in the Statement column
 - [ ] Export a requirements document containing both block-linked and manual requirements — verify prose blocks export as paragraphs, table blocks export as formatted tables, and manual requirements export as before
-- [ ] Click "Source Block" link on a block-linked requirement — verify navigation to the document viewer with the correct block highlighted
+- [x] Click "View source document →" on a block-linked requirement — verify navigation to the document viewer with the Document Blocks tab active and all linked blocks highlighted in blue
 - [ ] Run the Stage 14 migration script — verify any existing tabular requirements are converted to block-linked where source block linkage exists
 - [ ] Verify that accepting a candidate for a compound requirement (single block with multiple obligations) creates separate requirements that each link to the same source block but have different metadata
 - [ ] Re-extract requirements from a document that already has accepted candidates — verify no duplicate `requirement_blocks` records are created

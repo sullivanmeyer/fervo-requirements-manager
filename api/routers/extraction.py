@@ -11,6 +11,8 @@ POST   /source-documents/{doc_id}/extract-requirements  trigger LLM extraction
 GET    /source-documents/{doc_id}/candidates         list extraction candidates
 PUT    /extraction-candidates/{candidate_id}         update a candidate
 POST   /extraction-candidates/{candidate_id}/accept  accept → create requirement
+POST   /requirement-blocks                           link a block to a requirement
+DELETE /requirement-blocks                           unlink a block from a requirement
 """
 
 from __future__ import annotations
@@ -113,6 +115,17 @@ class AcceptCandidateRequest(BaseModel):
 class MergeBlocksRequest(BaseModel):
     block_ids: List[str]
     owner: str
+
+
+class AddRequirementBlockRequest(BaseModel):
+    requirement_id: str
+    block_id: str
+    sort_order: Optional[int] = None   # appended to end if omitted
+
+
+class RemoveRequirementBlockRequest(BaseModel):
+    requirement_id: str
+    block_id: str
 
 
 # ---------------------------------------------------------------------------
@@ -703,6 +716,141 @@ def accept_candidate(
         },
         "candidate": _candidate_to_dict(c),
     }
+
+
+@router.post("/requirement-blocks", status_code=201)
+def add_requirement_block(body: AddRequirementBlockRequest, db: Session = Depends(get_db)):
+    """
+    Link an existing document block to a requirement.
+
+    Appends the block to the end of the requirement's linked block list (or
+    inserts at the requested sort_order).  Sets content_source='block_linked'
+    on the requirement if it isn't already.  Silently ignores duplicate links.
+    Returns the updated linked_blocks list and content_source value.
+    """
+    req = db.get(Requirement, UUID(body.requirement_id))
+    if not req:
+        raise HTTPException(status_code=404, detail="Requirement not found")
+
+    block = db.get(DocumentBlock, UUID(body.block_id))
+    if not block:
+        raise HTTPException(status_code=404, detail="Block not found")
+
+    # Ignore if already linked
+    existing = (
+        db.query(RequirementBlock)
+        .filter(
+            RequirementBlock.requirement_id == req.id,
+            RequirementBlock.block_id == block.id,
+        )
+        .first()
+    )
+    if not existing:
+        if body.sort_order is not None:
+            order = body.sort_order
+        else:
+            max_order = (
+                db.query(RequirementBlock)
+                .filter(RequirementBlock.requirement_id == req.id)
+                .count()
+            )
+            order = max_order  # append to end (0-indexed)
+
+        db.add(RequirementBlock(
+            id=uuid.uuid4(),
+            requirement_id=req.id,
+            block_id=block.id,
+            sort_order=order,
+            created_at=datetime.utcnow(),
+        ))
+
+    req.content_source = "block_linked"
+    db.commit()
+
+    # Return updated linked_blocks
+    rb_rows = (
+        db.query(RequirementBlock, DocumentBlock)
+        .join(DocumentBlock, RequirementBlock.block_id == DocumentBlock.id)
+        .filter(RequirementBlock.requirement_id == req.id)
+        .order_by(RequirementBlock.sort_order)
+        .all()
+    )
+    linked_blocks = [
+        {
+            "id": str(blk.id),
+            "source_document_id": str(blk.source_document_id),
+            "clause_number": blk.clause_number,
+            "heading": blk.heading,
+            "content": blk.content,
+            "block_type": blk.block_type,
+            "table_data": blk.table_data,
+            "depth": blk.depth,
+            "sort_order": rb.sort_order,
+        }
+        for rb, blk in rb_rows
+    ]
+    return {"content_source": req.content_source, "linked_blocks": linked_blocks}
+
+
+@router.delete("/requirement-blocks", status_code=200)
+def remove_requirement_block(body: RemoveRequirementBlockRequest, db: Session = Depends(get_db)):
+    """
+    Unlink a document block from a requirement.
+
+    If this was the last linked block, sets content_source='manual' so the
+    requirement falls back to its plain-text statement field.
+    Returns the updated content_source and linked_blocks list.
+    """
+    req = db.get(Requirement, UUID(body.requirement_id))
+    if not req:
+        raise HTTPException(status_code=404, detail="Requirement not found")
+
+    rb = (
+        db.query(RequirementBlock)
+        .filter(
+            RequirementBlock.requirement_id == req.id,
+            RequirementBlock.block_id == UUID(body.block_id),
+        )
+        .first()
+    )
+    if rb:
+        db.delete(rb)
+        db.flush()
+
+    # If no blocks remain, revert to manual mode
+    remaining = (
+        db.query(RequirementBlock)
+        .filter(RequirementBlock.requirement_id == req.id)
+        .count()
+    )
+    if remaining == 0:
+        req.content_source = "manual"
+
+    db.commit()
+
+    # Return updated linked_blocks (empty list if reverted to manual)
+    rb_rows = (
+        db.query(RequirementBlock, DocumentBlock)
+        .join(DocumentBlock, RequirementBlock.block_id == DocumentBlock.id)
+        .filter(RequirementBlock.requirement_id == req.id)
+        .order_by(RequirementBlock.sort_order)
+        .all()
+    )
+    linked_blocks = [
+        {
+            "id": str(blk.id),
+            "source_document_id": str(blk.source_document_id),
+            "clause_number": blk.clause_number,
+            "heading": blk.heading,
+            "content": blk.content,
+            "block_type": blk.block_type,
+            "table_data": blk.table_data,
+            "depth": blk.depth,
+            "sort_order": rb.sort_order,
+        }
+        for rb, blk in rb_rows
+    ]
+    return {"content_source": req.content_source, "linked_blocks": linked_blocks}
 
 
 @router.post("/source-documents/{doc_id}/merge-blocks", status_code=201)

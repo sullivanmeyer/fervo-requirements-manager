@@ -36,6 +36,7 @@ import { fetchGapAnalysis } from '../api/search'
 import type {
   Attachment,
   ConflictRecord,
+  DocumentBlock,
   GapAnalysisResult,
   GapNodeStub,
   HierarchyNode,
@@ -48,7 +49,8 @@ import type {
   TableData,
   Unit,
 } from '../types'
-import { updateBlock } from '../api/extraction'
+import { addRequirementBlock, removeRequirementBlock, updateBlock } from '../api/extraction'
+import { fetchBlocks } from '../api/extraction'
 import HierarchyNodePicker from '../components/HierarchyNodePicker'
 import RequirementSearch from '../components/RequirementSearch'
 import TagInput from '../components/TagInput'
@@ -99,7 +101,7 @@ interface Props {
   onCancel: () => void
   onViewInTree: (id: string) => void  // navigate to derivation tree tab
   onAddChild: (parentId: string) => void
-  onOpenDocument?: (docId: string) => void
+  onOpenDocument?: (docId: string, blockIds?: string[]) => void
   onCreateChildForGap?: (parentId: string, hierarchyNodeId: string) => void
 }
 
@@ -230,15 +232,18 @@ function tableDataToMarkdown(td: TableData): string {
 function BlockRenderer({
   blocks,
   onBlockSaved,
+  onBlockRemoved,
 }: {
   blocks: LinkedBlock[]
   onBlockSaved: (blockId: string, content: string, tableData: TableData | null) => void
+  onBlockRemoved: (blockId: string) => void
 }) {
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editContent, setEditContent] = useState('')
   const [editTableData, setEditTableData] = useState<TableData | null>(null)
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState<string | null>(null)
+  const [removingId, setRemovingId] = useState<string | null>(null)
 
   const startEdit = (block: LinkedBlock) => {
     setEditingId(block.id)
@@ -292,16 +297,33 @@ function BlockRenderer({
 
       {blocks.map((block) => {
         const isEditing = editingId === block.id
+        const isRemoving = removingId === block.id
         const prefix = block.clause_number
           ? <span className="text-xs font-mono text-gray-400 shrink-0">{block.clause_number}</span>
           : null
+
+        const removeBtn = (
+          <button
+            onClick={async () => {
+              setRemovingId(block.id)
+              await onBlockRemoved(block.id)
+              setRemovingId(null)
+            }}
+            disabled={isRemoving || saving}
+            title="Unlink this block from the requirement"
+            className="ml-auto px-1.5 py-0.5 text-xs text-red-500 border border-red-200 rounded hover:bg-red-50 disabled:opacity-40 shrink-0"
+          >
+            {isRemoving ? '…' : '× Remove'}
+          </button>
+        )
 
         // ── Heading — structural, not editable ──────────────────────────────
         if (block.block_type === 'heading') {
           return (
             <div key={block.id} className="flex items-baseline gap-2">
               {prefix}
-              <p className="text-sm font-semibold text-gray-700">{block.heading || block.content}</p>
+              <p className="text-sm font-semibold text-gray-700 flex-1">{block.heading || block.content}</p>
+              {removeBtn}
             </div>
           )
         }
@@ -402,7 +424,7 @@ function BlockRenderer({
               {td.footnotes && (
                 <p className="text-xs text-gray-500 italic mt-1">{td.footnotes}</p>
               )}
-              {/* Edit controls */}
+              {/* Edit / remove controls */}
               <div className="mt-1 flex items-center gap-2">
                 {isEditing ? (
                   <>
@@ -430,6 +452,7 @@ function BlockRenderer({
                     Edit table
                   </button>
                 )}
+                {!isEditing && removeBtn}
               </div>
             </div>
           )
@@ -457,6 +480,7 @@ function BlockRenderer({
                   {block.content}
                 </p>
               )}
+              {!isEditing && removeBtn}
             </div>
             {isEditing && (
               <div className="mt-1 flex items-center gap-2 ml-auto">
@@ -480,6 +504,126 @@ function BlockRenderer({
           </div>
         )
       })}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// AddBlockPicker — lets user link additional blocks from the source document
+// ---------------------------------------------------------------------------
+
+function AddBlockPicker({
+  requirementId,
+  sourceDocumentId,
+  linkedBlockIds,
+  onBlockAdded,
+}: {
+  requirementId: string
+  sourceDocumentId: string
+  linkedBlockIds: string[]
+  onBlockAdded: (result: { content_source: 'manual' | 'block_linked'; linked_blocks: LinkedBlock[] }) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [allBlocks, setAllBlocks] = useState<DocumentBlock[]>([])
+  const [loadingBlocks, setLoadingBlocks] = useState(false)
+  const [addingId, setAddingId] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const handleOpen = async () => {
+    setOpen(true)
+    if (allBlocks.length === 0) {
+      setLoadingBlocks(true)
+      try {
+        const blocks = await fetchBlocks(sourceDocumentId)
+        setAllBlocks(blocks)
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Failed to load blocks')
+      } finally {
+        setLoadingBlocks(false)
+      }
+    }
+  }
+
+  const handleAdd = async (blockId: string) => {
+    setAddingId(blockId)
+    setError(null)
+    try {
+      const result = await addRequirementBlock(requirementId, blockId)
+      onBlockAdded(result)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to add block')
+    } finally {
+      setAddingId(null)
+    }
+  }
+
+  const linkedSet = new Set(linkedBlockIds)
+
+  return (
+    <div className="mt-2">
+      {!open ? (
+        <button
+          type="button"
+          onClick={() => void handleOpen()}
+          className="text-xs text-purple-700 border border-purple-200 rounded px-2 py-1 hover:bg-purple-50"
+        >
+          + Add source block
+        </button>
+      ) : (
+        <div className="border border-purple-200 rounded bg-white mt-1">
+          <div className="flex items-center justify-between px-3 py-2 border-b border-purple-100">
+            <span className="text-xs font-semibold text-purple-800">Add a block from the source document</span>
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              className="text-xs text-gray-400 hover:text-gray-600"
+            >
+              Close
+            </button>
+          </div>
+          {error && <p className="text-xs text-red-600 px-3 py-2">{error}</p>}
+          {loadingBlocks ? (
+            <p className="text-xs text-gray-400 px-3 py-3">Loading blocks…</p>
+          ) : (
+            <div className="max-h-64 overflow-y-auto divide-y divide-gray-100">
+              {allBlocks.length === 0 && (
+                <p className="text-xs text-gray-400 px-3 py-3">No blocks found in this document.</p>
+              )}
+              {allBlocks.map((block) => {
+                const isLinked = linkedSet.has(block.id)
+                const isAdding = addingId === block.id
+                return (
+                  <div
+                    key={block.id}
+                    className={`flex items-start gap-2 px-3 py-2 ${isLinked ? 'bg-purple-50' : 'hover:bg-gray-50'}`}
+                  >
+                    <div className="flex-1 min-w-0">
+                      {block.clause_number && (
+                        <span className="text-xs font-mono text-gray-400 mr-1">{block.clause_number}</span>
+                      )}
+                      <span className="text-xs text-gray-700 line-clamp-2">
+                        {block.heading || block.content}
+                      </span>
+                    </div>
+                    {isLinked ? (
+                      <span className="text-xs text-purple-600 shrink-0">Linked</span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => void handleAdd(block.id)}
+                        disabled={isAdding}
+                        className="text-xs text-blue-600 border border-blue-200 rounded px-1.5 py-0.5 hover:bg-blue-50 disabled:opacity-40 shrink-0"
+                      >
+                        {isAdding ? '…' : 'Add'}
+                      </button>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   )
 }
@@ -1302,7 +1446,7 @@ export default function RequirementDetail({
             </h2>
             {contentSource === 'block_linked' ? (
               <div>
-                {/* Badge */}
+                {/* Badge row */}
                 <div className="flex items-center gap-2 mb-3">
                   <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-800">
                     Linked to source document
@@ -1310,7 +1454,7 @@ export default function RequirementDetail({
                   {form.source_document_id && onOpenDocument && (
                     <button
                       type="button"
-                      onClick={() => onOpenDocument(form.source_document_id)}
+                      onClick={() => onOpenDocument(form.source_document_id, linkedBlocks.map((b) => b.id))}
                       className="text-xs text-blue-600 hover:underline"
                     >
                       View source document →
@@ -1328,8 +1472,26 @@ export default function RequirementDetail({
                         )
                       )
                     }}
+                    onBlockRemoved={async (blockId) => {
+                      if (!savedDbId) return
+                      const result = await removeRequirementBlock(savedDbId, blockId)
+                      setLinkedBlocks(result.linked_blocks)
+                      setContentSource(result.content_source)
+                    }}
                   />
                 </div>
+                {/* Add block picker */}
+                {savedDbId && form.source_document_id && (
+                  <AddBlockPicker
+                    requirementId={savedDbId}
+                    sourceDocumentId={form.source_document_id}
+                    linkedBlockIds={linkedBlocks.map((b) => b.id)}
+                    onBlockAdded={(result) => {
+                      setLinkedBlocks(result.linked_blocks)
+                      setContentSource(result.content_source)
+                    }}
+                  />
+                )}
               </div>
             ) : (
               <Field label="Statement" required>
