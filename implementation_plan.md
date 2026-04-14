@@ -972,7 +972,7 @@ metadata (title, classification, discipline, subtype), not rewriting content.
 - [x] No changes required — `statement` plain-text fallback populates the Statement column for both `manual` and `block_linked` requirements
  
 ### Frontend — Requirements Document Export (PDF and Word)
-- [ ] Export renderer reads `linked_blocks` for `block_linked` requirements — **deferred to future stage**
+- [x] Export renderer reads `linked_blocks` for `block_linked` requirements — Word: prose blocks as paragraphs, `table_block` blocks as `Table Grid` Word tables (header rows bold, multi-level header support); PDF: prose as paragraphs, tables as ReportLab `Table` flowables (distributed column widths, header shading); single batch query per export call
  
 ### Backend — Migration of Existing Stage 14 Requirements
 - [ ] One-time migration script for any existing Stage 14 tabular requirements — **deferred; no such requirements exist in production yet**
@@ -987,16 +987,16 @@ metadata (title, classification, discipline, subtype), not rewriting content.
 - [x] On a block-linked requirement, click "Add Source Block" — select an additional block from the source document — verify it appends to the requirement body in the detail view
 - [x] On a block-linked requirement with 3+ blocks, remove a middle block — verify the remaining blocks re-render in order with no gap
 - [x] Remove all blocks from a block-linked requirement — verify it converts to `content_source = 'manual'` with the statement fallback as editable body (no warning — converts silently)
-- [ ] Edit the body of a block-linked requirement — verify the edit saves to the `document_blocks` record and the change is visible both in the requirement detail view and in the source document's block viewer
-- [ ] Verify the warning banner appears when editing a shared block
-- [ ] Create a manual requirement (no source document) — verify it uses the `statement` text field, has `content_source = 'manual'`, and the detail view renders the text area as before
-- [ ] Search for a term that appears in a block-linked requirement's body — verify the full-text search finds it (via the `statement` plain-text fallback)
-- [ ] Open the requirements table — verify block-linked and manual requirements both display correctly in the Statement column
-- [ ] Export a requirements document containing both block-linked and manual requirements — verify prose blocks export as paragraphs, table blocks export as formatted tables, and manual requirements export as before
+- [x] Edit the body of a block-linked requirement — verify the edit saves to the `document_blocks` record and the change is visible both in the requirement detail view and in the source document's block viewer
+- [x] Verify the warning banner appears when editing a shared block
+- [x] Create a manual requirement (no source document) — verify it uses the `statement` text field, has `content_source = 'manual'`, and the detail view renders the text area as before
+- [x] Search for a term that appears in a block-linked requirement's body — verify the full-text search finds it (via the `statement` plain-text fallback)
+- [x] Open the requirements table — verify block-linked and manual requirements both display correctly in the Statement column
+- [x] Export a requirements document containing both block-linked and manual requirements — verify prose blocks export as paragraphs, table blocks export as formatted tables, and manual requirements export as before
 - [x] Click "View source document →" on a block-linked requirement — verify navigation to the document viewer with the Document Blocks tab active and all linked blocks highlighted in blue
-- [ ] Run the Stage 14 migration script — verify any existing tabular requirements are converted to block-linked where source block linkage exists
+- [descope] Run the Stage 14 migration script — verify any existing tabular requirements are converted to block-linked where source block linkage exists
 - [ ] Verify that accepting a candidate for a compound requirement (single block with multiple obligations) creates separate requirements that each link to the same source block but have different metadata
-- [ ] Re-extract requirements from a document that already has accepted candidates — verify no duplicate `requirement_blocks` records are created
+- [x] Re-extract requirements from a document that already has accepted candidates — verify no duplicate `requirement_blocks` records are created
  
 ---
  

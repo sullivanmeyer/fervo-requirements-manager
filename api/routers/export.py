@@ -63,7 +63,7 @@ def _dfs_order(node_by_id: dict, children_map: dict) -> list[tuple[str, int]]:
     return result
 
 
-def _req_dict(req: Requirement) -> dict[str, Any]:
+def _req_dict(req: Requirement, blocks: list[dict] | None = None) -> dict[str, Any]:
     return {
         "id": req.requirement_id,
         "title": req.title,
@@ -77,6 +77,8 @@ def _req_dict(req: Requirement) -> dict[str, Any]:
         "discipline": req.discipline,
         "source_document": req.source_document.title if req.source_document else None,
         "stale": req.stale,
+        "content_source": req.content_source,
+        "blocks": blocks or [],
     }
 
 
@@ -99,6 +101,78 @@ def _generate_word(
     title_para = doc.add_heading(doc_title, 0)
     title_para.alignment = WD_ALIGN_PARAGRAPH.LEFT
 
+    def _render_table_word(td: dict) -> None:
+        """Render a table_data dict as a Word table."""
+        caption = td.get("caption")
+        raw_headers = td.get("headers") or []
+        rows = td.get("rows") or []
+        footnotes = td.get("footnotes")
+
+        if not raw_headers and not rows:
+            return
+
+        # Normalize headers to list-of-rows
+        if raw_headers and isinstance(raw_headers[0], str):
+            header_rows: list[list[str]] = [raw_headers]  # type: ignore[list-item]
+        else:
+            header_rows = raw_headers  # type: ignore[assignment]
+
+        all_rows = list(header_rows) + list(rows)
+        n_cols = max((len(r) for r in all_rows), default=1)
+
+        if caption:
+            cp = doc.add_paragraph(caption)
+            for r in cp.runs:
+                r.font.size = Pt(9)
+                r.italic = True
+
+        n_total = len(header_rows) + len(rows)
+        if n_total == 0:
+            return
+
+        table = doc.add_table(rows=n_total, cols=n_cols, style="Table Grid")
+
+        for ri, hrow in enumerate(header_rows):
+            cells = table.rows[ri].cells
+            for ci in range(n_cols):
+                val = hrow[ci] if ci < len(hrow) else ""
+                cells[ci].text = str(val) if val is not None else ""
+                if cells[ci].paragraphs[0].runs:
+                    run = cells[ci].paragraphs[0].runs[0]
+                    run.bold = True
+                    run.font.size = Pt(9)
+
+        for ri, drow in enumerate(rows):
+            cells = table.rows[len(header_rows) + ri].cells
+            for ci in range(n_cols):
+                val = drow[ci] if ci < len(drow) else ""
+                cells[ci].text = str(val) if val is not None else ""
+                if cells[ci].paragraphs[0].runs:
+                    cells[ci].paragraphs[0].runs[0].font.size = Pt(9)
+
+        doc.add_paragraph("")  # spacer after table
+
+        if footnotes:
+            fn = doc.add_paragraph(footnotes)
+            for r in fn.runs:
+                r.font.size = Pt(8)
+                r.italic = True
+
+    def _render_block_word(block: dict) -> None:
+        bt = block.get("block_type", "")
+        td = block.get("table_data")
+        content = block.get("content", "")
+
+        if bt == "table_block" and td:
+            _render_table_word(td)
+        elif bt == "heading":
+            p = doc.add_paragraph()
+            run = p.add_run(content)
+            run.bold = True
+            run.font.size = Pt(10)
+        else:
+            doc.add_paragraph(content)
+
     def _add_requirement(req: dict) -> None:
         p = doc.add_paragraph()
         run = p.add_run(f"[{req['id']}]  {req['title']}")
@@ -118,7 +192,11 @@ def _generate_word(
             run.font.size = Pt(9)
         meta.paragraph_format.space_after = Pt(2)
 
-        doc.add_paragraph(req["statement"])
+        if req.get("content_source") == "block_linked" and req.get("blocks"):
+            for block in req["blocks"]:
+                _render_block_word(block)
+        else:
+            doc.add_paragraph(req["statement"])
 
         source_parts = []
         if req.get("source_document"):
@@ -197,6 +275,74 @@ def _generate_pdf(
     story.append(Paragraph(doc_title, styles["Title"]))
     story.append(Spacer(1, 0.2 * inch))
 
+    # Page width minus 1-inch margins on each side
+    CONTENT_WIDTH = 6.5 * inch
+
+    def _render_table_pdf(td: dict) -> None:
+        """Render a table_data dict as a ReportLab Table flowable."""
+        from reportlab.platypus import Table as RLTable, TableStyle  # type: ignore[import]
+
+        caption = td.get("caption")
+        raw_headers = td.get("headers") or []
+        rows = td.get("rows") or []
+        footnotes = td.get("footnotes")
+
+        if not raw_headers and not rows:
+            return
+
+        # Normalize headers to list-of-rows
+        if raw_headers and isinstance(raw_headers[0], str):
+            header_rows: list[list] = [list(raw_headers)]
+        else:
+            header_rows = [list(r) for r in raw_headers]
+
+        all_rows = header_rows + [list(r) for r in rows]
+        n_cols = max((len(r) for r in all_rows), default=1)
+
+        # Pad every row to n_cols
+        padded = [r + [""] * (n_cols - len(r)) for r in all_rows]
+
+        if caption:
+            story.append(Paragraph(caption, meta_style))
+
+        col_widths = [CONTENT_WIDTH / n_cols] * n_cols
+        tbl = RLTable(padded, colWidths=col_widths, hAlign="LEFT")
+
+        n_header_rows = len(header_rows)
+        tbl.setStyle(TableStyle([
+            ("FONTNAME", (0, 0), (-1, n_header_rows - 1), "Helvetica-Bold"),
+            ("BACKGROUND", (0, 0), (-1, n_header_rows - 1), colors.HexColor("#E8E8E8")),
+            ("FONTSIZE", (0, 0), (-1, -1), 8),
+            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
+            ("TOPPADDING", (0, 0), (-1, -1), 3),
+            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
+            ("LEFTPADDING", (0, 0), (-1, -1), 4),
+            ("RIGHTPADDING", (0, 0), (-1, -1), 4),
+            ("VALIGN", (0, 0), (-1, -1), "TOP"),
+            ("WORDWRAP", (0, 0), (-1, -1), True),
+        ]))
+        story.append(tbl)
+        story.append(Spacer(1, 0.1 * inch))
+
+        if footnotes:
+            story.append(Paragraph(footnotes, meta_style))
+
+    def _render_block_pdf(block: dict) -> None:
+        bt = block.get("block_type", "")
+        td = block.get("table_data")
+        content = block.get("content", "")
+
+        if bt == "table_block" and td:
+            _render_table_pdf(td)
+        elif bt == "heading":
+            heading_style = ParagraphStyle(
+                "BlockHeading", parent=styles["Normal"],
+                fontSize=10, fontName="Helvetica-Bold", spaceAfter=2,
+            )
+            story.append(Paragraph(content, heading_style))
+        else:
+            story.append(Paragraph(content, body_style))
+
     def _add_requirement(req: dict) -> None:
         id_text = f"[{req['id']}]  {req['title']}"
         if req.get("stale"):
@@ -213,7 +359,12 @@ def _generate_pdf(
             f"| Status: {req['status']} | Owner: {req['owner']}"
         )
         story.append(Paragraph(meta, meta_style))
-        story.append(Paragraph(req["statement"], body_style))
+
+        if req.get("content_source") == "block_linked" and req.get("blocks"):
+            for block in req["blocks"]:
+                _render_block_pdf(block)
+        else:
+            story.append(Paragraph(req["statement"], body_style))
 
         source_parts = []
         if req.get("source_document"):
@@ -297,6 +448,36 @@ def export_requirements(
 
     reqs = base_q.order_by(Requirement.requirement_id).all()
 
+    # Batch-load linked blocks for block_linked requirements (single query)
+    from models import RequirementBlock, DocumentBlock as DocBlock
+    blocks_by_req: dict[str, list[dict]] = {}
+    block_linked_ids = [req.id for req in reqs if req.content_source == "block_linked"]
+    if block_linked_ids:
+        junctions = (
+            db.query(RequirementBlock, DocBlock)
+            .join(DocBlock, RequirementBlock.block_id == DocBlock.id)
+            .filter(RequirementBlock.requirement_id.in_(block_linked_ids))
+            .order_by(RequirementBlock.requirement_id, RequirementBlock.sort_order)
+            .all()
+        )
+        for junc, blk in junctions:
+            rid = str(junc.requirement_id)
+            if rid not in blocks_by_req:
+                blocks_by_req[rid] = []
+            blocks_by_req[rid].append({
+                "block_type": blk.block_type,
+                "content": blk.content,
+                "clause_number": blk.clause_number,
+                "heading_text": blk.heading,
+                "table_data": blk.table_data,
+            })
+
+    # Pre-build all req dicts (with blocks injected for block_linked reqs)
+    req_dicts: dict[str, dict] = {
+        str(req.id): _req_dict(req, blocks_by_req.get(str(req.id)))
+        for req in reqs
+    }
+
     # Build hierarchy index
     node_by_id, children_map = _build_tree_index(db)
     ordered_nodes = _dfs_order(node_by_id, children_map)
@@ -308,7 +489,7 @@ def export_requirements(
         for node in req.hierarchy_nodes:
             nid = str(node.id)
             if nid in node_to_reqs:
-                node_to_reqs[nid].append(_req_dict(req))
+                node_to_reqs[nid].append(req_dicts[str(req.id)])
                 assigned_req_ids.add(str(req.id))
 
     # Build the ordered list of (node, depth, reqs) — skip empty nodes
@@ -318,7 +499,7 @@ def export_requirements(
             nodes_with_reqs.append((node_by_id[nid], depth, node_to_reqs[nid]))
 
     # Requirements not assigned to any hierarchy node
-    unassigned = [_req_dict(r) for r in reqs if str(r.id) not in assigned_req_ids]
+    unassigned = [req_dicts[str(r.id)] for r in reqs if str(r.id) not in assigned_req_ids]
 
     if format == "word":
         content = _generate_word(doc_title, nodes_with_reqs, unassigned)
