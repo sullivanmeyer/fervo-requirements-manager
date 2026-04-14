@@ -148,10 +148,19 @@ Rules:
 - Decompose compound clauses (one clause with multiple "shall"s) into separate
   atomic statements — one per output object.
 - Ignore boilerplate blocks entirely.
+- For table_block type blocks: examine the table_data (headers and rows) for
+  specification data or requirement language. If the table specifies design parameters,
+  performance criteria, material requirements, or other obligatory values, create ONE
+  candidate for the entire table. The statement should be a concise 1-2 sentence
+  description of what the table specifies (e.g. "Table 3 specifies the minimum design
+  parameters for the pressure vessel including design pressure, temperature, and
+  corrosion allowance."). Do not decompose table rows into separate candidates.
 - For each extracted requirement include:
     title                             : concise human-readable summary (≤120 characters)
-    statement                         : the full, verbatim or lightly cleaned requirement text,
-                                        beginning with the subject ("The [subject] shall …")
+    statement                         : for prose blocks — the full, verbatim or lightly
+                                        cleaned requirement text beginning with the subject
+                                        ("The [subject] shall …"); for table_block —
+                                        a 1-2 sentence description of what the table specifies
     source_clause                     : clause_number of the source block, or null
     suggested_classification          : "Requirement" or "Guideline"
     suggested_classification_subtype  : one of the following, based on classification:
@@ -440,16 +449,21 @@ def extract_requirements(blocks: list[dict]) -> list[dict]:
     """
     client = _get_client()
 
-    # Build a compact representation for the prompt
-    blocks_for_prompt = [
-        {
+    # Build a compact representation for the prompt.
+    # For table_block entries, include table_data so the LLM can see the
+    # structured headers/rows rather than only raw Markdown pipe text.
+    blocks_for_prompt = []
+    for i, b in enumerate(blocks):
+        entry: dict = {
             "index": i,
             "clause_number": b.get("clause_number"),
             "block_type": b.get("block_type"),
             "content": b.get("content", ""),
         }
-        for i, b in enumerate(blocks)
-    ]
+        if b.get("block_type") == "table_block" and b.get("table_data"):
+            entry["table_data"] = b["table_data"]
+        blocks_for_prompt.append(entry)
+
     blocks_json = json.dumps(blocks_for_prompt, indent=2)
     prompt = EXTRACT_USER_TEMPLATE.format(blocks_json=blocks_json)
 
@@ -464,6 +478,7 @@ def extract_requirements(blocks: list[dict]) -> list[dict]:
         ],
         config=types.GenerateContentConfig(
             system_instruction=EXTRACT_SYSTEM,
+            response_mime_type="application/json",
         ),
     )
 
@@ -478,6 +493,7 @@ def extract_requirements(blocks: list[dict]) -> list[dict]:
             "statement": c.get("statement", ""),
             "source_clause": c.get("source_clause"),
             "suggested_classification": c.get("suggested_classification", "Requirement"),
+            "suggested_classification_subtype": c.get("suggested_classification_subtype"),
             "suggested_discipline": c.get("suggested_discipline", "General"),
             "source_block_index": int(c.get("source_block_index", 0)),
         })
