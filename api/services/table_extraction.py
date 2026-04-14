@@ -27,7 +27,15 @@ from __future__ import annotations
 import io
 import json
 import re
+import time
 from typing import Optional
+
+# Retry config for vision API 503s
+_VISION_MAX_RETRIES = 3
+_VISION_RETRY_DELAYS = [5, 10, 20]  # seconds between attempts
+
+# Brief pause between consecutive table vision calls to avoid burst rate-limiting
+_INTER_TABLE_DELAY_S = 1.5
 
 
 # ---------------------------------------------------------------------------
@@ -99,47 +107,63 @@ def _vision_extract_table(image_bytes: bytes, gemini_client) -> Optional[dict]:
     """
     Send a table PNG to Gemini Vision and return a parsed table_data dict.
     The returned dict uses `headers: string[][]` (multi-level).
-    Returns None if the call fails or Gemini returns invalid JSON.
+    Returns None if all retries fail or Gemini returns invalid JSON.
+
+    Retries up to _VISION_MAX_RETRIES times on 503 UNAVAILABLE responses,
+    with increasing delays between attempts.
     """
-    try:
-        from google.genai import types  # type: ignore[import]
+    from google.genai import types  # type: ignore[import]
 
-        response = gemini_client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=[
-                types.Content(
-                    role="user",
-                    parts=[
-                        types.Part.from_bytes(
-                            data=image_bytes,
-                            mime_type="image/png",
-                        ),
-                        types.Part(text=_VISION_TABLE_PROMPT),
-                    ],
+    for attempt in range(_VISION_MAX_RETRIES):
+        try:
+            response = gemini_client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=[
+                    types.Content(
+                        role="user",
+                        parts=[
+                            types.Part.from_bytes(
+                                data=image_bytes,
+                                mime_type="image/png",
+                            ),
+                            types.Part(text=_VISION_TABLE_PROMPT),
+                        ],
+                    )
+                ],
+                config=types.GenerateContentConfig(
+                    response_mime_type="application/json",
+                ),
+            )
+
+            raw = (response.text or "").strip()
+            # Strip code fences if the model adds them despite response_mime_type
+            fenced = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", raw)
+            raw = fenced.group(1).strip() if fenced else raw
+
+            data = json.loads(raw)
+
+            # Normalise: ensure headers is always a list of lists
+            headers = data.get("headers", [])
+            if headers and isinstance(headers[0], str):
+                data["headers"] = [headers]
+
+            return data
+
+        except Exception as e:
+            err_str = str(e)
+            is_transient = "503" in err_str or "UNAVAILABLE" in err_str
+            if is_transient and attempt < _VISION_MAX_RETRIES - 1:
+                delay = _VISION_RETRY_DELAYS[attempt]
+                print(
+                    f"[table_extraction] Vision 503, retrying in {delay}s "
+                    f"(attempt {attempt + 1}/{_VISION_MAX_RETRIES})"
                 )
-            ],
-            config=types.GenerateContentConfig(
-                response_mime_type="application/json",
-            ),
-        )
+                time.sleep(delay)
+            else:
+                print(f"[table_extraction] WARNING: Gemini vision extraction failed: {e}")
+                return None
 
-        raw = (response.text or "").strip()
-        # Strip code fences if the model adds them despite response_mime_type
-        fenced = re.search(r"```(?:json)?\s*([\s\S]*?)\s*```", raw)
-        raw = fenced.group(1).strip() if fenced else raw
-
-        data = json.loads(raw)
-
-        # Normalise: ensure headers is always a list of lists
-        headers = data.get("headers", [])
-        if headers and isinstance(headers[0], str):
-            data["headers"] = [headers]
-
-        return data
-
-    except Exception as e:
-        print(f"[table_extraction] WARNING: Gemini vision extraction failed: {e}")
-        return None
+    return None
 
 
 def _rows_to_markdown(rows: list[list]) -> str:
@@ -244,6 +268,11 @@ def extract_content_with_tables(
                         # ── Vision extraction path ────────────────────────────
                         vision_data: Optional[dict] = None
                         if gemini_client is not None:
+                            # Brief pause between consecutive calls to avoid
+                            # bursting Gemini's rate limit when a document has
+                            # many tables.
+                            if table_idx > 0:
+                                time.sleep(_INTER_TABLE_DELAY_S)
                             img_bytes = _crop_table_image(page, table.bbox)
                             if img_bytes:
                                 vision_data = _vision_extract_table(
