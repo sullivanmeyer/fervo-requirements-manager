@@ -38,6 +38,47 @@ type AppView =
   | { page: 'orphan-report' }
 
 // ---------------------------------------------------------------------------
+// Hash-based URL routing
+// ---------------------------------------------------------------------------
+
+function viewToHash(view: AppView): string {
+  switch (view.page) {
+    case 'hierarchy':        return '#/hierarchy'
+    case 'requirements':     return '#/requirements'
+    case 'documents':        return '#/documents'
+    case 'document-network': return '#/document-network'
+    case 'derivation-tree':  return '#/derivation-tree'
+    case 'orphan-report':    return '#/orphan-report'
+    case 'requirement-detail':
+      return view.requirementId ? `#/requirement/${view.requirementId}` : '#/requirement/new'
+    case 'document-detail':
+      return view.documentId ? `#/document/${view.documentId}` : '#/document/new'
+  }
+}
+
+function hashToView(hash: string): AppView {
+  const path = hash.replace(/^#\//, '')
+  const [seg0, seg1] = path.split('/')
+
+  if (seg0 === 'requirement') {
+    const id = seg1 && seg1 !== 'new' ? seg1 : null
+    return { page: 'requirement-detail', requirementId: id }
+  }
+  if (seg0 === 'document') {
+    const id = seg1 && seg1 !== 'new' ? seg1 : null
+    return { page: 'document-detail', documentId: id }
+  }
+  switch (seg0) {
+    case 'requirements':     return { page: 'requirements' }
+    case 'documents':        return { page: 'documents' }
+    case 'document-network': return { page: 'document-network' }
+    case 'derivation-tree':  return { page: 'derivation-tree', focusId: null }
+    case 'orphan-report':    return { page: 'orphan-report' }
+    default:                 return { page: 'hierarchy' }
+  }
+}
+
+// ---------------------------------------------------------------------------
 // Global search bar
 // ---------------------------------------------------------------------------
 
@@ -176,7 +217,7 @@ function SearchBar({ onOpenRequirement, onOpenDocument }: {
 // ---------------------------------------------------------------------------
 
 export default function App() {
-  const [view, setView] = useState<AppView>({ page: 'hierarchy' })
+  const [view, setView] = useState<AppView>(() => hashToView(window.location.hash))
 
   const [nodes, setNodes] = useState<HierarchyNode[]>([])
   const [selectedNode, setSelectedNode] = useState<HierarchyNode | null>(null)
@@ -229,6 +270,18 @@ export default function App() {
   useEffect(() => {
     void loadHierarchy()
   }, [loadHierarchy])
+
+  // Sync view → URL hash whenever view changes
+  useEffect(() => {
+    window.location.hash = viewToHash(view)
+  }, [view])
+
+  // Sync browser Back/Forward → view state
+  useEffect(() => {
+    const handler = () => setView(hashToView(window.location.hash))
+    window.addEventListener('popstate', handler)
+    return () => window.removeEventListener('popstate', handler)
+  }, [])
 
   // Ctrl+N — create a new requirement from anywhere in the app
   useEffect(() => {
