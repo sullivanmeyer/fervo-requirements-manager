@@ -56,6 +56,7 @@ class GraphNode(BaseModel):
     out_count: int     # how many documents this one cites
     in_count: int      # how many documents cite this one
     is_stub: bool      # auto-detected reference; not yet fully registered
+    archived: bool     # soft-deleted; hidden from active workflows
 
 
 class GraphEdge(BaseModel):
@@ -124,6 +125,7 @@ def get_graph(db: Session = Depends(get_db)):
             out_count=out_counts.get(str(doc.id), 0),
             in_count=in_counts.get(str(doc.id), 0),
             is_stub=bool(doc.is_stub),
+            archived=bool(doc.archived),
         )
         for doc in docs
     ]

@@ -9,6 +9,27 @@ interface Props {
   onSelect: (node: HierarchyNode) => void
 }
 
+// Short label + color for each discipline
+const DISC_BADGES: Record<string, string> = {
+  'Mechanical':        'bg-blue-100 text-blue-700',
+  'Electrical':        'bg-amber-100 text-amber-700',
+  'I&C':               'bg-purple-100 text-purple-700',
+  'Civil/Structural':  'bg-orange-100 text-orange-700',
+  'Process':           'bg-green-100 text-green-700',
+  'Fire Protection':   'bg-red-100 text-red-700',
+  'General':           'bg-gray-100 text-gray-500',
+}
+
+const DISC_SHORT: Record<string, string> = {
+  'Mechanical':        'MECH',
+  'Electrical':        'ELEC',
+  'I&C':               'I&C',
+  'Civil/Structural':  'CIVIL',
+  'Process':           'PROC',
+  'Fire Protection':   'FIRE',
+  'General':           'GEN',
+}
+
 export default function TreeNode({
   node,
   depth,
@@ -21,6 +42,7 @@ export default function TreeNode({
   const isSelected = node.id === selectedId
   const hasChildren = node.children.length > 0
   const isArchived = node.archived
+  const disciplines = node.applicable_disciplines ?? []
 
   return (
     <div>
@@ -55,6 +77,21 @@ export default function TreeNode({
 
         {/* Node name */}
         <span className={`text-sm truncate flex-1 ${isArchived ? 'italic' : ''}`}>{node.name}</span>
+
+        {/* Discipline badges */}
+        {disciplines.length > 0 && (
+          <span className="flex gap-0.5 shrink-0">
+            {disciplines.map((d) => (
+              <span
+                key={d}
+                className={`text-[9px] font-semibold px-1 py-0.5 rounded ${DISC_BADGES[d] ?? 'bg-gray-100 text-gray-500'}`}
+                title={d}
+              >
+                {DISC_SHORT[d] ?? d.slice(0, 4).toUpperCase()}
+              </span>
+            ))}
+          </span>
+        )}
 
         {/* Child count pill */}
         {hasChildren && (

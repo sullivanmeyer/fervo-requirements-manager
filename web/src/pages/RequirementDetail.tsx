@@ -7,15 +7,17 @@
  * Pass requirementId=null to create a new requirement.
  * Pass initialParentIds to pre-populate parents (used by "Add Child").
  */
-import { type ChangeEvent, useEffect, useRef, useState } from 'react'
+import { type ChangeEvent, useEffect, useRef, useState, useCallback } from 'react'
 import {
   addLink,
+  archiveRequirement,
   createRequirement,
   fetchAllRequirements,
   fetchRequirement,
   fetchSites,
   fetchUnits,
   removeLink,
+  transferDiscipline,
   updateRequirement,
 } from '../api/requirements'
 import { fetchSourceDocuments } from '../api/sourceDocuments'
@@ -25,16 +27,30 @@ import {
   fetchAttachments,
   uploadAttachment,
 } from '../api/attachments'
+import {
+  createConflictRecord,
+  deleteConflictRecord,
+  updateConflictRecord,
+} from '../api/conflictRecords'
+import { fetchGapAnalysis } from '../api/search'
 import type {
   Attachment,
+  ConflictRecord,
+  DocumentBlock,
+  GapAnalysisResult,
+  GapNodeStub,
   HierarchyNode,
+  LinkedBlock,
   RequirementDetail as ReqDetail,
   RequirementListItem,
   RequirementStub,
   Site,
   SourceDocumentListItem,
+  TableData,
   Unit,
 } from '../types'
+import { addRequirementBlock, removeRequirementBlock, updateBlock } from '../api/extraction'
+import { fetchBlocks } from '../api/extraction'
 import HierarchyNodePicker from '../components/HierarchyNodePicker'
 import RequirementSearch from '../components/RequirementSearch'
 import TagInput from '../components/TagInput'
@@ -44,6 +60,10 @@ import TagInput from '../components/TagInput'
 // ---------------------------------------------------------------------------
 
 const CLASSIFICATIONS = ['Requirement', 'Guideline']
+const CLASSIFICATION_SUBTYPES: Record<string, string[]> = {
+  Requirement: ['Performance Requirement', 'Design Requirement', 'Derived Requirement'],
+  Guideline: ['Lesson Learned', 'Procedure', 'Code'],
+}
 const SOURCE_TYPES = ['Manual Entry', 'Derived from Document']
 const STATUSES = ['Draft', 'Under Review', 'Approved', 'Superseded', 'Withdrawn']
 const DISCIPLINES = [
@@ -54,6 +74,8 @@ const DISCIPLINES = [
   'Process',
   'Fire Protection',
   'General',
+  'Build',
+  'Operations',
 ]
 const VERIFICATION_METHODS = [
   'Analysis',
@@ -79,13 +101,15 @@ interface Props {
   onCancel: () => void
   onViewInTree: (id: string) => void  // navigate to derivation tree tab
   onAddChild: (parentId: string) => void
-  onOpenDocument?: (docId: string) => void
+  onOpenDocument?: (docId: string, blockIds?: string[]) => void
+  onCreateChildForGap?: (parentId: string, hierarchyNodeId: string) => void
 }
 
 interface FormState {
   title: string
   statement: string
   classification: string
+  classification_subtype: string
   owner: string
   source_type: string
   status: string
@@ -96,6 +120,7 @@ interface FormState {
   last_modified_date: string
   change_history: string
   rationale: string
+  comments: string
   verification_method: string
   tags: string[]
   source_document_id: string
@@ -112,6 +137,7 @@ function emptyForm(userName: string, initialStatement = '', initialSourceDocumen
     title: '',
     statement: initialStatement,
     classification: 'Requirement',
+    classification_subtype: '',
     owner: userName,
     source_type: initialSourceDocumentId ? 'Derived from Document' : 'Manual Entry',
     status: 'Draft',
@@ -122,6 +148,7 @@ function emptyForm(userName: string, initialStatement = '', initialSourceDocumen
     last_modified_date: '',
     change_history: '',
     rationale: '',
+    comments: '',
     verification_method: '',
     tags: [],
     source_document_id: initialSourceDocumentId,
@@ -137,6 +164,7 @@ function formFromDetail(req: ReqDetail): FormState {
     title: req.title,
     statement: req.statement,
     classification: req.classification,
+    classification_subtype: req.classification_subtype ?? '',
     owner: req.owner,
     source_type: req.source_type,
     status: req.status,
@@ -147,6 +175,7 @@ function formFromDetail(req: ReqDetail): FormState {
     last_modified_date: req.last_modified_date ?? '',
     change_history: req.change_history ?? '',
     rationale: req.rationale ?? '',
+    comments: req.comments ?? '',
     verification_method: req.verification_method ?? '',
     tags: req.tags ?? [],
     source_document_id: req.source_document_id ?? '',
@@ -155,6 +184,448 @@ function formFromDetail(req: ReqDetail): FormState {
     site_ids: req.sites.map((s) => s.id),
     unit_ids: req.units.map((u) => u.id),
   }
+}
+
+// ---------------------------------------------------------------------------
+// Block renderer — renders linked source blocks in the requirement body
+// ---------------------------------------------------------------------------
+
+/** Normalise headers to string[][] for uniform rendering. */
+function normalizeHeaders(headers: string[] | string[][]): string[][] {
+  if (!headers.length) return []
+  return typeof headers[0] === 'string'
+    ? [headers as string[]]
+    : (headers as string[][])
+}
+
+/** Compress consecutive identical non-empty cells into colspan groups. */
+function colspanGroups(row: string[]): { value: string; colspan: number }[] {
+  const result: { value: string; colspan: number }[] = []
+  for (const cell of row) {
+    if (
+      result.length > 0 &&
+      cell !== '' &&
+      result[result.length - 1].value === cell
+    ) {
+      result[result.length - 1].colspan++
+    } else {
+      result.push({ value: cell, colspan: 1 })
+    }
+  }
+  return result
+}
+
+/**
+ * Regenerate Markdown table text from structured table_data.
+ * Uses the last (leaf) header row as the column names so the plain-text
+ * search-index fallback is as useful as possible.
+ */
+function tableDataToMarkdown(td: TableData): string {
+  const headerRows = normalizeHeaders(td.headers)
+  const leafHeaders = headerRows[headerRows.length - 1] ?? []
+  const header = '| ' + leafHeaders.join(' | ') + ' |'
+  const sep = '| ' + leafHeaders.map(() => '---').join(' | ') + ' |'
+  const rows = td.rows.map((row) => '| ' + row.join(' | ') + ' |')
+  return [header, sep, ...rows].join('\n')
+}
+
+function BlockRenderer({
+  blocks,
+  onBlockSaved,
+  onBlockRemoved,
+}: {
+  blocks: LinkedBlock[]
+  onBlockSaved: (blockId: string, content: string, tableData: TableData | null) => void
+  onBlockRemoved: (blockId: string) => void
+}) {
+  const [editingId, setEditingId] = useState<string | null>(null)
+  const [editContent, setEditContent] = useState('')
+  const [editTableData, setEditTableData] = useState<TableData | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState<string | null>(null)
+  const [removingId, setRemovingId] = useState<string | null>(null)
+
+  const startEdit = (block: LinkedBlock) => {
+    setEditingId(block.id)
+    setEditContent(block.content)
+    if (block.table_data) {
+      // Deep-copy so edits don't mutate the display state before saving.
+      // Flatten multi-level headers to the leaf row (last row) for the edit
+      // inputs — multi-level header restructuring isn't supported inline.
+      const td: TableData = JSON.parse(JSON.stringify(block.table_data))
+      const rows = normalizeHeaders(td.headers)
+      td.headers = rows[rows.length - 1] ?? []
+      setEditTableData(td)
+    } else {
+      setEditTableData(null)
+    }
+    setSaveError(null)
+  }
+
+  const cancelEdit = () => {
+    setEditingId(null)
+    setSaveError(null)
+  }
+
+  const saveEdit = async (block: LinkedBlock) => {
+    setSaving(true)
+    setSaveError(null)
+    try {
+      const isTable = block.block_type === 'table_block' && editTableData
+      const content = isTable ? tableDataToMarkdown(editTableData!) : editContent
+      const tableData = isTable ? editTableData : null
+      await updateBlock(block.id, { content, table_data: tableData })
+      onBlockSaved(block.id, content, tableData)
+      setEditingId(null)
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : 'Save failed')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  if (blocks.length === 0) {
+    return <p className="text-xs text-gray-400 italic">No source blocks linked.</p>
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Warning: edits propagate to the source document viewer */}
+      <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+        Edits here update the block in the source document viewer too — the block is shared, not copied.
+      </p>
+
+      {blocks.map((block) => {
+        const isEditing = editingId === block.id
+        const isRemoving = removingId === block.id
+        const prefix = block.clause_number
+          ? <span className="text-xs font-mono text-gray-400 shrink-0">{block.clause_number}</span>
+          : null
+
+        const removeBtn = (
+          <button
+            onClick={async () => {
+              setRemovingId(block.id)
+              await onBlockRemoved(block.id)
+              setRemovingId(null)
+            }}
+            disabled={isRemoving || saving}
+            title="Unlink this block from the requirement"
+            className="ml-auto px-1.5 py-0.5 text-xs text-red-500 border border-red-200 rounded hover:bg-red-50 disabled:opacity-40 shrink-0"
+          >
+            {isRemoving ? '…' : '× Remove'}
+          </button>
+        )
+
+        // ── Heading — structural, not editable ──────────────────────────────
+        if (block.block_type === 'heading') {
+          return (
+            <div key={block.id} className="flex items-baseline gap-2">
+              {prefix}
+              <p className="text-sm font-semibold text-gray-700 flex-1">{block.heading || block.content}</p>
+              {removeBtn}
+            </div>
+          )
+        }
+
+        // ── Table block ──────────────────────────────────────────────────────
+        if (block.block_type === 'table_block') {
+          const td = isEditing ? editTableData : block.table_data
+          if (!td) return null
+          const headerRows = normalizeHeaders(td.headers)
+          const isMultiLevel = headerRows.length > 1
+          const isFallback = td.table_parse_quality === 'fallback'
+          return (
+            <div key={block.id}>
+              {prefix && <div className="mb-1">{prefix}</div>}
+              {isFallback && (
+                <p className="text-xs bg-amber-50 text-amber-700 border border-amber-200 rounded px-1.5 py-0.5 mb-1">
+                  Table parsed with reduced accuracy — review for errors
+                </p>
+              )}
+              {td.caption && (
+                <p className="text-xs text-gray-500 italic mb-1">{td.caption}</p>
+              )}
+              <div className={`overflow-x-auto ${isFallback ? 'border-l-2 border-l-amber-400 pl-1' : ''}`}>
+                <table className="text-xs border-collapse w-full">
+                  <thead>
+                    {headerRows.map((row, rowIdx) => (
+                      <tr key={rowIdx} className={rowIdx === 0 && isMultiLevel ? 'bg-purple-100' : 'bg-purple-50'}>
+                        {isEditing && !isMultiLevel
+                          /* Edit mode: flat single-row headers become inputs */
+                          ? row.map((h, ci) => (
+                              <th key={ci} className="border border-purple-200 px-1 py-1">
+                                <input
+                                  value={h}
+                                  onChange={(e) => {
+                                    // editTableData.headers is always string[] in edit mode
+                                    const nh = [...(editTableData!.headers as string[])]
+                                    nh[ci] = e.target.value
+                                    setEditTableData({ ...editTableData!, headers: nh })
+                                  }}
+                                  className="w-full min-w-[80px] bg-white border border-purple-300 rounded px-1 py-0.5 text-xs font-semibold text-purple-800 focus:outline-none focus:ring-1 focus:ring-purple-400"
+                                />
+                              </th>
+                            ))
+                          /* Display mode or multi-level: render with colspan */
+                          : colspanGroups(row).map(({ value, colspan }, ci) => (
+                              <th
+                                key={ci}
+                                colSpan={colspan}
+                                className={`border border-purple-200 px-2 py-1 text-left text-purple-800 whitespace-nowrap ${
+                                  rowIdx === 0 && isMultiLevel ? 'font-bold' : 'font-semibold'
+                                }`}
+                              >
+                                {value || '—'}
+                              </th>
+                            ))
+                        }
+                      </tr>
+                    ))}
+                    {isEditing && isMultiLevel && (
+                      <tr>
+                        <td
+                          colSpan={headerRows[headerRows.length - 1]?.length ?? 1}
+                          className="px-2 py-1 text-xs text-amber-600 bg-amber-50 border border-amber-200"
+                        >
+                          Multi-level headers are read-only — edit body cells below
+                        </td>
+                      </tr>
+                    )}
+                  </thead>
+                  <tbody>
+                    {td.rows.map((row, ri) => (
+                      <tr key={ri} className={ri % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+                        {row.map((cell, ci) =>
+                          isEditing ? (
+                            <td key={ci} className="border border-gray-200 px-1 py-1">
+                              <input
+                                value={cell}
+                                onChange={(e) => {
+                                  const nr = editTableData!.rows.map((r, ridx) =>
+                                    ridx === ri ? r.map((c, cidx) => cidx === ci ? e.target.value : c) : r
+                                  )
+                                  setEditTableData({ ...editTableData!, rows: nr })
+                                }}
+                                className="w-full min-w-[60px] border border-gray-200 rounded px-1 py-0.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400"
+                              />
+                            </td>
+                          ) : (
+                            <td key={ci} className="border border-gray-200 px-2 py-1 text-gray-700">
+                              {cell || ''}
+                            </td>
+                          )
+                        )}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              {td.footnotes && (
+                <p className="text-xs text-gray-500 italic mt-1">{td.footnotes}</p>
+              )}
+              {/* Edit / remove controls */}
+              <div className="mt-1 flex items-center gap-2">
+                {isEditing ? (
+                  <>
+                    {saveError && <span className="text-xs text-red-600">{saveError}</span>}
+                    <button
+                      onClick={() => void saveEdit(block)}
+                      disabled={saving}
+                      className="px-2 py-0.5 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+                    >
+                      {saving ? 'Saving…' : 'Save'}
+                    </button>
+                    <button
+                      onClick={cancelEdit}
+                      disabled={saving}
+                      className="px-2 py-0.5 text-xs border border-gray-300 rounded hover:bg-gray-50"
+                    >
+                      Cancel
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    onClick={() => startEdit(block)}
+                    className="px-2 py-0.5 text-xs border border-gray-300 text-gray-500 rounded hover:bg-gray-50"
+                  >
+                    Edit table
+                  </button>
+                )}
+                {!isEditing && removeBtn}
+              </div>
+            </div>
+          )
+        }
+
+        // ── Prose block (requirement_clause, informational, etc.) ────────────
+        return (
+          <div key={block.id}>
+            <div className="flex items-start gap-2">
+              {prefix}
+              {isEditing ? (
+                <textarea
+                  value={editContent}
+                  onChange={(e) => setEditContent(e.target.value)}
+                  rows={Math.max(3, editContent.split('\n').length + 1)}
+                  className="flex-1 border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400 resize-y"
+                  autoFocus
+                />
+              ) : (
+                <p
+                  className="flex-1 text-sm text-gray-700 leading-relaxed whitespace-pre-wrap cursor-text hover:bg-gray-50 rounded px-1 -mx-1 transition-colors"
+                  title="Click to edit"
+                  onClick={() => startEdit(block)}
+                >
+                  {block.content}
+                </p>
+              )}
+              {!isEditing && removeBtn}
+            </div>
+            {isEditing && (
+              <div className="mt-1 flex items-center gap-2 ml-auto">
+                {saveError && <span className="text-xs text-red-600">{saveError}</span>}
+                <button
+                  onClick={() => void saveEdit(block)}
+                  disabled={saving}
+                  className="px-2 py-0.5 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+                >
+                  {saving ? 'Saving…' : 'Save'}
+                </button>
+                <button
+                  onClick={cancelEdit}
+                  disabled={saving}
+                  className="px-2 py-0.5 text-xs border border-gray-300 rounded hover:bg-gray-50"
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// AddBlockPicker — lets user link additional blocks from the source document
+// ---------------------------------------------------------------------------
+
+function AddBlockPicker({
+  requirementId,
+  sourceDocumentId,
+  linkedBlockIds,
+  onBlockAdded,
+}: {
+  requirementId: string
+  sourceDocumentId: string
+  linkedBlockIds: string[]
+  onBlockAdded: (result: { content_source: 'manual' | 'block_linked'; linked_blocks: LinkedBlock[] }) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [allBlocks, setAllBlocks] = useState<DocumentBlock[]>([])
+  const [loadingBlocks, setLoadingBlocks] = useState(false)
+  const [addingId, setAddingId] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+
+  const handleOpen = async () => {
+    setOpen(true)
+    if (allBlocks.length === 0) {
+      setLoadingBlocks(true)
+      try {
+        const blocks = await fetchBlocks(sourceDocumentId)
+        setAllBlocks(blocks)
+      } catch (e) {
+        setError(e instanceof Error ? e.message : 'Failed to load blocks')
+      } finally {
+        setLoadingBlocks(false)
+      }
+    }
+  }
+
+  const handleAdd = async (blockId: string) => {
+    setAddingId(blockId)
+    setError(null)
+    try {
+      const result = await addRequirementBlock(requirementId, blockId)
+      onBlockAdded(result)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'Failed to add block')
+    } finally {
+      setAddingId(null)
+    }
+  }
+
+  const linkedSet = new Set(linkedBlockIds)
+
+  return (
+    <div className="mt-2">
+      {!open ? (
+        <button
+          type="button"
+          onClick={() => void handleOpen()}
+          className="text-xs text-purple-700 border border-purple-200 rounded px-2 py-1 hover:bg-purple-50"
+        >
+          + Add source block
+        </button>
+      ) : (
+        <div className="border border-purple-200 rounded bg-white mt-1">
+          <div className="flex items-center justify-between px-3 py-2 border-b border-purple-100">
+            <span className="text-xs font-semibold text-purple-800">Add a block from the source document</span>
+            <button
+              type="button"
+              onClick={() => setOpen(false)}
+              className="text-xs text-gray-400 hover:text-gray-600"
+            >
+              Close
+            </button>
+          </div>
+          {error && <p className="text-xs text-red-600 px-3 py-2">{error}</p>}
+          {loadingBlocks ? (
+            <p className="text-xs text-gray-400 px-3 py-3">Loading blocks…</p>
+          ) : (
+            <div className="max-h-64 overflow-y-auto divide-y divide-gray-100">
+              {allBlocks.length === 0 && (
+                <p className="text-xs text-gray-400 px-3 py-3">No blocks found in this document.</p>
+              )}
+              {allBlocks.map((block) => {
+                const isLinked = linkedSet.has(block.id)
+                const isAdding = addingId === block.id
+                return (
+                  <div
+                    key={block.id}
+                    className={`flex items-start gap-2 px-3 py-2 ${isLinked ? 'bg-purple-50' : 'hover:bg-gray-50'}`}
+                  >
+                    <div className="flex-1 min-w-0">
+                      {block.clause_number && (
+                        <span className="text-xs font-mono text-gray-400 mr-1">{block.clause_number}</span>
+                      )}
+                      <span className="text-xs text-gray-700 line-clamp-2">
+                        {block.heading || block.content}
+                      </span>
+                    </div>
+                    {isLinked ? (
+                      <span className="text-xs text-purple-600 shrink-0">Linked</span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => void handleAdd(block.id)}
+                        disabled={isAdding}
+                        className="text-xs text-blue-600 border border-blue-200 rounded px-1.5 py-0.5 hover:bg-blue-50 disabled:opacity-40 shrink-0"
+                      >
+                        {isAdding ? '…' : 'Add'}
+                      </button>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -311,6 +782,7 @@ export default function RequirementDetail({
   onViewInTree,
   onAddChild,
   onOpenDocument,
+  onCreateChildForGap,
 }: Props) {
   const isNew = requirementId === null
 
@@ -344,13 +816,48 @@ export default function RequirementDetail({
   const [linkingIds, setLinkingIds] = useState<string[]>([])
   const [linkingSaving, setLinkingSaving] = useState(false)
 
+  // Conflict records state
+  const [conflictRecords, setConflictRecords] = useState<ConflictRecord[]>([])
+  const [showFlagConflict, setShowFlagConflict] = useState(false)
+  const [conflictForm, setConflictForm] = useState({ description: '', requirement_ids: [] as string[] })
+  const [conflictSaving, setConflictSaving] = useState(false)
+  const [conflictError, setConflictError] = useState<string | null>(null)
+
+  // Stale flag (separate from form state — not editable by users directly)
+  const [reqStale, setReqStale] = useState(false)
+
+  // Block-linked body (Stage 15)
+  const [contentSource, setContentSource] = useState<'manual' | 'block_linked'>('manual')
+  const [linkedBlocks, setLinkedBlocks] = useState<LinkedBlock[]>([])
+
+  // Archive state
+  const [isArchived, setIsArchived] = useState(false)
+  const [archiving, setArchiving] = useState(false)
+  const [archiveError, setArchiveError] = useState<string | null>(null)
+
+  // Gap analysis state
+  const [gapAnalysis, setGapAnalysis] = useState<GapAnalysisResult | null>(null)
+  const [gapLoading, setGapLoading] = useState(false)
+  const [gapError, setGapError] = useState<string | null>(null)
+  const [showGaps, setShowGaps] = useState(false)
+
+  // Discipline transfer dialog
+  const [showTransfer, setShowTransfer] = useState(false)
+  const [transferTarget, setTransferTarget] = useState('')
+  const [transferring, setTransferring] = useState(false)
+  const [transferError, setTransferError] = useState<string | null>(null)
+
+  // Superseded-by banner (populated when loading an existing superseded requirement)
+  const [supersededByReqId, setSupersededByReqId] = useState<string | null>(null)
+  const [supersededById, setSupersededById] = useState<string | null>(null)
+
   // -------------------------------------------------------------------------
   // Load on mount
   // -------------------------------------------------------------------------
 
   useEffect(() => {
     if (isNew) {
-      void Promise.all([fetchAllRequirements(), fetchSourceDocuments(), fetchSites(), fetchUnits()]).then(
+      void Promise.all([fetchAllRequirements(), fetchSourceDocuments({ includeArchived: true }), fetchSites(), fetchUnits()]).then(
         ([reqs, docs, s, u]) => {
           setAllRequirements(reqs)
           setSourceDocs(docs)
@@ -364,12 +871,13 @@ export default function RequirementDetail({
           const [req, reqs, docs, s, u, atts] = await Promise.all([
             fetchRequirement(requirementId!),
             fetchAllRequirements(),
-            fetchSourceDocuments(),
+            fetchSourceDocuments({ includeArchived: true }),
             fetchSites(),
             fetchUnits(),
             fetchAttachments(requirementId!),
           ])
           setForm(formFromDetail(req))
+          setReqStale(req.stale ?? false)
           setExistingReqId(req.requirement_id)
           setSavedDbId(req.id)
 
@@ -383,6 +891,12 @@ export default function RequirementDetail({
           setSites(s)
           setUnits(u)
           setAttachments(atts)
+          setConflictRecords(req.conflict_records ?? [])
+          setSupersededByReqId(req.superseded_by_req_id ?? null)
+          setSupersededById(req.superseded_by_id ?? null)
+          setContentSource(req.content_source ?? 'manual')
+          setLinkedBlocks(req.linked_blocks ?? [])
+          setIsArchived(req.archived ?? false)
         } catch (e) {
           setError(e instanceof Error ? e.message : 'Failed to load requirement')
         } finally {
@@ -406,8 +920,12 @@ export default function RequirementDetail({
   // -------------------------------------------------------------------------
 
   const handleSave = async () => {
-    if (!form.title.trim() || !form.statement.trim()) {
-      setError('Title and Statement are required.')
+    if (!form.title.trim()) {
+      setError('Title is required.')
+      return
+    }
+    if (contentSource === 'manual' && !form.statement.trim()) {
+      setError('Statement is required.')
       return
     }
     if (form.source_type === 'Derived from Document' && !form.source_document_id) {
@@ -428,7 +946,10 @@ export default function RequirementDetail({
       last_modified_date: form.last_modified_date || undefined,
       change_history: form.change_history || undefined,
       rationale: form.rationale || undefined,
+      comments: form.comments || undefined,
       verification_method: form.verification_method || undefined,
+      // Empty string means "no subtype" — send null so the DB stores NULL
+      classification_subtype: form.classification_subtype || null,
     }
 
     try {
@@ -608,6 +1129,47 @@ export default function RequirementDetail({
               )}
             </div>
           )}
+          {!isNew && (
+            <button
+              onClick={() => { setTransferTarget(''); setTransferError(null); setShowTransfer(true) }}
+              className="px-3 py-1.5 text-sm border border-orange-200 text-orange-700 rounded hover:bg-orange-50"
+              title="Transfer this requirement to a different discipline (creates a new ID)"
+            >
+              Transfer Discipline
+            </button>
+          )}
+          {!isNew && (
+            <button
+              onClick={async () => {
+                if (!savedDbId) return
+                setArchiving(true)
+                setArchiveError(null)
+                try {
+                  await archiveRequirement(savedDbId, !isArchived)
+                  if (!isArchived) {
+                    // Archiving — navigate away (requirement disappears from list)
+                    onCancel()
+                  } else {
+                    // Restoring — stay on the page, update badge
+                    setIsArchived(false)
+                  }
+                } catch (e) {
+                  setArchiveError(e instanceof Error ? e.message : 'Archive failed')
+                } finally {
+                  setArchiving(false)
+                }
+              }}
+              disabled={archiving}
+              className={
+                isArchived
+                  ? 'px-3 py-1.5 text-sm border border-green-300 text-green-700 rounded hover:bg-green-50 disabled:opacity-50'
+                  : 'px-3 py-1.5 text-sm border border-red-200 text-red-600 rounded hover:bg-red-50 disabled:opacity-50'
+              }
+              title={isArchived ? 'Restore this requirement to active workflows' : 'Archive this requirement (soft delete)'}
+            >
+              {archiving ? '…' : isArchived ? 'Restore' : 'Archive'}
+            </button>
+          )}
           <button
             onClick={onCancel}
             className="px-3 py-1.5 text-sm border border-gray-300 text-gray-600 rounded hover:bg-gray-50"
@@ -624,10 +1186,69 @@ export default function RequirementDetail({
         </div>
       </div>
 
+      {/* Stale banner */}
+      {reqStale && (
+        <div className="px-4 py-2 bg-amber-50 border-b border-amber-200 text-sm text-amber-800 flex items-center gap-2 shrink-0">
+          <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+          </svg>
+          <span className="flex-1">
+            <strong>Stale requirement</strong> — the source document this was derived from has been revised.
+            Review this requirement against the new revision and update or re-approve as needed.
+          </span>
+          <button
+            onClick={async () => {
+              if (!savedDbId) return
+              try {
+                await updateRequirement(savedDbId, { stale: false })
+                setReqStale(false)
+              } catch { /* ignore — non-critical */ }
+            }}
+            className="ml-2 px-2.5 py-1 text-xs bg-amber-100 border border-amber-300 text-amber-800 rounded hover:bg-amber-200 shrink-0"
+          >
+            Mark as Reviewed
+          </button>
+        </div>
+      )}
+
+      {/* Superseded banner */}
+      {supersededByReqId && (
+        <div className="px-4 py-2 bg-orange-50 border-b border-orange-200 text-sm text-orange-800 flex items-center gap-2 shrink-0">
+          <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M12 2a10 10 0 110 20A10 10 0 0112 2z" />
+          </svg>
+          <span className="flex-1">
+            This requirement was transferred to{' '}
+            <button
+              onClick={() => supersededById && onSaved(supersededById)}
+              className="font-mono font-semibold underline hover:text-orange-900"
+            >
+              {supersededByReqId}
+            </button>
+            {' '}— it is now <strong>Superseded</strong>.
+          </span>
+        </div>
+      )}
+
       {/* Error banner */}
       {error && (
         <div className="px-4 py-2 bg-red-50 border-b border-red-200 text-sm text-red-700">
           {error}
+        </div>
+      )}
+      {archiveError && (
+        <div className="px-4 py-2 bg-red-50 border-b border-red-200 text-sm text-red-700">
+          {archiveError}
+        </div>
+      )}
+
+      {/* Archived banner */}
+      {isArchived && (
+        <div className="px-4 py-2 bg-gray-100 border-b border-gray-300 text-sm text-gray-600 flex items-center gap-2 shrink-0">
+          <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8v10a2 2 0 002 2h10a2 2 0 002-2V8" />
+          </svg>
+          <span>This requirement is <strong>archived</strong> — it is hidden from the requirements table and exports. Use the Restore button to make it active again.</span>
         </div>
       )}
 
@@ -654,8 +1275,23 @@ export default function RequirementDetail({
                 <SelectInput
                   value={form.classification}
                   options={CLASSIFICATIONS}
-                  onChange={(v) => set('classification', v)}
+                  onChange={(v) => {
+                    set('classification', v)
+                    set('classification_subtype', '')  // clear subtype when classification changes
+                  }}
                 />
+              </Field>
+              <Field label="Classification Subtype">
+                <select
+                  value={form.classification_subtype}
+                  onChange={(e) => set('classification_subtype', e.target.value)}
+                  className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white"
+                >
+                  <option value="">— None —</option>
+                  {(CLASSIFICATION_SUBTYPES[form.classification] ?? []).map((opt) => (
+                    <option key={opt} value={opt}>{opt}</option>
+                  ))}
+                </select>
               </Field>
               <Field label="Discipline" required>
                 <SelectInput
@@ -690,11 +1326,13 @@ export default function RequirementDetail({
                       className="flex-1 border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white"
                     >
                       <option value="">— None —</option>
-                      {sourceDocs.map((d: SourceDocumentListItem) => (
-                        <option key={d.id} value={d.id}>
-                          {d.document_id} — {d.title}
-                        </option>
-                      ))}
+                      {sourceDocs
+                        .filter((d) => !d.archived || d.id === form.source_document_id)
+                        .map((d: SourceDocumentListItem) => (
+                          <option key={d.id} value={d.id}>
+                            {d.document_id} — {d.title}{d.archived ? ' [Archived]' : ''}
+                          </option>
+                        ))}
                     </select>
                     {form.source_document_id && onOpenDocument && (
                       <button
@@ -705,6 +1343,11 @@ export default function RequirementDetail({
                       >
                         Open
                       </button>
+                    )}
+                    {form.source_document_id && sourceDocs.find((d) => d.id === form.source_document_id)?.archived && (
+                      <span className="px-2 py-1 text-xs bg-gray-100 text-gray-500 border border-gray-300 rounded shrink-0">
+                        Archived
+                      </span>
                     )}
                   </div>
                 </Field>
@@ -801,15 +1444,66 @@ export default function RequirementDetail({
             <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4 pb-1 border-b border-gray-100">
               Requirement Statement
             </h2>
-            <Field label="Statement" required>
-              <textarea
-                value={form.statement}
-                onChange={(e) => set('statement', e.target.value)}
-                rows={5}
-                placeholder="The system shall…"
-                className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400 resize-y"
-              />
-            </Field>
+            {contentSource === 'block_linked' ? (
+              <div>
+                {/* Badge row */}
+                <div className="flex items-center gap-2 mb-3">
+                  <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-purple-100 text-purple-800">
+                    Linked to source document
+                  </span>
+                  {form.source_document_id && onOpenDocument && (
+                    <button
+                      type="button"
+                      onClick={() => onOpenDocument(form.source_document_id, linkedBlocks.map((b) => b.id))}
+                      className="text-xs text-blue-600 hover:underline"
+                    >
+                      View source document →
+                    </button>
+                  )}
+                </div>
+                {/* Block content rendered from linked blocks — editable inline */}
+                <div className="border border-purple-200 rounded p-3 bg-purple-50/40">
+                  <BlockRenderer
+                    blocks={linkedBlocks}
+                    onBlockSaved={(blockId, content, tableData) => {
+                      setLinkedBlocks((prev) =>
+                        prev.map((b) =>
+                          b.id === blockId ? { ...b, content, table_data: tableData } : b
+                        )
+                      )
+                    }}
+                    onBlockRemoved={async (blockId) => {
+                      if (!savedDbId) return
+                      const result = await removeRequirementBlock(savedDbId, blockId)
+                      setLinkedBlocks(result.linked_blocks)
+                      setContentSource(result.content_source)
+                    }}
+                  />
+                </div>
+                {/* Add block picker */}
+                {savedDbId && form.source_document_id && (
+                  <AddBlockPicker
+                    requirementId={savedDbId}
+                    sourceDocumentId={form.source_document_id}
+                    linkedBlockIds={linkedBlocks.map((b) => b.id)}
+                    onBlockAdded={(result) => {
+                      setLinkedBlocks(result.linked_blocks)
+                      setContentSource(result.content_source)
+                    }}
+                  />
+                )}
+              </div>
+            ) : (
+              <Field label="Statement" required>
+                <textarea
+                  value={form.statement}
+                  onChange={(e) => set('statement', e.target.value)}
+                  rows={5}
+                  placeholder="The system shall…"
+                  className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400 resize-y"
+                />
+              </Field>
+            )}
             <div className="mt-4">
               <Field label="Rationale">
                 <textarea
@@ -817,6 +1511,18 @@ export default function RequirementDetail({
                   onChange={(e) => set('rationale', e.target.value)}
                   rows={3}
                   placeholder="Why does this requirement exist?"
+                  className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400 resize-y"
+                />
+              </Field>
+            </div>
+            <div className="mt-4">
+              <Field label="Comments">
+                <p className="text-xs text-gray-400 mb-1">Notes, discussion, or context — not included in formal exports</p>
+                <textarea
+                  value={form.comments}
+                  onChange={(e) => set('comments', e.target.value)}
+                  rows={3}
+                  placeholder="Working notes, open questions, reviewer feedback…"
                   className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400 resize-y"
                 />
               </Field>
@@ -938,6 +1644,218 @@ export default function RequirementDetail({
             </div>
           </section>
 
+          {/* Gap Analysis — only for saved requirements */}
+          {savedDbId && (
+            <section>
+              <div className="flex items-center justify-between mb-4 pb-1 border-b border-gray-100">
+                <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider">
+                  Flow-Down Gap Analysis
+                </h2>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    if (showGaps) { setShowGaps(false); return }
+                    setGapLoading(true)
+                    setGapError(null)
+                    try {
+                      const result = await fetchGapAnalysis(savedDbId)
+                      setGapAnalysis(result)
+                      setShowGaps(true)
+                    } catch (e) {
+                      setGapError(e instanceof Error ? e.message : 'Gap analysis failed')
+                    } finally {
+                      setGapLoading(false)
+                    }
+                  }}
+                  disabled={gapLoading}
+                  className="px-3 py-1 text-xs border border-indigo-300 text-indigo-600 rounded hover:bg-indigo-50 disabled:opacity-50"
+                >
+                  {gapLoading ? 'Analyzing…' : showGaps ? 'Hide' : 'Analyze Flow-Down Gaps'}
+                </button>
+              </div>
+
+              {gapError && <p className="text-sm text-red-600 mb-3">{gapError}</p>}
+
+              {showGaps && gapAnalysis && (
+                <div className="space-y-4">
+                  <p className="text-xs text-gray-400">
+                    Showing hierarchy nodes tagged with <strong>{gapAnalysis.requirement.discipline}</strong> discipline (or universal).
+                    {gapAnalysis.requirement.classification_subtype && (
+                      <> Requirement type: <strong>{gapAnalysis.requirement.classification_subtype}</strong>.</>
+                    )}
+                    {' '}Covered = at least one direct child requirement assigned to that node.
+                  </p>
+                  <div className="grid grid-cols-2 gap-4">
+                    {/* Covered */}
+                    <div>
+                      <p className="text-xs font-semibold text-green-700 mb-2 flex items-center gap-1">
+                        <span className="inline-block w-2 h-2 rounded-full bg-green-500" />
+                        Covered ({gapAnalysis.covered.length})
+                      </p>
+                      {gapAnalysis.covered.length === 0 ? (
+                        <p className="text-xs text-gray-400 italic">None</p>
+                      ) : (
+                        <div className="space-y-1">
+                          {gapAnalysis.covered.map((n) => (
+                            <GapNodeRow key={n.id} node={n} covered />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+
+                    {/* Gaps */}
+                    <div>
+                      <p className="text-xs font-semibold text-amber-700 mb-2 flex items-center gap-1">
+                        <span className="inline-block w-2 h-2 rounded-full bg-amber-400" />
+                        Gaps ({gapAnalysis.gaps.length})
+                      </p>
+                      {gapAnalysis.gaps.length === 0 ? (
+                        <p className="text-xs text-gray-400 italic">No gaps — full coverage!</p>
+                      ) : (
+                        <div className="space-y-1">
+                          {gapAnalysis.gaps.map((n) => (
+                            <GapNodeRow
+                              key={n.id}
+                              node={n}
+                              covered={false}
+                              onCreateChild={
+                                onCreateChildForGap
+                                  ? () => onCreateChildForGap(savedDbId!, n.id)
+                                  : undefined
+                              }
+                            />
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              )}
+            </section>
+          )}
+
+          {/* Conflict Records — only available on saved requirements */}
+          {savedDbId && (
+            <section>
+              <div className="flex items-center justify-between mb-4 pb-1 border-b border-gray-100">
+                <h2 className="text-sm font-semibold text-gray-400 uppercase tracking-wider">
+                  Conflict Records
+                  {conflictRecords.filter((c) => c.status === 'Open').length > 0 && (
+                    <span className="ml-2 px-1.5 py-0.5 bg-red-100 text-red-700 text-xs rounded-full font-medium">
+                      {conflictRecords.filter((c) => c.status === 'Open').length} open
+                    </span>
+                  )}
+                </h2>
+                {!showFlagConflict && (
+                  <button
+                    type="button"
+                    onClick={() => { setShowFlagConflict(true); setConflictError(null) }}
+                    className="px-3 py-1 text-xs border border-red-300 text-red-600 rounded hover:bg-red-50"
+                  >
+                    + Flag Conflict
+                  </button>
+                )}
+              </div>
+
+              {conflictError && (
+                <p className="text-sm text-red-600 mb-3">{conflictError}</p>
+              )}
+
+              {/* Flag conflict form */}
+              {showFlagConflict && (
+                <div className="mb-4 p-4 border border-red-200 rounded bg-red-50 space-y-3">
+                  <p className="text-xs font-semibold text-red-700">
+                    Describe the conflict and select the other requirement(s) involved:
+                  </p>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Description *</label>
+                    <textarea
+                      value={conflictForm.description}
+                      onChange={(e) => setConflictForm((f) => ({ ...f, description: e.target.value }))}
+                      rows={3}
+                      placeholder="e.g. MECH-003 specifies 120 psig design pressure but PROC-007 specifies 150 psig for the same equipment."
+                      className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-red-400 resize-y"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs text-gray-500 mb-1">Other conflicting requirement(s) *</label>
+                    <RequirementSearch
+                      options={allRequirements.filter((r) => r.id !== savedDbId)}
+                      selectedIds={conflictForm.requirement_ids}
+                      onChange={(ids) => setConflictForm((f) => ({ ...f, requirement_ids: ids }))}
+                      placeholder="Search by ID or title…"
+                    />
+                  </div>
+                  <div className="flex gap-2 justify-end pt-1">
+                    <button
+                      type="button"
+                      onClick={() => { setShowFlagConflict(false); setConflictForm({ description: '', requirement_ids: [] }); setConflictError(null) }}
+                      className="px-3 py-1.5 text-xs border border-gray-300 text-gray-600 rounded hover:bg-white"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      disabled={conflictSaving || !conflictForm.description.trim() || conflictForm.requirement_ids.length === 0}
+                      onClick={async () => {
+                        setConflictSaving(true)
+                        setConflictError(null)
+                        try {
+                          const cr = await createConflictRecord({
+                            description: conflictForm.description.trim(),
+                            requirement_ids: [savedDbId!, ...conflictForm.requirement_ids],
+                            created_by: form.created_by || userName,
+                          })
+                          setConflictRecords((prev) => [cr, ...prev])
+                          setShowFlagConflict(false)
+                          setConflictForm({ description: '', requirement_ids: [] })
+                        } catch (e) {
+                          setConflictError(e instanceof Error ? e.message : 'Failed to create conflict record')
+                        } finally {
+                          setConflictSaving(false)
+                        }
+                      }}
+                      className="px-3 py-1.5 text-xs bg-red-600 text-white rounded hover:bg-red-700 disabled:opacity-50"
+                    >
+                      {conflictSaving ? 'Saving…' : 'Save Conflict'}
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Conflict list */}
+              {conflictRecords.length === 0 && !showFlagConflict && (
+                <p className="text-sm text-gray-400 italic">No conflicts flagged.</p>
+              )}
+              <div className="space-y-3">
+                {conflictRecords.map((cr) => (
+                  <ConflictRecordCard
+                    key={cr.id}
+                    record={cr}
+                    currentRequirementId={savedDbId!}
+                    onNavigate={onSaved}
+                    onUpdate={async (update) => {
+                      try {
+                        const updated = await updateConflictRecord(cr.id, update)
+                        setConflictRecords((prev) => prev.map((r) => r.id === cr.id ? updated : r))
+                      } catch (e) {
+                        setConflictError(e instanceof Error ? e.message : 'Update failed')
+                      }
+                    }}
+                    onDelete={async () => {
+                      try {
+                        await deleteConflictRecord(cr.id)
+                        setConflictRecords((prev) => prev.filter((r) => r.id !== cr.id))
+                      } catch (e) {
+                        setConflictError(e instanceof Error ? e.message : 'Delete failed')
+                      }
+                    }}
+                  />
+                ))}
+              </div>
+            </section>
+          )}
+
           {/* Attachments — only available on saved requirements */}
           {savedDbId && (
             <section>
@@ -1008,6 +1926,76 @@ export default function RequirementDetail({
 
         </div>
       </div>
+
+      {/* ---- Transfer Discipline modal ---- */}
+      {showTransfer && savedDbId && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40">
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md mx-4 p-6 space-y-4">
+            <h2 className="text-base font-semibold text-gray-800">Transfer Discipline</h2>
+            <p className="text-sm text-gray-600">
+              Select the target discipline. A new requirement will be created under the new discipline prefix,
+              and <strong>{existingReqId}</strong> will be marked as <strong>Superseded</strong>.
+              All traceability links, conflict records, and attachments will be carried over.
+            </p>
+
+            <div>
+              <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+                New Discipline
+              </label>
+              <select
+                value={transferTarget}
+                onChange={(e) => setTransferTarget(e.target.value)}
+                className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400 bg-white"
+              >
+                <option value="">— Select discipline —</option>
+                {DISCIPLINES.filter((d) => d !== form.discipline).map((d) => (
+                  <option key={d} value={d}>{d}</option>
+                ))}
+              </select>
+            </div>
+
+            {transferTarget && (
+              <div className="bg-orange-50 border border-orange-200 rounded px-3 py-2 text-sm text-orange-800">
+                <strong>{existingReqId}</strong> → new ID under <strong>{transferTarget}</strong>
+                {' '}(auto-assigned on save)
+              </div>
+            )}
+
+            {transferError && (
+              <p className="text-sm text-red-600">{transferError}</p>
+            )}
+
+            <div className="flex justify-end gap-2 pt-2">
+              <button
+                onClick={() => setShowTransfer(false)}
+                className="px-3 py-1.5 text-sm border border-gray-300 text-gray-600 rounded hover:bg-gray-50"
+              >
+                Cancel
+              </button>
+              <button
+                disabled={!transferTarget || transferring}
+                onClick={async () => {
+                  if (!transferTarget || !savedDbId) return
+                  setTransferring(true)
+                  setTransferError(null)
+                  try {
+                    const newReq = await transferDiscipline(savedDbId, transferTarget)
+                    setShowTransfer(false)
+                    onSaved(newReq.id)
+                  } catch (e) {
+                    setTransferError(e instanceof Error ? e.message : 'Transfer failed')
+                  } finally {
+                    setTransferring(false)
+                  }
+                }}
+                className="px-4 py-1.5 text-sm bg-orange-600 text-white rounded hover:bg-orange-700 disabled:opacity-50"
+              >
+                {transferring ? 'Transferring…' : 'Confirm Transfer'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -1016,4 +2004,196 @@ function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`
+}
+
+// ---------------------------------------------------------------------------
+// Gap analysis node row
+// ---------------------------------------------------------------------------
+
+const DISC_BADGE_COLORS: Record<string, string> = {
+  'Mechanical':        'bg-blue-100 text-blue-700',
+  'Electrical':        'bg-amber-100 text-amber-700',
+  'I&C':               'bg-purple-100 text-purple-700',
+  'Civil/Structural':  'bg-orange-100 text-orange-700',
+  'Process':           'bg-green-100 text-green-700',
+  'Fire Protection':   'bg-red-100 text-red-700',
+  'General':           'bg-gray-100 text-gray-500',
+}
+
+function GapNodeRow({
+  node,
+  covered,
+  onCreateChild,
+}: {
+  node: GapNodeStub
+  covered: boolean
+  onCreateChild?: () => void
+}) {
+  return (
+    <div className={`flex items-center gap-2 px-2.5 py-1.5 rounded border text-xs ${
+      covered
+        ? 'border-green-200 bg-green-50'
+        : 'border-amber-200 bg-amber-50'
+    }`}>
+      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${covered ? 'bg-green-500' : 'bg-amber-400'}`} />
+      <span className="flex-1 text-gray-800 leading-tight">{node.name}</span>
+      {node.applicable_disciplines.length > 0 && (
+        <span className="flex gap-0.5 shrink-0">
+          {node.applicable_disciplines.map((d) => (
+            <span
+              key={d}
+              className={`text-[9px] font-semibold px-1 py-0.5 rounded ${DISC_BADGE_COLORS[d] ?? 'bg-gray-100 text-gray-500'}`}
+            >
+              {d.slice(0, 4).toUpperCase()}
+            </span>
+          ))}
+        </span>
+      )}
+      {!covered && onCreateChild && (
+        <button
+          type="button"
+          onClick={onCreateChild}
+          className="ml-1 px-2 py-0.5 text-[10px] bg-indigo-600 text-white rounded hover:bg-indigo-700 shrink-0"
+        >
+          + Child
+        </button>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Conflict record card
+// ---------------------------------------------------------------------------
+
+const CONFLICT_STATUS_CLASSES: Record<string, string> = {
+  Open: 'bg-red-100 text-red-700',
+  'Under Discussion': 'bg-yellow-100 text-yellow-800',
+  Resolved: 'bg-green-100 text-green-800',
+  Deferred: 'bg-gray-100 text-gray-600',
+}
+
+const CONFLICT_STATUSES = ['Open', 'Under Discussion', 'Resolved', 'Deferred']
+
+function ConflictRecordCard({
+  record,
+  currentRequirementId,
+  onNavigate,
+  onUpdate,
+  onDelete,
+}: {
+  record: ConflictRecord
+  currentRequirementId: string
+  onNavigate: (id: string) => void
+  onUpdate: (update: { status?: string; resolution_notes?: string }) => Promise<void>
+  onDelete: () => Promise<void>
+}) {
+  const [editingNotes, setEditingNotes] = useState(false)
+  const [notes, setNotes] = useState(record.resolution_notes ?? '')
+  const [saving, setSaving] = useState(false)
+
+  const showNotes = record.status === 'Resolved' || record.status === 'Deferred'
+  const otherReqs = record.requirements.filter((r) => r.id !== currentRequirementId)
+
+  return (
+    <div className="border border-gray-200 rounded p-3 space-y-2 bg-white">
+      <div className="flex items-start justify-between gap-2">
+        <p className="text-sm text-gray-800 flex-1">{record.description}</p>
+        <button
+          type="button"
+          onClick={async () => {
+            if (confirm('Remove this conflict record?')) await onDelete()
+          }}
+          className="text-xs text-gray-400 hover:text-red-500 shrink-0 mt-0.5"
+          title="Remove"
+        >
+          ×
+        </button>
+      </div>
+
+      {/* Linked requirements */}
+      {otherReqs.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {otherReqs.map((r) => (
+            <button
+              key={r.id}
+              type="button"
+              onClick={() => onNavigate(r.id)}
+              className="px-2 py-0.5 bg-indigo-50 text-indigo-700 text-xs rounded border border-indigo-200 font-mono hover:bg-indigo-100"
+              title={r.title}
+            >
+              {r.requirement_id}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {/* Status selector */}
+      <div className="flex items-center gap-2">
+        <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${CONFLICT_STATUS_CLASSES[record.status] ?? 'bg-gray-100 text-gray-600'}`}>
+          {record.status}
+        </span>
+        <select
+          value={record.status}
+          onChange={async (e) => {
+            setSaving(true)
+            await onUpdate({ status: e.target.value })
+            setSaving(false)
+          }}
+          disabled={saving}
+          className="text-xs border border-gray-300 rounded px-2 py-0.5 bg-white focus:outline-none focus:ring-1 focus:ring-blue-400"
+        >
+          {CONFLICT_STATUSES.map((s) => (
+            <option key={s} value={s}>{s}</option>
+          ))}
+        </select>
+        <span className="text-xs text-gray-400 ml-auto">by {record.created_by}</span>
+      </div>
+
+      {/* Resolution notes — shown when Resolved or Deferred */}
+      {showNotes && (
+        <div>
+          {editingNotes ? (
+            <div className="space-y-1">
+              <textarea
+                value={notes}
+                onChange={(e) => setNotes(e.target.value)}
+                rows={2}
+                placeholder="Describe how this conflict was resolved…"
+                className="w-full border border-gray-300 rounded px-2 py-1.5 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400 resize-y"
+              />
+              <div className="flex gap-1 justify-end">
+                <button
+                  type="button"
+                  onClick={() => { setEditingNotes(false); setNotes(record.resolution_notes ?? '') }}
+                  className="px-2 py-1 text-xs border border-gray-300 text-gray-600 rounded hover:bg-gray-50"
+                >Cancel</button>
+                <button
+                  type="button"
+                  disabled={saving}
+                  onClick={async () => {
+                    setSaving(true)
+                    await onUpdate({ resolution_notes: notes })
+                    setEditingNotes(false)
+                    setSaving(false)
+                  }}
+                  className="px-2 py-1 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+                >Save</button>
+              </div>
+            </div>
+          ) : (
+            <div
+              className="text-xs text-gray-600 cursor-pointer hover:bg-gray-50 rounded px-1 py-0.5 -mx-1"
+              onClick={() => setEditingNotes(true)}
+              title="Click to edit resolution notes"
+            >
+              {record.resolution_notes
+                ? record.resolution_notes
+                : <span className="text-gray-400 italic">Add resolution notes…</span>}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
 }

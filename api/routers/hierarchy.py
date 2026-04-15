@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
 from database import get_db
-from models import HierarchyNode
+from models import HierarchyNode, Requirement
 from schemas import HierarchyNodeCreate, HierarchyNodeUpdate
 
 router = APIRouter()
@@ -20,6 +20,7 @@ def _node_to_dict(node: HierarchyNode) -> dict[str, Any]:
         "parent_id": str(node.parent_id) if node.parent_id else None,
         "name": node.name,
         "description": node.description,
+        "applicable_disciplines": node.applicable_disciplines or [],
         "archived": node.archived,
         "sort_order": node.sort_order,
         "created_at": node.created_at.isoformat(),
@@ -110,3 +111,121 @@ def archive_node(node_id: UUID, db: Session = Depends(get_db)):
     db.commit()
     db.refresh(node)
     return _node_to_dict(node)
+
+
+@router.get("/hierarchy/{node_id}/ancestors")
+def get_ancestors(node_id: UUID, db: Session = Depends(get_db)):
+    """Return the ordered ancestor chain from root down to (and including) node_id."""
+    node = db.get(HierarchyNode, node_id)
+    if not node or node.archived:
+        raise HTTPException(status_code=404, detail="Node not found")
+
+    chain: list[dict[str, Any]] = []
+    current: HierarchyNode | None = node
+    while current is not None:
+        chain.append({"id": str(current.id), "name": current.name})
+        current = db.get(HierarchyNode, current.parent_id) if current.parent_id else None
+
+    chain.reverse()  # root → node
+    return chain
+
+
+@router.get("/hierarchy/{node_id}/block-view")
+def get_block_view(node_id: UUID, db: Session = Depends(get_db)):
+    """
+    Return a single-level block-diagram payload for the given node:
+      - node info
+      - Performance Requirements linked directly to this node
+      - direct non-archived children, each with has_children, children_preview, and their
+        own Performance Requirements
+    """
+    node = db.get(HierarchyNode, node_id)
+    if not node or node.archived:
+        raise HTTPException(status_code=404, detail="Node not found")
+
+    # Direct non-archived children
+    children: list[HierarchyNode] = (
+        db.query(HierarchyNode)
+        .filter(
+            HierarchyNode.parent_id == node_id,
+            HierarchyNode.archived == False,  # noqa: E712
+        )
+        .order_by(HierarchyNode.sort_order)
+        .all()
+    )
+
+    child_ids = [c.id for c in children]
+
+    # Grandchildren — used for has_children flag and children_preview tags
+    grandchildren: list[HierarchyNode] = []
+    if child_ids:
+        grandchildren = (
+            db.query(HierarchyNode)
+            .filter(
+                HierarchyNode.parent_id.in_(child_ids),
+                HierarchyNode.archived == False,  # noqa: E712
+            )
+            .order_by(HierarchyNode.sort_order)
+            .all()
+        )
+
+    gc_by_parent: dict[str, list[str]] = {}
+    gc_has_children: set[str] = set()
+    for gc in grandchildren:
+        pid = str(gc.parent_id)
+        gc_by_parent.setdefault(pid, []).append(gc.name)
+        gc_has_children.add(pid)
+
+    # Fetch Performance Requirements for this node and all its direct children
+    all_node_ids = [node_id] + child_ids
+    perf_reqs: list[Requirement] = (
+        db.query(Requirement)
+        .filter(
+            Requirement.classification_subtype == "Performance Requirement",
+            Requirement.hierarchy_nodes.any(HierarchyNode.id.in_(all_node_ids)),
+        )
+        .order_by(Requirement.requirement_id)
+        .all()
+    )
+
+    # Group requirements by which node(s) in our set they are assigned to.
+    # A requirement assigned to multiple nodes appears in each bucket.
+    all_node_id_strs = {str(nid) for nid in all_node_ids}
+    node_reqs: dict[str, list[dict[str, Any]]] = {str(nid): [] for nid in all_node_ids}
+    seen_per_node: dict[str, set[str]] = {str(nid): set() for nid in all_node_ids}
+
+    def _req_dict(r: Requirement) -> dict[str, Any]:
+        return {
+            "id": str(r.id),
+            "requirement_id": r.requirement_id,
+            "title": r.title,
+            "status": r.status,
+        }
+
+    for req in perf_reqs:
+        req_id_str = str(req.id)
+        for hn in req.hierarchy_nodes:
+            hn_id_str = str(hn.id)
+            if hn_id_str in all_node_id_strs and req_id_str not in seen_per_node[hn_id_str]:
+                node_reqs[hn_id_str].append(_req_dict(req))
+                seen_per_node[hn_id_str].add(req_id_str)
+
+    return {
+        "node": {
+            "id": str(node.id),
+            "name": node.name,
+            "description": node.description,
+        },
+        "performance_requirements": node_reqs[str(node_id)],
+        "children": [
+            {
+                "id": str(c.id),
+                "name": c.name,
+                "description": c.description,
+                "has_children": str(c.id) in gc_has_children,
+                "children_preview": gc_by_parent.get(str(c.id), []),
+                "performance_requirements": node_reqs[str(c.id)],
+            }
+            for c in children
+        ],
+    }

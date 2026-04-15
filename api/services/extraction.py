@@ -43,34 +43,70 @@ Your output must be valid JSON — no prose before or after the JSON array.
 """
 
 DECOMPOSE_USER = """\
-Decompose this engineering specification PDF into a flat list of structured text blocks.
+Decompose this engineering specification document into a flat list of structured text blocks.
 
 Rules:
 - Preserve the document's clause/section numbering hierarchy faithfully.
 - For each block include:
     clause_number   : string like "5.3.1" or "Table 4", or null if none
     heading         : the heading/title text if this block IS a heading, else null
-    content         : the full verbatim text of this block (including the heading line)
+    content         : the full verbatim text of this block.
+                      For table_block: include the marker line verbatim,
+                      e.g. "[TABLE BLOCK — Page 3, ID: TABLE_P3_I0]"
     block_type      : one of:
                         "heading"            – section title, no substantive content
                         "requirement_clause" – contains SHALL / SHOULD / MAY obligations
-                        "table_row"          – a meaningful table row
+                        "table_block"        – a complete table treated as one unit
                         "informational"      – explanatory or descriptive text
                         "boilerplate"        – TOC, revision history, signatures,
                                                distribution lists, legal notices
+    table_data      : ONLY for table_block — either:
+                        (a) If the marker contains "TABLE_DATA: {...}", copy that
+                            JSON object verbatim as the table_data value.
+                        (b) Otherwise parse the Markdown table and produce:
+                            {
+                              "caption": "Table title or null",
+                              "headers": [["Col1", "Col2", ...]],
+                              "rows": [["Cell", "Cell"], ...],
+                              "context_note": "brief note on what this table specifies"
+                            }
+                            Note: headers is an array of arrays (even single-row).
+                      For all other block types, set table_data to null.
     parent_clause_number : clause_number of the immediate parent block, or null
     depth           : nesting depth (0 = top-level section, 1 = sub-section, etc.)
 - Order blocks in document reading order.
-- Decompose multi-row tables so each meaningful row is its own block.
-- Ignore page headers/footers that repeat on every page.
+- Tables are pre-identified with [TABLE BLOCK] / [END TABLE BLOCK] markers.
+  Output each marked table as a single table_block — do NOT break it into rows.
+- If a table contains requirement language (SHALL / SHOULD / MAY), still output
+  it as a single table_block and populate table_data.
+- Ignore page headers / footers that repeat on every page.
 
 Return ONLY a JSON array of objects matching the schema above.
-Example of one element:
+Examples:
+
+Prose requirement:
 {
   "clause_number": "5.3.1",
   "heading": null,
   "content": "The pressure vessel shall be designed for a minimum design pressure of 150 psig.",
   "block_type": "requirement_clause",
+  "table_data": null,
+  "parent_clause_number": "5.3",
+  "depth": 2
+}
+
+Table block (pre-parsed TABLE_DATA path):
+{
+  "clause_number": "Table 3",
+  "heading": "Design Parameters",
+  "content": "[TABLE BLOCK — Page 2, ID: TABLE_P2_I0]",
+  "block_type": "table_block",
+  "table_data": {
+    "caption": "Table 3 — Design Parameters",
+    "headers": [["Parameter", "Value", "Unit"]],
+    "rows": [["Design Pressure", "150", "psig"]],
+    "context_note": "Specifies minimum design parameters for the pressure vessel"
+  },
   "parent_clause_number": "5.3",
   "depth": 2
 }
@@ -117,15 +153,41 @@ Rules:
 - Decompose compound clauses (one clause with multiple "shall"s) into separate
   atomic statements — one per output object.
 - Ignore boilerplate blocks entirely.
+- For table_block type blocks: examine the table_data (headers and rows) for
+  specification data or requirement language. If the table specifies design parameters,
+  performance criteria, material requirements, or other obligatory values, create ONE
+  candidate for the entire table. The statement should be a concise 1-2 sentence
+  description of what the table specifies (e.g. "Table 3 specifies the minimum design
+  parameters for the pressure vessel including design pressure, temperature, and
+  corrosion allowance."). Do not decompose table rows into separate candidates.
 - For each extracted requirement include:
-    title                   : concise human-readable summary (≤120 characters)
-    statement               : the full, verbatim or lightly cleaned requirement text,
-                              beginning with the subject ("The [subject] shall …")
-    source_clause           : clause_number of the source block, or null
-    suggested_classification: "Requirement" or "Guideline"
-    suggested_discipline    : one of Mechanical / Electrical / I&C /
-                              Civil/Structural / Process / Fire Protection / General
-    source_block_index      : 0-based index of the block in the list below
+    title                             : concise human-readable summary (≤120 characters)
+    statement                         : for prose blocks — the full, verbatim or lightly
+                                        cleaned requirement text beginning with the subject
+                                        ("The [subject] shall …"); for table_block —
+                                        a 1-2 sentence description of what the table specifies
+    source_clause                     : clause_number of the source block, or null
+    suggested_classification          : "Requirement" or "Guideline"
+    suggested_classification_subtype  : one of the following, based on classification:
+      If Requirement → "Performance Requirement" (plant-peculiar what's: reliability,
+                          capacity, operating envelopes, throughput)
+                      | "Design Requirement" (standards, margins, redundancy, material
+                          specs, safety factors, interface constraints from codes)
+                      | "Derived Requirement" (requirements that evolve during design
+                          to meet performance requirements: e.g. load relief controls,
+                          interface control specs)
+      If Guideline  → "Lesson Learned" (experience-based guidance, historical knowledge)
+                    | "Procedure" (steps, methods, fabrication/inspection sequences)
+                    | "Code" (reference to industry codes, standards, handbooks,
+                        engineering equations, computer programs)
+    suggested_discipline              : one of Mechanical / Electrical / I&C /
+                                        Civil/Structural / Process / Fire Protection / General /
+                                        Build / Operations
+                                        (Build covers fabrication, construction, installation,
+                                        assembly, quality hold points; Operations covers startup,
+                                        shutdown, maintenance, inspection intervals, operating
+                                        procedures)
+    source_block_index                : 0-based index of the block in the list below
 
 Return ONLY a JSON array.  If no requirements are found, return [].
 
@@ -183,56 +245,106 @@ def _parse_json_response(text: str) -> Any:
 
 def decompose_document(pdf_bytes: bytes) -> list[dict]:
     """
-    Send the PDF to Gemini via the File API and return a list of block dicts.
+    Decompose a PDF into structured block dicts.
 
-    Each dict has the keys defined in DECOMPOSE_USER:
-      clause_number, heading, content, block_type,
-      parent_clause_number, depth
+    Two-path approach:
+    1. pdfplumber pre-processing (preferred): extracts text + serializes tables as
+       Markdown with [TABLE BLOCK] markers, then sends as text to Gemini.
+       Gemini outputs table_block entries with full table_data instead of row fragments.
+    2. File API fallback: for scanned / image-only PDFs where pdfplumber extracts
+       no text, upload the raw PDF to Gemini's File API (vision-capable).
+
+    Each returned dict has:
+      clause_number, heading, content, block_type, table_data,
+      parent_clause_number, depth, sort_order
     """
     if not pdf_bytes:
-        raise ValueError("PDF bytes are empty — ensure the file was uploaded to storage correctly before decomposing.")
+        raise ValueError(
+            "PDF bytes are empty — ensure the file was uploaded to storage "
+            "correctly before decomposing."
+        )
 
     client = _get_client()
 
-    # Write PDF to a temp file so the File API can upload it
-    with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
-        tmp.write(pdf_bytes)
-        tmp_path = tmp.name
+    # ------------------------------------------------------------------
+    # Path 1: pdfplumber + Gemini Vision pre-processing
+    # ------------------------------------------------------------------
+    from services.table_extraction import extract_content_with_tables
 
-    try:
-        uploaded = client.files.upload(
-            file=tmp_path,
-            config={"mime_type": "application/pdf"},
+    # Pass the Gemini client so table_extraction can call vision API for
+    # each table region.  Returns (text, table_map) where table_map maps
+    # marker IDs like "TABLE_P3_I0" → pre-extracted table_data dicts.
+    extracted_text, table_map = extract_content_with_tables(
+        pdf_bytes, gemini_client=client
+    )
+
+    if extracted_text:
+        vision_count = sum(
+            1 for v in table_map.values()
+            if v.get("table_parse_quality") == "vision"
         )
-    finally:
-        os.unlink(tmp_path)
-
-    try:
+        print(
+            f"[decompose] pdfplumber extracted {len(extracted_text)} chars — "
+            f"using text-based path ({vision_count}/{len(table_map)} tables via vision)"
+        )
+        prompt = f"=== DOCUMENT CONTENT ===\n{extracted_text}\n\n{DECOMPOSE_USER}"
         response = _generate_with_retry(
             client,
             model=MODEL,
             contents=[
                 types.Content(
                     role="user",
-                    parts=[
-                        types.Part.from_uri(
-                            file_uri=uploaded.uri,
-                            mime_type="application/pdf",
-                        ),
-                        types.Part(text=DECOMPOSE_USER),
-                    ],
+                    parts=[types.Part(text=prompt)],
                 )
             ],
             config=types.GenerateContentConfig(
                 system_instruction=DECOMPOSE_SYSTEM,
+                response_mime_type="application/json",
             ),
         )
-    finally:
-        # Clean up the uploaded file from Gemini's storage
+    else:
+        # ------------------------------------------------------------------
+        # Path 2: File API fallback for image-based / scanned PDFs
+        # ------------------------------------------------------------------
+        print("[decompose] pdfplumber returned no text — falling back to File API")
+        with tempfile.NamedTemporaryFile(suffix=".pdf", delete=False) as tmp:
+            tmp.write(pdf_bytes)
+            tmp_path = tmp.name
+
         try:
-            client.files.delete(name=uploaded.name)
-        except Exception:
-            pass
+            uploaded = client.files.upload(
+                file=tmp_path,
+                config={"mime_type": "application/pdf"},
+            )
+        finally:
+            os.unlink(tmp_path)
+
+        try:
+            response = _generate_with_retry(
+                client,
+                model=MODEL,
+                contents=[
+                    types.Content(
+                        role="user",
+                        parts=[
+                            types.Part.from_uri(
+                                file_uri=uploaded.uri,
+                                mime_type="application/pdf",
+                            ),
+                            types.Part(text=DECOMPOSE_USER),
+                        ],
+                    )
+                ],
+                config=types.GenerateContentConfig(
+                    system_instruction=DECOMPOSE_SYSTEM,
+                    response_mime_type="application/json",
+                ),
+            )
+        finally:
+            try:
+                client.files.delete(name=uploaded.name)
+            except Exception:
+                pass
 
     raw_text = response.text
     blocks = _parse_json_response(raw_text)
@@ -245,10 +357,37 @@ def decompose_document(pdf_bytes: bytes) -> list[dict]:
             "heading": b.get("heading"),
             "content": b.get("content", ""),
             "block_type": b.get("block_type", "informational"),
+            "table_data": b.get("table_data"),  # None for non-table blocks
             "parent_clause_number": b.get("parent_clause_number"),
             "depth": int(b.get("depth", 0)),
             "sort_order": i,
         })
+
+    # ------------------------------------------------------------------
+    # Inject pre-extracted vision table_data into table_block entries.
+    #
+    # The vision data is authoritative — it handles merged/multi-level
+    # headers that the LLM text-parsing cannot recover.  We match by:
+    #   1. Exact marker ID embedded in block.content  (primary)
+    #   2. Positional order among table_blocks        (fallback)
+    # ------------------------------------------------------------------
+    if table_map:
+        table_ids_in_order = list(table_map.keys())
+        positional_index = 0
+
+        for block in normalised:
+            if block["block_type"] != "table_block":
+                continue
+
+            content = block.get("content", "")
+            # Try exact match: look for "ID: TABLE_P3_I0" in content
+            id_match = re.search(r"ID:\s*(TABLE_P\d+_I\d+)", content)
+            if id_match and id_match.group(1) in table_map:
+                block["table_data"] = table_map[id_match.group(1)]
+            elif positional_index < len(table_ids_in_order):
+                block["table_data"] = table_map[table_ids_in_order[positional_index]]
+
+            positional_index += 1
     return normalised
 
 
@@ -350,16 +489,21 @@ def extract_requirements(blocks: list[dict]) -> list[dict]:
     """
     client = _get_client()
 
-    # Build a compact representation for the prompt
-    blocks_for_prompt = [
-        {
+    # Build a compact representation for the prompt.
+    # For table_block entries, include table_data so the LLM can see the
+    # structured headers/rows rather than only raw Markdown pipe text.
+    blocks_for_prompt = []
+    for i, b in enumerate(blocks):
+        entry: dict = {
             "index": i,
             "clause_number": b.get("clause_number"),
             "block_type": b.get("block_type"),
             "content": b.get("content", ""),
         }
-        for i, b in enumerate(blocks)
-    ]
+        if b.get("block_type") == "table_block" and b.get("table_data"):
+            entry["table_data"] = b["table_data"]
+        blocks_for_prompt.append(entry)
+
     blocks_json = json.dumps(blocks_for_prompt, indent=2)
     prompt = EXTRACT_USER_TEMPLATE.format(blocks_json=blocks_json)
 
@@ -374,6 +518,7 @@ def extract_requirements(blocks: list[dict]) -> list[dict]:
         ],
         config=types.GenerateContentConfig(
             system_instruction=EXTRACT_SYSTEM,
+            response_mime_type="application/json",
         ),
     )
 
@@ -388,6 +533,7 @@ def extract_requirements(blocks: list[dict]) -> list[dict]:
             "statement": c.get("statement", ""),
             "source_clause": c.get("source_clause"),
             "suggested_classification": c.get("suggested_classification", "Requirement"),
+            "suggested_classification_subtype": c.get("suggested_classification_subtype"),
             "suggested_discipline": c.get("suggested_discipline", "General"),
             "source_block_index": int(c.get("source_block_index", 0)),
         })

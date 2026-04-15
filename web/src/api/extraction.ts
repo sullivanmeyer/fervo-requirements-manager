@@ -1,4 +1,4 @@
-import type { DocumentBlock, ExtractionCandidate } from '../types'
+import type { DocumentBlock, ExtractionCandidate, LinkedBlock, TableData } from '../types'
 
 const BASE = '/api'
 
@@ -26,12 +26,12 @@ export async function fetchBlocks(documentId: string): Promise<DocumentBlock[]> 
 
 export async function updateBlock(
   blockId: string,
-  content: string,
+  updates: { content: string; table_data?: TableData | null },
 ): Promise<DocumentBlock> {
   const res = await fetch(`${BASE}/document-blocks/${blockId}`, {
     method: 'PUT',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ content }),
+    body: JSON.stringify(updates),
   })
   if (!res.ok) {
     const err = await res.json().catch(() => ({})) as { detail?: string }
@@ -61,6 +61,23 @@ export async function extractRequirements(
   return data.candidates as ExtractionCandidate[]
 }
 
+export async function mergeBlocks(
+  documentId: string,
+  blockIds: string[],
+  owner: string,
+): Promise<{ id: string; requirement_id: string }> {
+  const res = await fetch(`${BASE}/source-documents/${documentId}/merge-blocks`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ block_ids: blockIds, owner }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({})) as { detail?: string }
+    throw new Error(err.detail ?? `Merge failed (${res.status})`)
+  }
+  return res.json()
+}
+
 export async function fetchCandidates(documentId: string): Promise<ExtractionCandidate[]> {
   const res = await fetch(`${BASE}/source-documents/${documentId}/candidates`)
   if (!res.ok) throw new Error(`Failed to load candidates (${res.status})`)
@@ -82,6 +99,42 @@ export async function updateCandidate(
     throw new Error(err.detail ?? `Update failed (${res.status})`)
   }
   return res.json() as Promise<ExtractionCandidate>
+}
+
+// ---------------------------------------------------------------------------
+// Requirement ↔ block linkage
+// ---------------------------------------------------------------------------
+
+export async function addRequirementBlock(
+  requirementId: string,
+  blockId: string,
+): Promise<{ content_source: 'manual' | 'block_linked'; linked_blocks: LinkedBlock[] }> {
+  const res = await fetch(`${BASE}/requirement-blocks`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ requirement_id: requirementId, block_id: blockId }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({})) as { detail?: string }
+    throw new Error(err.detail ?? `Add block failed (${res.status})`)
+  }
+  return res.json()
+}
+
+export async function removeRequirementBlock(
+  requirementId: string,
+  blockId: string,
+): Promise<{ content_source: 'manual' | 'block_linked'; linked_blocks: LinkedBlock[] }> {
+  const res = await fetch(`${BASE}/requirement-blocks`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ requirement_id: requirementId, block_id: blockId }),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({})) as { detail?: string }
+    throw new Error(err.detail ?? `Remove block failed (${res.status})`)
+  }
+  return res.json()
 }
 
 export async function acceptCandidate(

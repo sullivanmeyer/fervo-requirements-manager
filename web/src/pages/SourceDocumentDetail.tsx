@@ -19,6 +19,7 @@
  */
 import { useEffect, useRef, useState } from 'react'
 import {
+  archiveSourceDocument,
   createSourceDocument,
   fetchSourceDocument,
   fetchSourceDocuments,
@@ -32,6 +33,7 @@ import {
   extractRequirements,
   fetchBlocks,
   fetchCandidates,
+  mergeBlocks,
   updateCandidate,
 } from '../api/extraction'
 import {
@@ -47,6 +49,7 @@ import type {
   ExtractionCandidate,
   SourceDocumentDetail as DocDetail,
   SourceDocumentListItem,
+  TableData,
 } from '../types'
 
 // ---------------------------------------------------------------------------
@@ -70,12 +73,14 @@ const DISCIPLINES = [
   'Process',
   'Fire Protection',
   'General',
+  'Build',
+  'Operations',
 ]
 
 const BLOCK_TYPE_STYLES: Record<string, string> = {
   heading: 'bg-blue-100 text-blue-700',
   requirement_clause: 'bg-green-100 text-green-700',
-  table_row: 'bg-purple-100 text-purple-700',
+  table_block: 'bg-purple-100 text-purple-700',
   informational: 'bg-gray-100 text-gray-600',
   boilerplate: 'bg-gray-50 text-gray-400',
 }
@@ -83,7 +88,7 @@ const BLOCK_TYPE_STYLES: Record<string, string> = {
 const BLOCK_TYPE_LABELS: Record<string, string> = {
   heading: 'Heading',
   requirement_clause: 'Requirement',
-  table_row: 'Table',
+  table_block: 'Table',
   informational: 'Info',
   boilerplate: 'Boilerplate',
 }
@@ -148,6 +153,93 @@ function BlockTypeBadge({ type }: { type: string }) {
   )
 }
 
+/**
+ * Normalise headers to always be string[][] so the renderer is uniform.
+ * Legacy flat string[] (old DB records) get wrapped in an outer array.
+ */
+function normalizeHeaders(headers: string[] | string[][]): string[][] {
+  if (!headers.length) return []
+  return typeof headers[0] === 'string'
+    ? [headers as string[]]
+    : (headers as string[][])
+}
+
+/**
+ * Compress consecutive identical non-empty cells in a single header row
+ * into colspan groups.  Empty strings are never merged (they represent
+ * deliberately blank sub-header cells).
+ */
+function colspanGroups(row: string[]): { value: string; colspan: number }[] {
+  const result: { value: string; colspan: number }[] = []
+  for (const cell of row) {
+    if (
+      result.length > 0 &&
+      cell !== '' &&
+      result[result.length - 1].value === cell
+    ) {
+      result[result.length - 1].colspan++
+    } else {
+      result.push({ value: cell, colspan: 1 })
+    }
+  }
+  return result
+}
+
+/** Render structured table_data as a compact HTML table. */
+function TablePreview({ data, compact = false }: { data: TableData; compact?: boolean }) {
+  const headerRows = normalizeHeaders(data.headers)
+  const isFallback = data.table_parse_quality === 'fallback'
+
+  return (
+    <div className={`overflow-x-auto ${compact ? 'max-h-32' : 'max-h-64'} overflow-y-auto`}>
+      {isFallback && (
+        <p className="text-xs bg-amber-50 text-amber-700 border border-amber-200 rounded px-1.5 py-0.5 mb-1">
+          Table parsed with reduced accuracy — review for errors
+        </p>
+      )}
+      {data.caption && (
+        <p className="text-xs text-gray-500 italic mb-1">{data.caption}</p>
+      )}
+      <table className={`text-xs border-collapse w-full ${isFallback ? 'border-l-2 border-l-amber-400' : ''}`}>
+        <thead>
+          {headerRows.map((row, rowIdx) => (
+            <tr key={rowIdx} className={rowIdx === 0 && headerRows.length > 1 ? 'bg-purple-100' : 'bg-purple-50'}>
+              {colspanGroups(row).map(({ value, colspan }, ci) => (
+                <th
+                  key={ci}
+                  colSpan={colspan}
+                  className={`border border-purple-200 px-2 py-1 text-left text-purple-800 whitespace-nowrap ${
+                    rowIdx === 0 && headerRows.length > 1 ? 'font-bold' : 'font-semibold'
+                  }`}
+                >
+                  {value || '—'}
+                </th>
+              ))}
+            </tr>
+          ))}
+        </thead>
+        <tbody>
+          {data.rows.map((row, ri) => (
+            <tr key={ri} className={ri % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
+              {row.map((cell, ci) => (
+                <td
+                  key={ci}
+                  className="border border-gray-200 px-2 py-1 text-gray-700"
+                >
+                  {cell || ''}
+                </td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {data.footnotes && (
+        <p className="text-xs text-gray-500 italic mt-1">{data.footnotes}</p>
+      )}
+    </div>
+  )
+}
+
 // Candidate status colours
 function candidateBorderClass(status: string): string {
   if (status === 'Accepted') return 'border-l-4 border-l-green-400'
@@ -167,6 +259,8 @@ interface Props {
   onCreateRequirement: (sourceDocumentId: string, initialStatement: string) => void
   onOpenRequirement: (requirementId: string) => void
   onViewInNetwork?: (documentId: string) => void
+  /** Block IDs to scroll to and persistently highlight on initial load (from requirement detail link). */
+  initialHighlightBlockIds?: string[]
 }
 
 // ---------------------------------------------------------------------------
@@ -181,8 +275,15 @@ export default function SourceDocumentDetail({
   onCreateRequirement,
   onOpenRequirement,
   onViewInNetwork,
+  initialHighlightBlockIds,
 }: Props) {
   const isNew = documentId === null
+
+  // Blocks that should be persistently highlighted (linked from a requirement detail view).
+  // Distinct from the temporary 2-second yellow flash used for candidate source-clause links.
+  const [pinnedBlockIds, setPinnedBlockIds] = useState<Set<string>>(
+    new Set(initialHighlightBlockIds ?? [])
+  )
 
   // Core document state
   const [doc, setDoc] = useState<DocDetail | null>(null)
@@ -222,6 +323,7 @@ export default function SourceDocumentDetail({
   const [savingRef, setSavingRef] = useState(false)
   const [detectingRefs, setDetectingRefs] = useState(false)
 
+
   // Inline edit state for "Edit & Accept"
   const [editingCandidateId, setEditingCandidateId] = useState<string | null>(null)
   const [editForm, setEditForm] = useState<{
@@ -254,6 +356,15 @@ export default function SourceDocumentDetail({
         setOutRefs(outgoing)
         setInRefs(incoming)
         setAllDocs(docs)
+
+        // If we arrived here from a requirement detail "View source document →" link,
+        // switch to the Document Blocks tab and scroll to the first pinned block.
+        if (initialHighlightBlockIds && initialHighlightBlockIds.length > 0) {
+          setActivePanel('blocks')
+          // scrollToBlock uses a short setTimeout internally; add a small extra
+          // delay to let the panel switch + React render complete first.
+          setTimeout(() => scrollToBlock(initialHighlightBlockIds[0]), 150)
+        }
       } catch (e) {
         setError(e instanceof Error ? e.message : 'Failed to load document')
       } finally {
@@ -480,14 +591,21 @@ export default function SourceDocumentDetail({
   // Merge selected blocks into a new requirement form
   // -------------------------------------------------------------------------
 
-  const handleMergeBlocks = () => {
+  const handleMergeBlocks = async () => {
     if (!documentId || selectedBlockIds.size < 2) return
     // Preserve document order by sorting by sort_order, not selection order
-    const selected = blocks
+    const blockIds = blocks
       .filter((b) => selectedBlockIds.has(b.id))
       .sort((a, b) => a.sort_order - b.sort_order)
-    const merged = selected.map((b) => b.content.trim()).join('\n\n')
-    onCreateRequirement(documentId, merged)
+      .map((b) => b.id)
+    setCandidateError(null)
+    try {
+      const result = await mergeBlocks(documentId, blockIds, userName)
+      // Navigate to the new requirement so the user can fill in metadata
+      onOpenRequirement(result.id)
+    } catch (e) {
+      setCandidateError(e instanceof Error ? e.message : 'Merge failed')
+    }
   }
 
   // -------------------------------------------------------------------------
@@ -592,6 +710,25 @@ export default function SourceDocumentDetail({
           {isNew ? 'Register Document' : (doc?.document_id ?? documentId)}
         </span>
         <div className="ml-auto flex gap-2">
+          {!isNew && doc && (
+            <button
+              onClick={async () => {
+                try {
+                  const updated = await archiveSourceDocument(doc.id, !doc.archived)
+                  setDoc(updated)
+                } catch (e) {
+                  setError(e instanceof Error ? e.message : 'Failed to update archive status')
+                }
+              }}
+              className={`px-3 py-1.5 text-sm border rounded ${
+                doc.archived
+                  ? 'border-gray-300 text-gray-600 hover:bg-gray-50'
+                  : 'border-red-200 text-red-600 hover:bg-red-50'
+              }`}
+            >
+              {doc.archived ? 'Restore Document' : 'Archive Document'}
+            </button>
+          )}
           <button
             onClick={onCancel}
             className="px-3 py-1.5 text-sm border border-gray-300 text-gray-600 rounded hover:bg-gray-50"
@@ -607,6 +744,18 @@ export default function SourceDocumentDetail({
           </button>
         </div>
       </div>
+
+      {doc?.archived && (
+        <div className="px-4 py-2 bg-gray-100 border-b border-gray-300 text-sm text-gray-600 flex items-center gap-2">
+          <svg className="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 8h14M5 8a2 2 0 110-4h14a2 2 0 110 4M5 8l1 12a2 2 0 002 2h8a2 2 0 002-2L19 8" />
+          </svg>
+          <span>
+            <strong>Archived document.</strong> This document is hidden from active workflows.
+            Existing requirement links are preserved. Use "Restore Document" to make it active again.
+          </span>
+        </div>
+      )}
 
       {doc?.is_stub && (
         <div className="px-4 py-2 bg-amber-50 border-b border-amber-200 text-sm text-amber-800 flex items-center gap-2">
@@ -678,6 +827,11 @@ export default function SourceDocumentDetail({
               placeholder="7th Edition, Rev 2, etc."
               className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400"
             />
+            {!isNew && doc && form.revision && form.revision !== (doc.revision ?? '') && (
+              <p className="mt-1 text-xs text-amber-600">
+                Saving a new revision value will flag all derived requirements as stale.
+              </p>
+            )}
           </Field>
 
           <Field label="Issuing Organization">
@@ -736,6 +890,7 @@ export default function SourceDocumentDetail({
               </button>
             </div>
           )}
+
 
           {/* Linked requirements list */}
           {!isNew && doc && doc.linked_requirements.length > 0 && (
@@ -932,6 +1087,7 @@ export default function SourceDocumentDetail({
                         {blocks.map((block) => {
                           const isSelected = selectedBlockIds.has(block.id)
                           const isBoilerplate = block.block_type === 'boilerplate'
+                          const isPinned = pinnedBlockIds.has(block.id)
                           return (
                             <div
                               key={block.id}
@@ -939,6 +1095,8 @@ export default function SourceDocumentDetail({
                               className={`flex items-start gap-2 px-3 py-2 hover:bg-white cursor-pointer transition-colors ${
                                 highlightedBlockId === block.id
                                   ? 'bg-yellow-100 ring-2 ring-inset ring-yellow-400'
+                                  : isPinned
+                                  ? 'bg-blue-50 ring-2 ring-inset ring-blue-300'
                                   : isSelected ? 'bg-blue-50' : ''
                               } ${isBoilerplate ? 'opacity-50' : ''}`}
                               style={{ paddingLeft: `${12 + block.depth * 16}px` }}
@@ -960,13 +1118,17 @@ export default function SourceDocumentDetail({
                                   )}
                                   <BlockTypeBadge type={block.block_type} />
                                 </div>
-                                <p className={`text-xs leading-relaxed line-clamp-2 ${
-                                  block.block_type === 'heading'
-                                    ? 'font-semibold text-gray-800'
-                                    : 'text-gray-700'
-                                }`}>
-                                  {block.heading ?? block.content}
-                                </p>
+                                {block.block_type === 'table_block' && block.table_data ? (
+                                  <TablePreview data={block.table_data} compact />
+                                ) : (
+                                  <p className={`text-xs leading-relaxed line-clamp-2 ${
+                                    block.block_type === 'heading'
+                                      ? 'font-semibold text-gray-800'
+                                      : 'text-gray-700'
+                                  }`}>
+                                    {block.heading ?? block.content}
+                                  </p>
+                                )}
                               </div>
                             </div>
                           )
@@ -1042,7 +1204,22 @@ export default function SourceDocumentDetail({
                                 <div className="flex items-start gap-2 mb-2">
                                   <div className="flex-1 min-w-0">
                                     <p className="text-xs font-semibold text-gray-800 mb-0.5">{c.title}</p>
-                                    <p className="text-xs text-gray-600 line-clamp-2">{c.statement}</p>
+                                    {/* If the candidate came from a table block, render a table preview */}
+                                    {(() => {
+                                      const srcBlock = c.source_block_id
+                                        ? blocks.find((b) => b.id === c.source_block_id)
+                                        : null
+                                      return srcBlock?.block_type === 'table_block' && srcBlock.table_data ? (
+                                        <div className="mt-1">
+                                          <span className="text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded font-medium mr-1">
+                                            Tabular
+                                          </span>
+                                          <TablePreview data={srcBlock.table_data} compact />
+                                        </div>
+                                      ) : (
+                                        <p className="text-xs text-gray-600 line-clamp-2">{c.statement}</p>
+                                      )
+                                    })()}
                                     <div className="flex items-center gap-1.5 mt-1 flex-wrap">
                                       {c.source_clause && (
                                         <button
@@ -1061,6 +1238,11 @@ export default function SourceDocumentDetail({
                                             : 'bg-yellow-100 text-yellow-700'
                                         }`}>
                                           {c.suggested_classification}
+                                        </span>
+                                      )}
+                                      {c.suggested_classification_subtype && (
+                                        <span className="text-xs bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded italic">
+                                          {c.suggested_classification_subtype}
                                         </span>
                                       )}
                                       {c.suggested_discipline && (

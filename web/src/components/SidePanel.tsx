@@ -10,6 +10,26 @@ interface Props {
   onSelect: (node: HierarchyNode | null) => void
 }
 
+const ALL_DISCIPLINES = [
+  'Mechanical',
+  'Electrical',
+  'I&C',
+  'Civil/Structural',
+  'Process',
+  'Fire Protection',
+  'General',
+]
+
+const DISC_COLORS: Record<string, string> = {
+  'Mechanical':        'bg-blue-100 text-blue-700 border-blue-200',
+  'Electrical':        'bg-amber-100 text-amber-700 border-amber-200',
+  'I&C':               'bg-purple-100 text-purple-700 border-purple-200',
+  'Civil/Structural':  'bg-orange-100 text-orange-700 border-orange-200',
+  'Process':           'bg-green-100 text-green-700 border-green-200',
+  'Fire Protection':   'bg-red-100 text-red-700 border-red-200',
+  'General':           'bg-gray-100 text-gray-500 border-gray-200',
+}
+
 function getDescendantIds(node: HierarchyNode): Set<string> {
   const ids = new Set<string>()
   const walk = (n: HierarchyNode) => {
@@ -26,6 +46,7 @@ export default function SidePanel({ node, flatNodes, onRefresh, onSelect }: Prop
   const [isEditing, setIsEditing] = useState(false)
   const [editName, setEditName] = useState('')
   const [editDescription, setEditDescription] = useState('')
+  const [editDisciplines, setEditDisciplines] = useState<string[]>([])
   const [moveToId, setMoveToId] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -41,6 +62,7 @@ export default function SidePanel({ node, flatNodes, onRefresh, onSelect }: Prop
     if (node) {
       setEditName(node.name)
       setEditDescription(node.description ?? '')
+      setEditDisciplines(node.applicable_disciplines ?? [])
       setMoveToId(node.parent_id ?? '')
     }
   }, [node?.id]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -74,6 +96,7 @@ export default function SidePanel({ node, flatNodes, onRefresh, onSelect }: Prop
       await updateNode(node.id, {
         name: editName.trim(),
         description: editDescription.trim() || null,
+        applicable_disciplines: editDisciplines.length > 0 ? editDisciplines : null,
       })
       setIsEditing(false)
       onRefresh()
@@ -88,6 +111,7 @@ export default function SidePanel({ node, flatNodes, onRefresh, onSelect }: Prop
     setIsEditing(false)
     setEditName(node.name)
     setEditDescription(node.description ?? '')
+    setEditDisciplines(node.applicable_disciplines ?? [])
     setError(null)
   }
 
@@ -121,12 +145,19 @@ export default function SidePanel({ node, flatNodes, onRefresh, onSelect }: Prop
     }
   }
 
+  const toggleDiscipline = (d: string) => {
+    setEditDisciplines((prev) =>
+      prev.includes(d) ? prev.filter((x) => x !== d) : [...prev, d],
+    )
+  }
+
   const descendantIds = getDescendantIds(node)
   const moveOptions = flatNodes.filter(
     ({ node: n }) => n.id !== node.id && !descendantIds.has(n.id),
   )
   const currentParentName =
     flatNodes.find(({ node: n }) => n.id === node.parent_id)?.node.name ?? 'Root'
+  const displayDisciplines = node.applicable_disciplines ?? []
 
   return (
     <div className="max-w-2xl">
@@ -214,6 +245,61 @@ export default function SidePanel({ node, flatNodes, onRefresh, onSelect }: Prop
               <span className="italic text-gray-400">No description set</span>
             )}
           </p>
+        )}
+      </div>
+
+      {/* Applicable Disciplines */}
+      <div className="mb-6">
+        <label className="block text-xs font-semibold text-gray-400 uppercase tracking-wider mb-1.5">
+          Applicable Disciplines
+          {!isEditing && (
+            <span className="normal-case font-normal text-gray-400 ml-1">
+              {displayDisciplines.length === 0 ? '(all)' : ''}
+            </span>
+          )}
+        </label>
+        {isEditing ? (
+          <div className="flex flex-wrap gap-1.5">
+            {ALL_DISCIPLINES.map((d) => {
+              const active = editDisciplines.includes(d)
+              return (
+                <button
+                  key={d}
+                  type="button"
+                  onClick={() => toggleDiscipline(d)}
+                  className={`px-2.5 py-1 text-xs rounded border transition-colors ${
+                    active
+                      ? (DISC_COLORS[d] ?? 'bg-blue-100 text-blue-700 border-blue-200')
+                      : 'bg-white text-gray-400 border-gray-200 hover:border-gray-400'
+                  }`}
+                >
+                  {d}
+                </button>
+              )
+            })}
+            {editDisciplines.length > 0 && (
+              <button
+                type="button"
+                onClick={() => setEditDisciplines([])}
+                className="px-2.5 py-1 text-xs rounded border border-dashed border-gray-300 text-gray-400 hover:text-gray-600"
+              >
+                Clear (universal)
+              </button>
+            )}
+          </div>
+        ) : displayDisciplines.length === 0 ? (
+          <p className="text-sm text-gray-400 italic">Universal — applies to all disciplines</p>
+        ) : (
+          <div className="flex flex-wrap gap-1.5">
+            {displayDisciplines.map((d) => (
+              <span
+                key={d}
+                className={`px-2.5 py-1 text-xs rounded border ${DISC_COLORS[d] ?? 'bg-gray-100 text-gray-500 border-gray-200'}`}
+              >
+                {d}
+              </span>
+            ))}
+          </div>
         )}
       </div>
 
@@ -309,6 +395,7 @@ export default function SidePanel({ node, flatNodes, onRefresh, onSelect }: Prop
         <AddNodeModal
           parentId={node.id}
           parentName={node.name}
+          parentDisciplines={node.applicable_disciplines ?? []}
           onCreated={() => {
             setShowAddChildModal(false)
             onRefresh()

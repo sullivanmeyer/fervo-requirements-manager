@@ -6,11 +6,11 @@ from uuid import UUID
 
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy.orm import Session
 
 from database import get_db
-from models import HierarchyNode, Requirement, RequirementLink, Site, SourceDocument, Unit
+from models import ConflictRecord, DocumentBlock, HierarchyNode, Requirement, RequirementBlock, RequirementLink, Site, SourceDocument, Unit
 from schemas import RequirementCreate, RequirementUpdate
 
 router = APIRouter()
@@ -28,6 +28,8 @@ DISCIPLINE_PREFIXES: dict[str, str] = {
     "Process": "PROC",
     "Fire Protection": "FP",
     "General": "GEN",
+    "Build": "BUILD",
+    "Operations": "OPS",
 }
 
 
@@ -72,9 +74,13 @@ def _requirement_to_dict(
         "requirement_id": req.requirement_id,
         "title": req.title,
         "classification": req.classification,
+        "classification_subtype": req.classification_subtype,
         "owner": req.owner,
         "status": req.status,
+        "stale": req.stale,
         "discipline": req.discipline,
+        "content_source": req.content_source,
+        "archived": req.archived,
         "created_by": req.created_by,
         "created_date": req.created_date.isoformat() if req.created_date else None,
         "hierarchy_nodes": [
@@ -117,6 +123,60 @@ def _requirement_to_dict(
                     "title": sd.title,
                 }
 
+        # Conflict records involving this requirement
+        conflict_records: list[dict] = []
+        if db is not None:
+            crs = (
+                db.query(ConflictRecord)
+                .filter(
+                    ConflictRecord.archived == False,  # noqa: E712
+                    ConflictRecord.requirements.any(Requirement.id == req.id),
+                )
+                .order_by(ConflictRecord.created_at.desc())
+                .all()
+            )
+            for cr in crs:
+                conflict_records.append({
+                    "id": str(cr.id),
+                    "description": cr.description,
+                    "status": cr.status,
+                    "resolution_notes": cr.resolution_notes,
+                    "created_by": cr.created_by,
+                    "created_at": cr.created_at.isoformat(),
+                    "requirements": [
+                        {
+                            "id": str(r.id),
+                            "requirement_id": r.requirement_id,
+                            "title": r.title,
+                            "status": r.status,
+                        }
+                        for r in cr.requirements
+                    ],
+                })
+
+        # Linked source blocks for block_linked requirements
+        linked_blocks: list[dict] = []
+        if req.content_source == "block_linked" and db is not None:
+            rb_rows = (
+                db.query(RequirementBlock, DocumentBlock)
+                .join(DocumentBlock, RequirementBlock.block_id == DocumentBlock.id)
+                .filter(RequirementBlock.requirement_id == req.id)
+                .order_by(RequirementBlock.sort_order)
+                .all()
+            )
+            for rb, blk in rb_rows:
+                linked_blocks.append({
+                    "id": str(blk.id),
+                    "source_document_id": str(blk.source_document_id),
+                    "clause_number": blk.clause_number,
+                    "heading": blk.heading,
+                    "content": blk.content,
+                    "block_type": blk.block_type,
+                    "table_data": blk.table_data,
+                    "depth": blk.depth,
+                    "sort_order": rb.sort_order,
+                })
+
         base.update(
             {
                 "statement": req.statement,
@@ -134,10 +194,15 @@ def _requirement_to_dict(
                 "rationale": req.rationale,
                 "verification_method": req.verification_method,
                 "tags": req.tags or [],
+                "comments": req.comments,
+                "superseded_by_id": str(req.superseded_by_id) if req.superseded_by_id else None,
+                "superseded_by_req_id": req.superseded_by.requirement_id if req.superseded_by else None,
                 "created_at": req.created_at.isoformat(),
                 "updated_at": req.updated_at.isoformat(),
                 "parent_requirements": parent_reqs,
                 "child_requirements": child_reqs,
+                "conflict_records": conflict_records,
+                "linked_blocks": linked_blocks,
             }
         )
     return base
@@ -222,6 +287,10 @@ def list_requirements(
     created_date_to: Optional[str] = Query(None),
     modified_date_from: Optional[str] = Query(None),
     modified_date_to: Optional[str] = Query(None),
+    has_open_conflicts: Optional[bool] = Query(None),
+    classification_subtype: Optional[str] = Query(None),
+    stale: Optional[bool] = Query(None),
+    archived_only: bool = Query(False),
     db: Session = Depends(get_db),
 ):
     """
@@ -236,6 +305,10 @@ def list_requirements(
     base_q = db.query(Requirement).filter(
         Requirement.requirement_id != SELF_DERIVED_ID
     )
+    if archived_only:
+        base_q = base_q.filter(Requirement.archived == True)   # noqa: E712
+    else:
+        base_q = base_q.filter(Requirement.archived == False)  # noqa: E712
 
     if status:
         base_q = base_q.filter(Requirement.status.in_(status))
@@ -289,6 +362,32 @@ def list_requirements(
     if modified_date_to:
         base_q = base_q.filter(Requirement.last_modified_date <= modified_date_to)
 
+    if classification_subtype:
+        base_q = base_q.filter(Requirement.classification_subtype == classification_subtype)
+
+    if stale is not None:
+        base_q = base_q.filter(Requirement.stale == stale)
+
+    if has_open_conflicts is not None:
+        from models import conflict_record_requirements as crr_table
+        from sqlalchemy import and_
+        open_conflict_req_ids = (
+            db.query(crr_table.c.requirement_id)
+            .join(
+                ConflictRecord,
+                and_(
+                    ConflictRecord.id == crr_table.c.conflict_record_id,
+                    ConflictRecord.archived == False,  # noqa: E712
+                    ConflictRecord.status.in_(["Open", "Under Discussion"]),
+                ),
+            )
+            .scalar_subquery()
+        )
+        if has_open_conflicts:
+            base_q = base_q.filter(Requirement.id.in_(open_conflict_req_ids))
+        else:
+            base_q = base_q.filter(~Requirement.id.in_(open_conflict_req_ids))
+
     offset = (page - 1) * page_size
     total = base_q.count()
     reqs = (
@@ -298,11 +397,44 @@ def list_requirements(
         .limit(page_size)
         .all()
     )
+
+    # Attach open conflict count to each list item
+    from models import conflict_record_requirements as crr_table
+    from sqlalchemy import func, and_
+
+    open_conflict_counts: dict[str, int] = {}
+    if reqs:
+        req_ids = [r.id for r in reqs]
+        rows = (
+            db.query(
+                crr_table.c.requirement_id,
+                func.count(crr_table.c.conflict_record_id).label("cnt"),
+            )
+            .join(
+                ConflictRecord,
+                and_(
+                    ConflictRecord.id == crr_table.c.conflict_record_id,
+                    ConflictRecord.archived == False,  # noqa: E712
+                    ConflictRecord.status.in_(["Open", "Under Discussion"]),
+                ),
+            )
+            .filter(crr_table.c.requirement_id.in_(req_ids))
+            .group_by(crr_table.c.requirement_id)
+            .all()
+        )
+        open_conflict_counts = {str(row[0]): row[1] for row in rows}
+
+    items = []
+    for r in reqs:
+        d = _requirement_to_dict(r, detail=False)
+        d["open_conflict_count"] = open_conflict_counts.get(str(r.id), 0)
+        items.append(d)
+
     return {
         "total": total,
         "page": page,
         "page_size": page_size,
-        "items": [_requirement_to_dict(r, detail=False) for r in reqs],
+        "items": items,
     }
 
 
@@ -311,6 +443,28 @@ def get_requirement(req_id: UUID, db: Session = Depends(get_db)):
     req = db.get(Requirement, req_id)
     if not req:
         raise HTTPException(status_code=404, detail="Requirement not found")
+    return _requirement_to_dict(req, detail=True, db=db)
+
+
+@router.patch("/requirements/{req_id}/archive")
+def toggle_archive(
+    req_id: UUID,
+    archived: bool = Body(..., embed=True),
+    db: Session = Depends(get_db),
+):
+    """Archive or restore a requirement (soft delete).
+
+    Pass { "archived": true } to archive, { "archived": false } to restore.
+    All traceability links, block linkages, and history are preserved.
+    """
+    req = db.get(Requirement, req_id)
+    if not req:
+        raise HTTPException(status_code=404, detail="Requirement not found")
+    if req.requirement_id == SELF_DERIVED_ID:
+        raise HTTPException(status_code=403, detail="The Self-Derived record cannot be archived")
+    req.archived = archived
+    db.commit()
+    db.refresh(req)
     return _requirement_to_dict(req, detail=True, db=db)
 
 
@@ -418,3 +572,140 @@ def update_requirement(
     db.commit()
     db.refresh(req)
     return _requirement_to_dict(req, detail=True, db=db)
+
+
+# ---------------------------------------------------------------------------
+# Discipline transfer
+# ---------------------------------------------------------------------------
+
+@router.post("/requirements/{req_id}/transfer-discipline", status_code=201)
+def transfer_discipline(
+    req_id: UUID,
+    target_discipline: str,
+    db: Session = Depends(get_db),
+):
+    """
+    Transfer a requirement to a different discipline.
+
+    Because requirement IDs are discipline-prefixed (MECH-001, ELEC-003, …) a
+    discipline change requires a new ID.  This endpoint atomically:
+      1. Creates a new requirement under the target discipline with all fields,
+         relationships, and traceability links copied from the original.
+      2. Sets the original requirement's status to Superseded and records the
+         new requirement ID in superseded_by_id.
+
+    The entire operation runs in a single transaction; any failure rolls back.
+    Returns the new requirement's full detail dict.
+    """
+    original = db.get(Requirement, req_id)
+    if not original:
+        raise HTTPException(status_code=404, detail="Requirement not found")
+    if original.requirement_id == SELF_DERIVED_ID:
+        raise HTTPException(status_code=403, detail="Cannot transfer the Self-Derived record")
+    if target_discipline not in DISCIPLINE_PREFIXES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unknown discipline '{target_discipline}'. Valid values: {', '.join(DISCIPLINE_PREFIXES)}",
+        )
+    if target_discipline == original.discipline:
+        raise HTTPException(status_code=400, detail="Target discipline is the same as the current discipline")
+
+    new_req_id = _generate_requirement_id(target_discipline, db)
+
+    transfer_note = (
+        f"Transferred from {original.requirement_id} — "
+        f"discipline changed from {original.discipline} to {target_discipline}"
+    )
+    history = f"{transfer_note}\n{original.change_history}" if original.change_history else transfer_note
+
+    new_req = Requirement(
+        requirement_id=new_req_id,
+        title=original.title,
+        statement=original.statement,
+        classification=original.classification,
+        classification_subtype=original.classification_subtype,
+        owner=original.owner,
+        source_type=original.source_type,
+        status=original.status,
+        discipline=target_discipline,
+        created_by=original.created_by,
+        created_date=original.created_date,
+        last_modified_by=original.last_modified_by,
+        last_modified_date=original.last_modified_date,
+        change_history=history,
+        rationale=original.rationale,
+        verification_method=original.verification_method,
+        tags=list(original.tags) if original.tags else None,
+        source_document_id=original.source_document_id,
+        source_clause=original.source_clause,
+        comments=original.comments,
+        stale=original.stale,
+    )
+
+    # Copy M2M relationships
+    new_req.hierarchy_nodes = list(original.hierarchy_nodes)
+    new_req.sites = list(original.sites)
+    new_req.units = list(original.units)
+
+    db.add(new_req)
+    db.flush()  # assigns new_req.id without committing
+
+    # Copy parent traceability links (new_req inherits the same parents)
+    parent_links = (
+        db.query(RequirementLink)
+        .filter(RequirementLink.child_requirement_id == original.id)
+        .all()
+    )
+    for lnk in parent_links:
+        db.add(RequirementLink(
+            parent_requirement_id=lnk.parent_requirement_id,
+            child_requirement_id=new_req.id,
+        ))
+
+    # Copy child traceability links (new_req inherits the same children)
+    child_links = (
+        db.query(RequirementLink)
+        .filter(RequirementLink.parent_requirement_id == original.id)
+        .all()
+    )
+    for lnk in child_links:
+        db.add(RequirementLink(
+            parent_requirement_id=new_req.id,
+            child_requirement_id=lnk.child_requirement_id,
+        ))
+
+    # Copy conflict record associations
+    conflict_records = (
+        db.query(ConflictRecord)
+        .filter(ConflictRecord.requirements.any(Requirement.id == original.id))
+        .all()
+    )
+    for cr in conflict_records:
+        cr.requirements.append(new_req)
+
+    # Copy file attachment records (references to the same MinIO objects)
+    from models import RequirementAttachment
+    attachments = (
+        db.query(RequirementAttachment)
+        .filter(RequirementAttachment.requirement_id == original.id)
+        .all()
+    )
+    for att in attachments:
+        db.add(RequirementAttachment(
+            requirement_id=new_req.id,
+            file_name=att.file_name,
+            file_path=att.file_path,
+            file_size=att.file_size,
+            content_type=att.content_type,
+            uploaded_by=att.uploaded_by,
+            uploaded_at=att.uploaded_at,
+        ))
+
+    # Supersede the original
+    original.status = "Superseded"
+    original.superseded_by_id = new_req.id
+    original.updated_at = datetime.utcnow()
+
+    db.commit()
+    db.refresh(new_req)
+    return _requirement_to_dict(new_req, detail=True, db=db)

@@ -2,7 +2,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import Boolean, CheckConstraint, Column, DateTime, Date, ForeignKey, Integer, Table, Text
-from sqlalchemy.dialects.postgresql import ARRAY, UUID
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB, UUID
 from sqlalchemy.orm import backref, relationship
 
 from database import Base
@@ -26,12 +26,28 @@ class SourceDocument(Base):
     extracted_text = Column(Text, nullable=True)
     # True = auto-detected reference stub; cleared when user saves real metadata
     is_stub = Column(Boolean, default=False, nullable=False)
+    # Soft-delete: archived documents are hidden from active workflows but
+    # retained so that requirement traceability links remain intact
+    archived = Column(Boolean, default=False, nullable=False)
+    # When this document is superseded, point to the newer revision
+    superseded_by_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("source_documents.id", ondelete="SET NULL"),
+        nullable=True,
+    )
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(
         DateTime,
         default=datetime.utcnow,
         onupdate=datetime.utcnow,
         nullable=False,
+    )
+
+    superseded_by = relationship(
+        "SourceDocument",
+        remote_side="SourceDocument.id",
+        foreign_keys=[superseded_by_id],
+        backref=backref("superseded_documents", lazy="select"),
     )
 
 
@@ -50,6 +66,7 @@ class HierarchyNode(Base):
     )
     name = Column(Text, nullable=False)
     description = Column(Text, nullable=True)
+    applicable_disciplines = Column(ARRAY(Text), nullable=True)
     archived = Column(Boolean, default=False, nullable=False)
     sort_order = Column(Integer, default=0, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -179,6 +196,21 @@ class Requirement(Base):
         nullable=True,
     )
     source_clause = Column(Text, nullable=True)
+    classification_subtype = Column(Text, nullable=True)
+    stale = Column(Boolean, default=False, nullable=False)
+    # Free-form working notes; excluded from formal exports
+    comments = Column(Text, nullable=True)
+    # Set when this requirement is superseded by a transfer to another discipline
+    superseded_by_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("requirements.id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    # 'manual' (typed by user) or 'block_linked' (body comes from document blocks)
+    content_source = Column(Text, nullable=False, default="manual")
+    # Soft-delete: archived requirements are hidden from list/filter views but all
+    # traceability links and history are preserved
+    archived = Column(Boolean, default=False, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(
         DateTime,
@@ -188,6 +220,13 @@ class Requirement(Base):
     )
 
     source_document = relationship("SourceDocument", lazy="joined")
+    superseded_by = relationship(
+        "Requirement",
+        remote_side="Requirement.id",
+        foreign_keys="[Requirement.superseded_by_id]",
+        uselist=False,
+        lazy="joined",
+    )
 
     hierarchy_nodes = relationship(
         "HierarchyNode",
@@ -262,8 +301,11 @@ class DocumentBlock(Base):
     clause_number = Column(Text, nullable=True)
     heading = Column(Text, nullable=True)
     content = Column(Text, nullable=False)
-    # heading / requirement_clause / table_row / informational / boilerplate
+    # heading / requirement_clause / table_block / informational / boilerplate
     block_type = Column(Text, nullable=False)
+    # Populated for table_block type only:
+    # {caption, headers: [str], rows: [[str]], context_note}
+    table_data = Column(JSONB, nullable=True)
     sort_order = Column(Integer, default=0, nullable=False)
     depth = Column(Integer, default=0, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
@@ -298,6 +340,7 @@ class ExtractionCandidate(Base):
     statement = Column(Text, nullable=False)
     source_clause = Column(Text, nullable=True)
     suggested_classification = Column(Text, nullable=True)   # Requirement / Guideline
+    suggested_classification_subtype = Column(Text, nullable=True)
     suggested_discipline = Column(Text, nullable=True)
     # Pending / Accepted / Rejected / Edited
     status = Column(Text, nullable=False, default="Pending")
@@ -306,6 +349,34 @@ class ExtractionCandidate(Base):
         ForeignKey("requirements.id", ondelete="SET NULL"),
         nullable=True,
     )
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+
+
+# ---------------------------------------------------------------------------
+# Requirement ↔ DocumentBlock junction (Stage 15 block-linked requirements)
+# ---------------------------------------------------------------------------
+
+class RequirementBlock(Base):
+    """
+    Links a requirement to one or more document blocks that constitute its body.
+    For requirements with content_source='block_linked', the block content is
+    the authoritative body; requirement.statement is a plain-text search fallback.
+    sort_order controls the display sequence when multiple blocks are linked.
+    """
+    __tablename__ = "requirement_blocks"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    requirement_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("requirements.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    block_id = Column(
+        UUID(as_uuid=True),
+        ForeignKey("document_blocks.id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    sort_order = Column(Integer, default=0, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
 
 
@@ -378,4 +449,56 @@ class RequirementLink(Base):
             "parent_requirement_id != child_requirement_id",
             name="ck_requirement_links_no_self_loop",
         ),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Conflict records
+# ---------------------------------------------------------------------------
+
+conflict_record_requirements = Table(
+    "conflict_record_requirements",
+    Base.metadata,
+    Column(
+        "conflict_record_id",
+        UUID(as_uuid=True),
+        ForeignKey("conflict_records.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column(
+        "requirement_id",
+        UUID(as_uuid=True),
+        ForeignKey("requirements.id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+)
+
+
+class ConflictRecord(Base):
+    """
+    A flagged contradiction between two or more requirements.
+    Lifecycle: Open → Under Discussion → Resolved / Deferred.
+    Soft-deleted via archived flag (never physically removed).
+    """
+    __tablename__ = "conflict_records"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    description = Column(Text, nullable=False)
+    # Open / Under Discussion / Resolved / Deferred
+    status = Column(Text, nullable=False, default="Open")
+    resolution_notes = Column(Text, nullable=True)
+    created_by = Column(Text, nullable=False)
+    archived = Column(Boolean, default=False, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(
+        DateTime,
+        default=datetime.utcnow,
+        onupdate=datetime.utcnow,
+        nullable=False,
+    )
+
+    requirements = relationship(
+        "Requirement",
+        secondary=conflict_record_requirements,
+        lazy="joined",
     )

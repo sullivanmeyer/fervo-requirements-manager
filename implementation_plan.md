@@ -473,7 +473,7 @@ and "If API 661 is revised, which of our specs are affected?"
 
 ---
 
-## Stage 9 — Conflict Record Tracking
+## Stage 9 — Conflict Record Tracking ✓ COMPLETE
 
 ### Goal
 Allow users to flag pairs of requirements as conflicting, describe the nature of
@@ -481,176 +481,529 @@ the conflict, and track resolution. Conflicts appear as a field on each involved
 requirement.
 
 ### Backend — Database
-- [ ] Alembic migration: `conflict_records` table (id UUID, description text, status enum: Open/Under Discussion/Resolved/Deferred, resolution_notes text nullable, created_by text, created_at, updated_at)
-- [ ] Alembic migration: `conflict_record_requirements` junction table (conflict_record_id FK, requirement_id FK) — supports linking 2+ requirements to a single conflict
-- [ ] Update requirement detail endpoint to include associated conflict records
+- [x] Alembic migration: `conflict_records` table (id UUID, description text, status enum: Open/Under Discussion/Resolved/Deferred, resolution_notes text nullable, created_by text, created_at, updated_at)
+- [x] Alembic migration: `conflict_record_requirements` junction table (conflict_record_id FK, requirement_id FK) — supports linking 2+ requirements to a single conflict
+- [x] Update requirement detail endpoint to include associated conflict records
 
 ### Backend — API Endpoints
-- [ ] `POST /api/conflict-records` — create a conflict record (accepts list of requirement IDs, description)
-- [ ] `GET /api/conflict-records` — list all conflict records with filtering by status
-- [ ] `GET /api/conflict-records/{id}` — single conflict record with linked requirements
-- [ ] `PUT /api/conflict-records/{id}` — update status, description, resolution notes
-- [ ] `DELETE /api/conflict-records/{id}` — soft delete
+- [x] `POST /api/conflict-records` — create a conflict record (accepts list of requirement IDs, description)
+- [x] `GET /api/conflict-records` — list all conflict records with filtering by status
+- [x] `GET /api/conflict-records/{id}` — single conflict record with linked requirements
+- [x] `PUT /api/conflict-records/{id}` — update status, description, resolution notes
+- [x] `DELETE /api/conflict-records/{id}` — soft delete
 
 ### Frontend — Conflict Record UI
-- [ ] On the Requirement Detail View, new "Conflict Records" section showing all conflicts involving this requirement
-- [ ] Each conflict shows: description, status badge, linked requirements (clickable), resolution notes
-- [ ] "Flag Conflict" button on the detail view: opens a form to select one or more other requirements, describe the conflict, and create the record
-- [ ] Conflict status is editable inline (dropdown to change Open → Under Discussion → Resolved → Deferred)
-- [ ] Resolution notes field becomes editable when status changes to Resolved or Deferred
-- [ ] Requirements table view: add a "Conflicts" column showing count of open conflicts (filterable: "has open conflicts" checkbox)
+- [x] On the Requirement Detail View, new "Conflict Records" section showing all conflicts involving this requirement
+- [x] Each conflict shows: description, status badge, linked requirements (clickable), resolution notes
+- [x] "Flag Conflict" button on the detail view: opens a form to select one or more other requirements, describe the conflict, and create the record
+- [x] Conflict status is editable inline (dropdown to change Open → Under Discussion → Resolved → Deferred)
+- [x] Resolution notes field becomes editable when status changes to Resolved or Deferred
+- [x] Requirements table view: add a "Conflicts" column showing count of open conflicts (filterable: "has open conflicts" checkbox)
 
 ### Stage 9 Verification
-- [ ] Create two contradictory requirements (e.g., one specifying 120 psig design pressure, another specifying 150 psig for the same equipment)
-- [ ] Flag them as conflicting with a description of the conflict
-- [ ] Verify the conflict record appears on both requirements' detail views
-- [ ] Change conflict status to Resolved, add resolution notes
-- [ ] Verify the conflict count in the table view updates
-- [ ] Filter the table to show only requirements with open conflicts
+- [x] Create two contradictory requirements (e.g., one specifying 120 psig design pressure, another specifying 150 psig for the same equipment)
+- [x] Flag them as conflicting with a description of the conflict
+- [x] Verify the conflict record appears on both requirements' detail views
+- [x] Change conflict status to Resolved, add resolution notes
+- [x] Verify the conflict count in the table view updates
+- [x] Filter the table to show only requirements with open conflicts
 
 ---
 
-## Stage 10 — Orphan Report + Gap Analysis + Full-Text Search
+# Stage 10 — Hierarchy Discipline Tags + Orphan Report + Gap Analysis + Full-Text Search ✓ COMPLETE
 
 ### Goal
-Add analytical views that help engineers identify missing traceability and
-requirements gaps, plus global search.
+Add discipline classification to hierarchy nodes so that gap analysis and orphan
+detection correctly flag missing requirements only where they're relevant — an
+electrical requirement shouldn't show as a gap on a mechanical-only assembly.
+Then add analytical views for orphan detection and gap analysis, plus global search.
 
-### Backend — API Endpoints
-- [ ] `GET /api/reports/orphans` — returns requirements whose only parent is Self-Derived AND are assigned to non-root hierarchy nodes (potential missing traceability)
-- [ ] `GET /api/reports/gaps?requirement_id={id}` — for a given parent requirement, returns a list of hierarchy nodes that have child requirements derived from it vs. hierarchy nodes that don't (identifies where flow-down is missing)
-- [ ] `GET /api/search?q={query}` — full-text search across requirement titles, statements, rationale, tags, source document titles, owner names. Uses PostgreSQL `tsvector` / `tsquery` for performance.
+### Backend — Database (Hierarchy Discipline Tags)
+- [x] Alembic migration: add `applicable_disciplines` column (text array, nullable) to `hierarchy_nodes` table. This is a multi-select of the same discipline enum used on requirements (Mechanical, Electrical, I&C, Civil/Structural, Process, Fire Protection, General). A node with no disciplines set is treated as applicable to all disciplines.
+- [x] Update hierarchy seed script to assign default disciplines to Geoblock nodes (e.g., ACC Tube Bundles = [Mechanical, Process]; E-House Building = [Electrical]; PLC Architecture = [I&C]; ACC Structural Steel = [Civil/Structural, Mechanical])
+- [x] Update `GET /api/hierarchy` and `PUT /api/hierarchy/{id}` to include and accept `applicable_disciplines`
 
-### Backend — Database
-- [ ] Alembic migration: add GIN index on a generated `tsvector` column covering requirement title, statement, rationale, tags, and owner fields
-- [ ] Alembic migration: add GIN index on source_documents covering title and document_id
+### Frontend — Hierarchy Discipline Tags
+- [x] On the hierarchy tree side panel, add an "Applicable Disciplines" multi-select field (same discipline enum as requirements)
+- [x] Discipline tags shown as colored badges on each node in the tree view
+- [x] When creating a new hierarchy node, the discipline field defaults to the parent node's disciplines (editable)
+
+### Backend — Database (Full-Text Search)
+- [x] Alembic migration: add GIN index on a generated `tsvector` column covering requirement title, statement, rationale, tags, and owner fields
+- [x] Alembic migration: add GIN index on source_documents covering title and document_id
+
+### Backend — API Endpoints (Reports & Search)
+- [x] `GET /api/reports/orphans` — returns requirements whose only parent is Self-Derived AND are assigned to non-root hierarchy nodes (potential missing traceability)
+- [x] `GET /api/reports/gaps?requirement_id={id}` — for a given parent requirement, returns a list of hierarchy nodes that share at least one discipline with the requirement but have no child requirements derived from it. This is the discipline-filtered gap analysis: if a plant-level Mechanical requirement has been flowed down to the ACC but not to the Turbogen lube oil skid, and both nodes include "Mechanical" in their applicable disciplines, the lube oil skid shows as a gap. But nodes tagged only as "Electrical" or "I&C" would not appear as gaps for that Mechanical requirement.
+- [x] `GET /api/search?q={query}` — full-text search across requirement titles, statements, rationale, tags, source document titles, owner names. Uses PostgreSQL `tsvector` / `tsquery` for performance.
 
 ### Frontend — Orphan Report
-- [ ] New page/tab: "Orphan Report" — table of requirements flagged as orphans
-- [ ] Each row shows Requirement ID, Title, Owner, Hierarchy Nodes, Status
-- [ ] Clicking a row opens the requirement detail view where the user can assign parent requirements
+- [x] New page/tab: "Orphan Report" — table of requirements flagged as orphans
+- [x] Each row shows Requirement ID, Title, Owner, Hierarchy Nodes, Status
+- [x] Clicking a row opens the requirement detail view where the user can assign parent requirements
+- [x] Filter by discipline and status
 
 ### Frontend — Gap Analysis
-- [ ] Accessible from the Requirement Detail View: "Analyze Flow-Down Gaps" button on any requirement
-- [ ] Displays a list of hierarchy nodes, each showing whether a child requirement derived from this parent exists at that node
-- [ ] Nodes with coverage shown in green; nodes without coverage shown in red/amber with a "Create Child Requirement" shortcut
+- [x] Accessible from the Requirement Detail View: "Analyze Flow-Down Gaps" button on any requirement
+- [x] Displays a two-column layout: hierarchy nodes with derived children (covered) and hierarchy nodes without derived children (gaps), filtered by discipline overlap between the requirement and each node's applicable_disciplines
+- [x] Discipline badges displayed on each hierarchy node in the gap analysis to show why it was included/excluded
+- [x] Nodes with coverage shown in green; nodes without coverage shown in red/amber with a "Create Child Requirement" shortcut
+- [x] Click "Create Child Requirement" from a gap — new requirement form opens pre-linked to the selected parent and pre-assigned to the gap hierarchy node
 
 ### Frontend — Global Search
-- [ ] Search bar in the top navigation, always visible
-- [ ] Results grouped by type: Requirements, Source Documents
-- [ ] Each result shows title/ID, a snippet of matching text, and is clickable to open the detail view
-- [ ] Search results appear in a dropdown as the user types (debounced, ≥3 characters)
+- [x] Search bar in the top navigation, always visible
+- [x] Results grouped by type: Requirements, Source Documents
+- [x] Each result shows title/ID, a snippet of matching text with highlighted matching terms, and is clickable to open the detail view
+- [x] Search results appear in a dropdown as the user types (debounced, ≥3 characters)
 
 ### Stage 10 Verification
-- [ ] Create a requirement assigned to a low-level hierarchy node with only Self-Derived as parent — verify it appears in the orphan report
-- [ ] Assign a real parent to it — verify it disappears from the orphan report
-- [ ] Select a top-level requirement and run gap analysis — verify hierarchy nodes with/without derived children are correctly identified
-- [ ] Click "Create Child Requirement" from a gap — verify new requirement form opens pre-linked
-- [ ] Search for a word that appears in a requirement statement — verify the requirement appears in results
-- [ ] Search for a source document title — verify it appears in results
-- [ ] Search for an owner's name — verify their requirements appear in results
-
+- [x] Create a top-level Mechanical requirement and verify gap analysis shows only Mechanical-tagged hierarchy nodes as gaps (not Electrical-only or I&C-only nodes)
+- [x] Verify that nodes with no disciplines set (applicable_disciplines is null/empty) appear in gap analysis for all disciplines (treated as universal)
+- [x] Create an orphan requirement (Self-Derived parent, assigned to a component-level node) — verify it appears in the orphan report
+- [x] Assign a real parent to it — verify it disappears from the orphan report
+- [x] Click "Create Child Requirement" from a gap — verify new requirement form opens pre-linked to parent and pre-assigned to the gap node
+- [x] Search for a word that appears in a requirement statement — verify the requirement appears in results
+- [x] Search for a source document title — verify it appears in results
+- [x] Search for an owner's name — verify their requirements appear in results
+- [x] Verify discipline badges render correctly on hierarchy nodes in the tree view
+- [x] Verify new child hierarchy nodes inherit applicable_disciplines from their parent node
 ---
 
-## Stage 11 — Document Revision Tracking + Requirements Export
+## Stage 11 — Classification Subtypes + Document Revision Tracking + Requirements Export ✓ COMPLETE
 
 ### Goal
-Flag stale requirements when source documents are revised, and generate formatted
-requirements documents for inclusion in specification packages.
+Introduce classification subtypes from NASA TP-3642 Figure 5 to give users finer
+visibility into the nature of each requirement and guideline. Flag stale
+requirements when source documents are revised. Generate formatted requirements
+documents for inclusion in specification packages.
+
+### Backend — Database (Classification Subtypes)
+- [x] Alembic migration: add `classification_subtype` column to `requirements` table (enum, nullable):
+  - Values when classification = Requirement: Performance Requirement, Design Requirement, Derived Requirement
+  - Values when classification = Guideline: Lesson Learned, Procedure, Code
+  - NULL is allowed (subtype is optional and informational)
+- [x] Add database-level CHECK constraint: if classification_subtype is not null, it must be consistent with classification (e.g., "Lesson Learned" only valid when classification = "Guideline")
+- [x] Alembic migration: add `suggested_classification_subtype` column (enum, nullable) to `extraction_candidates` table
+
+### Backend — API Updates (Classification Subtypes)
+- [x] Update `POST /api/requirements` and `PUT /api/requirements/{id}` to accept and validate `classification_subtype`
+- [x] Update `GET /api/requirements` and `GET /api/requirements/{id}` to return `classification_subtype`
+- [x] Extend `GET /api/requirements` filter parameters to include `classification_subtype` (single select — options filtered by selected classification, or all subtypes if no classification filter active)
+- [x] Update `GET /api/reports/orphans` response to include `classification` and `classification_subtype` per requirement
+- [x] Update extraction candidates endpoints to return and accept `suggested_classification_subtype`
+
+### Backend — LLM Prompt Updates (Classification Subtypes)
+- [x] Update the **extraction prompt** (from Stage 7) to additionally suggest a classification subtype for each candidate:
+  - For Requirements, suggest one of:
+    - Performance Requirement — plant-peculiar "what's" (reliability, operating envelopes, throughput, capacity)
+    - Design Requirement — standards (industry-level hardware/process specs) and discipline requirements (margins, redundancy, environments, material specs, safety factors)
+    - Derived Requirement — requirements that evolve during design to meet performance requirements (e.g., load relief controls, interface constraints)
+  - For Guidelines, suggest one of:
+    - Lesson Learned — experience-based guidance, historical knowledge, "good things to do"
+    - Procedure — implementation steps, methods, fabrication/inspection sequences
+    - Code — reference to industry codes, tools, handbooks, computer programs, engineering equations
+- [x] Update the extraction JSON schema to include `suggested_classification_subtype`
+- [x] Test updated prompt against a Kiewit equipment spec and a Fervo BOD to verify reasonable subtype suggestions
+
+### Frontend — Classification Subtype UI
+- [x] Requirement Detail/Edit View: add Classification Subtype dropdown below Classification, with options filtered by the selected Classification value:
+  - If Classification = Requirement → Performance Requirement, Design Requirement, Derived Requirement
+  - If Classification = Guideline → Lesson Learned, Procedure, Code
+  - Changing Classification clears the subtype; field is optional (nullable)
+- [x] Requirements Table View: add "Classification Subtype" column (hidden by default, user can show via column toggle)
+- [x] Table filter bar: add Classification Subtype filter (options update based on Classification filter if active)
+- [x] Orphan Report table: add Classification and Classification Subtype columns
+- [x] Extraction Candidate Review Panel: display suggested classification subtype alongside classification for each candidate
+- [x] Gap Analysis view: show parent requirement's classification subtype in the header for context
 
 ### Backend — Document Revision Tracking
-- [ ] Add `superseded_by_id` (nullable self-FK) column to `source_documents` table
-- [ ] When a user registers a new revision of an existing document, the system links old → new via `superseded_by_id`
-- [ ] New endpoint: `POST /api/source-documents/{id}/new-revision` — creates new document record, links it as superseding the old one, flags all requirements derived from the old revision
-- [ ] Add `stale` (boolean, default false) column to `requirements` table
-- [ ] When a document is superseded, bulk-update all requirements with `source_document_id` = old doc to `stale = true`
-- [ ] Update requirement list/detail endpoints to include the stale flag
+- [x] Add `superseded_by_id` (nullable self-FK) column to `source_documents` table
+- [x] When a user registers a new revision of an existing document, the system links old → new via `superseded_by_id`
+- [x] New endpoint: `POST /api/source-documents/{id}/new-revision` — creates new document record, links it as superseding the old one, flags all requirements derived from the old revision
+- [x] Add `stale` (boolean, default false) column to `requirements` table
+- [x] When a document is superseded, bulk-update all requirements with `source_document_id` = old doc to `stale = true`
+- [x] Update requirement list/detail endpoints to include the stale flag
 
 ### Frontend — Revision Tracking
-- [ ] On Source Document Detail View, "Upload New Revision" button
-- [ ] Confirmation dialog: "This will flag X requirements derived from the current revision as stale. Continue?"
-- [ ] Stale requirements show a visual indicator (amber warning icon) in the table view and detail view
-- [ ] Stale filter added to the table filter bar
+- [x] On Source Document Detail View, "Register New Revision" inline form (implemented as inline form rather than modal button flow)
+- [x] Superseded indicator shown when document has a successor; stale count visible before submitting
+- [x] Stale requirements show a visual indicator (amber warning icon) in the table view and detail view
+- [x] Stale filter added to the table filter bar
 
 ### Backend — Requirements Document Export
-- [ ] New endpoint: `GET /api/export/requirements-document` — accepts filter parameters (hierarchy node, discipline, status, etc.) and returns a formatted PDF or Word document
-- [ ] Document organized by hierarchy node (tree structure as headings/subheadings), with requirements listed under each node
-- [ ] Each requirement shows: ID, Title, Statement, Classification, Source Document, Source Clause, Owner, Status
-- [ ] Use a Python library like `python-docx` (Word) or `reportlab` / `weasyprint` (PDF)
+- [x] New endpoint: `GET /api/export/requirements-document` — accepts filter parameters (hierarchy node, discipline, status, classification_subtype, etc.) and returns a formatted PDF or Word document
+- [x] Document organized by hierarchy node (tree structure as headings/subheadings), with requirements listed under each node
+- [x] Each requirement shows: ID, Title, Statement, Classification, Classification Subtype, Source Document, Source Clause, Owner, Status
+- [x] Uses `python-docx` (Word) and `reportlab` Platypus (PDF)
 
 ### Frontend — Export
-- [ ] "Export Document" button on the requirements table view (uses current filters to scope the export)
-- [ ] Format selection: PDF or Word
-- [ ] Download triggers immediately after generation
+- [x] "Export Document" dropdown button on the requirements table view (uses current filters to scope the export)
+- [x] Format selection: PDF or Word
+- [x] Download triggers immediately via `window.open` — browser handles Save As dialog natively
 
 ### Stage 11 Verification
-- [ ] Register a source document at Rev A with several derived requirements
-- [ ] Upload Rev B as a new revision — verify all Rev A requirements are flagged as stale
+- [x] Add Classification Subtype to an existing requirement (e.g., set a "shall" requirement to Design Requirement) — verify it saves and displays in table and detail views
+- [x] Change a requirement's Classification from Requirement to Guideline — verify subtype clears and dropdown shows Guideline subtypes (Lesson Learned, Procedure, Code)
+- [x] Set subtype to Procedure — save — verify it persists across page refresh
+- [ ] Filter the requirements table by Classification Subtype = Design Requirement — verify only matching requirements appear
+- [ ] Run LLM extraction on a document — verify candidates include a suggested classification subtype
+- [ ] Accept a candidate — verify the created requirement has the suggested subtype pre-populated
+- [x] Open the Orphan Report — verify Classification and Classification Subtype columns are visible
+- [x] Register a source document at Rev A with several derived requirements
+- [x] Upload Rev B as a new revision — verify all Rev A requirements are flagged as stale
 - [ ] Verify stale indicator appears in table and detail views
-- [ ] Verify stale filter works in the table
-- [ ] Export a requirements document filtered to a specific hierarchy node — verify the PDF/Word file is well-formatted with hierarchy structure as headings
-- [ ] Verify requirements appear under their correct hierarchy nodes in the export
+- [x] Verify stale filter works in the table
+- [x] Export a requirements document filtered to a specific hierarchy node — verify the PDF/Word file is well-formatted with hierarchy structure as headings
+- [x] Verify requirements appear under their correct hierarchy nodes in the export with Classification Subtype shown
 
 ---
 
-## Stage 12 — Email + Password Authentication
+## Stage 12 — Navigable System Block Diagram ✓ COMPLETE
 
 ### Goal
-Replace the display-name-only user identity with proper email + password
-authentication so the app can be shared beyond a trusted local network.
+Replace the static 3×3 grid hierarchy view with a navigable, drill-down block
+diagram that lets users explore the system hierarchy one level at a time. Each
+view shows a parent node, its direct children as cards (with their sub-components
+listed inside), and the Performance Requirements linked to each node. Clicking a
+child node that has its own children navigates "into" it, rendering the same
+layout one level deeper. This creates a SysML-style Block Definition Diagram
+experience driven by live data.
 
-### Backend — Database
-- [ ] Alembic migration: `users` table (id UUID, email text unique, display_name text, password_hash text, created_at, updated_at)
-- [ ] Migrate existing display-name-based owner references to be compatible with user accounts (owner field becomes a FK to users table, with a migration that creates user records for each unique display name currently in the system)
+Only Performance Requirements are shown in this view to keep density manageable.
+Users who need to see Design Requirements, Derived Requirements, or Guidelines
+can click through to the requirements table filtered to that hierarchy node.
 
-### Backend — Authentication
-- [ ] Password hashing with bcrypt
-- [ ] `POST /api/auth/register` — create new user account (email, display name, password)
-- [ ] `POST /api/auth/login` — validate credentials, return JWT token
-- [ ] `POST /api/auth/logout` — invalidate token (if using token blacklist) or no-op (if relying on expiry)
-- [ ] JWT middleware: all API endpoints (except register/login) require a valid JWT in the Authorization header
-- [ ] Token includes user ID and display name; backend extracts current user from token
+### Backend — API
+- [x] New endpoint: `GET /api/hierarchy/{id}/block-view` returns:
+  - The requested hierarchy node (id, name, description)
+  - Its direct children, each including: id, name, description, `has_children` boolean (true if the child has its own children — controls whether the card is clickable/expandable), and `children_preview` (list of grandchild names for display as sub-component tags inside the card)
+  - Performance Requirements linked to the requested node: filtered to `classification_subtype = 'Performance Requirement'`, returning id, requirement_id, title, statement (truncated), status
+  - Performance Requirements linked to each direct child (same filter), so each child card can display its own requirement cards
+- [x] Ancestor chain: `GET /api/hierarchy/{id}/ancestors` — returns the ordered list of ancestor nodes from root to the requested node, used to build the breadcrumb trail
+- [x] Performance: grandchildren and requirements fetched in two queries (not N+1); grouping done in Python
 
-### Frontend — Authentication
-- [ ] Login page: email + password form
-- [ ] Registration page: email + display name + password form
-- [ ] JWT stored in memory (not localStorage for security) with refresh mechanism
-- [ ] Redirect to login page when JWT is missing or expired
-- [ ] Current user display name shown in top nav (replacing the manual text input from Phase 1)
-- [ ] Owner fields throughout the app now reference real user accounts (searchable dropdown of registered users)
+### Frontend — Navigable Block Diagram
+- [x] BlockDiagram.tsx fully rewritten (existing page/tab retained)
+- [x] **State**: component tracks `currentNodeId` (defaults to the Powerblock root on mount)
+- [x] **Layout**: responsive CSS grid with `auto-fill, minmax(280px, 1fr)` — reflows naturally for any child count
+- [x] **Parent header**: indigo header card showing current node name and its Performance Requirements
+- [x] **Child cards**: name header (clickable `›` if has children), sub-component tags, Performance Requirement cards; "No performance requirements" shown in muted text when empty
+- [x] **Drill-down navigation**: clicking an expandable child card navigates into it; previous blockView cleared for instant loading feel
+- [x] **Breadcrumb trail**: ancestor chain shown above header; each segment clickable to jump back; current node shown in bold
+- [x] **Back navigation**: "← Back" button hidden at root, visible at all deeper levels
+- [x] **Link to requirements table**: requirement cards open detail view; each card has "All req's →" button opening requirements table pre-filtered to that node with `include_descendants=true`
+- [x] **Empty leaf nodes**: leaf message shown with back link when node has no children
 
 ### Stage 12 Verification
-- [ ] Register a new user account — verify success
-- [ ] Log in with the new account — verify redirect to main app
-- [ ] Verify all API calls work with the JWT token
-- [ ] Open a private/incognito window — verify redirect to login page
-- [ ] Create a requirement — verify Owner is automatically set to the logged-in user
-- [ ] Verify existing requirements (created with display names in Phase 1) still display correctly
+- [x] Open System Block Diagram — verify Geoblock Powerblock appears as parent with plant-level Performance Requirements and all 8 modules as child cards
+- [x] Verify each module card shows its sub-components as tags (e.g., HeatRejection shows ACC, Recuperator, Feed Pumps, etc.)
+- [x] Verify only Performance Requirements appear — no Design Requirements, Derived Requirements, or Guidelines visible
+- [x] Click the HeatRejection Module card — verify the view navigates to show HeatRejection as parent with its sub-systems (ACC, Recuperator, Feed Pumps, etc.) as child cards
+- [x] Verify breadcrumb shows "Geoblock Powerblock → HeatRejection Module"
+- [x] Click ACC card — verify drill-down to ACC level showing Tube Bundles, Fans & Motors, Headers & Nozzles, etc.
+- [x] Verify breadcrumb shows "Geoblock Powerblock → HeatRejection Module → ACC"
+- [x] Click "Geoblock Powerblock" in breadcrumb — verify jump back to root level
+- [x] Click "← Back" — verify navigation up one level
+- [x] Drill into a leaf node (e.g., Tube Bundles) — verify leaf message appears with any linked Performance Requirements
+- [x] Click a requirement card — verify it opens the requirement detail view
+- [x] Verify the grid layout adapts to different child counts (e.g., 3 children vs. 8 children both look reasonable)
+- [x] Assign a Design Requirement to a module — verify it does NOT appear in the block diagram view
 
 ---
+ 
+## Stage 13 — Quality-of-Life Improvements (Discipline Transfer, Subtypes, Comments) ✓ COMPLETE
+ 
+### Goal
+Three usability improvements before locking down authentication: (1) allow users
+to transfer a requirement from one discipline to another (since the requirement_id
+is keyed to discipline, this requires creating a new requirement with a new ID and
+archiving the old one), (2) expand the discipline enum to include Build and
+Operations (with ID prefixes BUILD-xxx and OPS-xxx), and (3) add a user comments
+field to requirements.
+ 
+### Backend — Discipline Transfer
+ 
+- [x] New endpoint: `POST /api/requirements/{id}/transfer-discipline` — accepts `target_discipline` query parameter
+  - [x] Creates a new requirement record with all fields copied and change_history prepended with transfer note
+  - [x] Copies all parent and child traceability links to the new requirement
+  - [x] Copies all conflict record associations to the new requirement
+  - [x] Copies all file attachments (references, not duplicated files in MinIO)
+  - [x] Sets the original requirement's status to `Superseded` and sets `superseded_by_id` FK to the new requirement
+  - [x] Returns the new requirement's full detail
+- [x] Atomic — single transaction with `db.flush()` before link copying; any failure rolls back
+- [x] Migration 017: adds `comments` (text, nullable) and `superseded_by_id` (UUID FK, nullable) to `requirements`
+ 
+### Frontend — Discipline Transfer
+- [x] "Transfer Discipline" button in header (only on saved requirements, orange border to signal infrequent/destructive action)
+- [x] Confirmation modal: discipline dropdown (filtered to exclude current), preview badge showing direction, warning text
+- [x] After confirmation, navigates to the new requirement's detail view
+- [x] Superseded original shows orange banner: "This requirement was transferred to {new_id}" with clickable link to new requirement
+ 
+### Backend — Expanded Discipline Enum
+- [x] `DISCIPLINE_PREFIXES` in `requirements.py` extended: Build → `BUILD`, Operations → `OPS`
+- [x] `DISCIPLINES` set in `schemas.py` extended with Build and Operations
+- [x] LLM extraction prompt updated to suggest Build and Operations with usage guidance
+ 
+### Frontend — Expanded Discipline Enum
+- [x] `DISCIPLINES` array in `RequirementDetail.tsx` now includes Build and Operations
+- [x] Discipline filter in the table filter bar picks up new values automatically (dynamic from hierarchy nodes / free text)
+ 
+### Backend — Requirement Comments
+- [x] Migration 017: `comments` column added to `requirements` table (text, nullable)
+- [x] `RequirementCreate` and `RequirementUpdate` schemas accept `comments`
+- [x] `GET /api/requirements/{id}` detail response includes `comments`, `superseded_by_id`, `superseded_by_req_id`
+ 
+### Frontend — Requirement Comments
+- [x] "Comments" textarea added below Rationale with helper text: "Notes, discussion, or context — not included in formal exports"
+- [x] Included in create/update payloads; excluded from requirements document export
+ 
+### Stage 13 Verification
+- [x] Transfer MECH-005 to Electrical — verify a new ELEC-xxx requirement is created with all fields copied
+- [x] Verify the original MECH-005 is now Superseded with a link to the new ELEC requirement
+- [x] Verify all parent/child links from MECH-005 now appear on the new ELEC requirement
+- [x] Verify any conflict records involving MECH-005 now also involve the new ELEC requirement
+- [x] Verify attachments are accessible on the new requirement
+- [x] Open the new requirement's change_history — verify it notes the transfer
+- [x] Create a new requirement with Discipline = Build — verify it gets ID BUILD-001
+- [x] Create a new requirement with Discipline = Operations — verify it gets ID OPS-001
+- [x] Verify Build and Operations appear in the discipline filter on the requirements table
+- [x] Run LLM extraction on a document with fabrication/installation clauses — verify candidates suggest Build as discipline where appropriate
+- [x] Add comments to a requirement — save — verify comments persist on reload
+- [x] Export a requirements document — verify comments are NOT included in the output
+- [x] Verify comments are visible in the requirement detail view but not in the table view columns
+ 
+---
+ 
 
-## Post-Stage 12: Phase 2 Complete
+## Stage 14 — Table-Aware AI Extraction Pipeline
+ 
+### Goal
+The Stage 7 AI extraction pipeline decomposes tables by treating each cell as an
+individual block (block_type = table_row). This fragments tabular data — material
+property tables, dimensional tolerance schedules, test parameter matrices — into
+dozens of meaningless line items. The LLM then proposes each cell as a separate
+candidate requirement, creating noise and losing the structural meaning of the
+table.
+ 
+Stage 14 adds a pre-processing table detection step to the PDF ingestion pipeline
+that identifies, reconstructs, and packages tables as coherent blocks before the
+LLM sees them. It extends the data model, prompts, and UI to support a new
+"tabular" requirement type that preserves table structure end-to-end.
+ 
+This stage replaces the former Stage 14 (Email + Password Authentication), which
+has been removed. User authentication is handled externally via Microsoft SSO
+through the organization's Azure AD implementation.
+ 
+### Backend — Table Detection Pipeline (new service: `services/table_extraction.py`)
+- [x] `pdfplumber==0.11.0` already in `requirements.txt` — no new dependency needed
+- [x] **Page-level table detection**: `find_tables()` detects ruled-line table bounding boxes per page
+- [x] **Table reconstruction**: each detected table serialized as Markdown with `[TABLE BLOCK — Page N]` / `[END TABLE BLOCK]` envelope markers; prose extracted with table regions filtered via bounding-box filter
+- [x] **Region classification**: prose and tables interleaved in page reading order
+- [x] Graceful fallback: returns `None` if PDF appears image-only (<200 chars), triggering File API path; also catches pdfplumber exceptions without crashing
+ 
+### Backend — Database
+- [x] Migration 018: `table_block` added as valid `block_type` string value (stored as Text — no enum change needed)
+- [x] Migration 018: `table_data` JSONB column added to `document_blocks` (nullable) — stores `{caption, headers, rows, context_note}` for `table_block` type blocks
+- [ ] `suggested_type` on `extraction_candidates` — deferred; tabular detection handled via source block lookup in the frontend instead
+- [ ] `requirement_content_type` and `table_data` on `requirements` — deferred to a future stage
+ 
+### Backend — Updated Decomposition Pipeline
+- [x] `decompose_document()` runs pdfplumber pre-processing before calling Gemini
+- [x] **Text path (primary)**: pdfplumber extracts text with `[TABLE BLOCK]` markers → sent as text prompt to Gemini; removes need for File API upload for digital PDFs
+- [x] **File API fallback**: if pdfplumber yields <200 chars (scanned PDF), original File API path used unchanged
+- [x] `_run_decomposition` persists `table_data` from raw block dicts when writing `DocumentBlock` rows
+- [x] Updated `DECOMPOSE_USER` prompt: documents `table_block` type and `table_data` JSON schema; instructs Gemini to output each `[TABLE BLOCK]` as a single block; includes worked examples for prose and table output
+ 
+### Backend — Updated Extraction Prompt
+- [x] `EXTRACT_USER_TEMPLATE` already receives `block_type` per block — Gemini will see `table_block` type and use the caption/context_note to generate title and statement for the candidate
+- [ ] Explicit `suggested_type = tabular` in extraction output — deferred with `suggested_type` column
+ 
+### Backend — API Endpoint Changes
+- [x] `BlockOut` schema includes `table_data: Optional[dict]`; `_block_to_dict` exposes it in all block responses
+- [x] `_next_requirement_id` in extraction router updated to include Build (`BUILD`) and Operations (`OPS`) prefixes
+- [ ] `accept` endpoint copying `table_data` to requirement — deferred with `requirement_content_type` column
+ 
+### Frontend — Block Viewer Updates
+- [x] `table_block` added to `BLOCK_TYPE_STYLES` (purple) and `BLOCK_TYPE_LABELS` (`'Table'`)
+- [x] Table blocks with `table_data` render as formatted HTML tables (purple header, alternating rows, scrollable); fall back to text content if `table_data` is null
+- [x] Table blocks selectable via checkbox for targeted extraction (existing mechanism, no change needed)
+- [ ] Inline cell editing — deferred
+ 
+### Frontend — Candidate Review Panel Updates
+- [x] Tabular candidates (source block is `table_block` with `table_data`) show purple **Tabular** badge and `TablePreview` component instead of truncated text statement
+- [x] `TableData` type exported from `types.ts`; `DocumentBlock.block_type` union updated to include `table_block`
+- [ ] "Edit & Accept" table editor — deferred
+ 
+### Frontend — Requirement Detail View Updates
+- [ ] Tabular requirement rendering — deferred with `requirement_content_type` column
+- [ ] Table editor in edit mode — deferred
+- [ ] Export rendering as formatted tables — deferred
+ 
+### Stage 14 Verification
+- [x] Upload a document containing tables — verify tables appear as single `table_block` entries (not fragmented rows) in the block viewer
+- [x] Verify table blocks render as formatted HTML tables with purple header row
+- [x] Verify table blocks show the purple "Table" badge
+- [skip] Select a table block and click "Extract Requirements from Selected" — verify the LLM proposes it as a single tabular candidate
+- [skip] Verify the tabular candidate shows a table preview + Tabular badge in the candidate review panel
+- [skip] Re-decompose a previously decomposed document — verify existing blocks replaced cleanly (no duplicates)
+- [skip] Verify pure-prose documents still decompose correctly (no regressions)
+- [skip] Upload a scanned / image-only PDF — verify the File API fallback path is used (check API container logs for "[decompose] pdfplumber returned no text — falling back to File API")
+ 
+---
+ 
+## Stage 15 — Block-Linked Requirements (Replace Text-Copy with Block Ownership)
+ 
+### Goal
+The current extraction pipeline copies a flattened text string from the LLM's
+candidate into the requirement's `statement` field. This destroys the rich
+structure that the decomposition pipeline (Stage 7) and table detection pipeline
+(Stage 14) worked to preserve — tables become text blobs, numbered sub-clauses
+lose their hierarchy, and multi-paragraph requirement descriptions collapse into
+a single string. Editing the requirement text then diverges from the source
+document, and there is no way to recover the original structure.
+ 
+Stage 15 replaces this text-copy handoff with direct block linkage. When a
+candidate is accepted, the requirement links to its source block(s) rather than
+copying their content. The block content becomes the authoritative requirement
+body, rendered natively in the detail view using the same block renderer built
+for the document viewer. The `statement` text field is retained as a fallback
+for manually-created requirements that have no source blocks.
+ 
+This eliminates the LLM rewriting/paraphrasing step for requirement body text —
+the original document text is preserved verbatim. The LLM's role in extraction
+shifts to identifying *which blocks* constitute requirements and suggesting
+metadata (title, classification, discipline, subtype), not rewriting content.
+ 
+### Backend — Database
+- [x] Alembic migration 019: new `requirement_blocks` junction table (id UUID, requirement_id FK to `requirements`, block_id FK to `document_blocks`, sort_order integer, created_at). Unique constraint on (requirement_id, block_id).
+- [x] Alembic migration 019: add `content_source` TEXT column to `requirements` (values: `manual`, `block_linked`; server default `manual`). `RequirementBlock` ORM model added to `models.py`.
+- [x] Existing `statement` text column retained — serves as editable body for `manual` requirements; populated with a plain-text search-index fallback for `block_linked` requirements.
+- [x] `source_block_ids` multi-block column **deferred** — single-block linkage via existing `source_block_id` FK is sufficient for Stage 15. Multi-block candidates are a future enhancement.
+ 
+### Backend — Candidate Acceptance (updated `POST /api/extraction-candidates/{id}/accept`)
+- [x] When accepting a candidate that has a `source_block_id`:
+  - [x] Set `requirement.content_source = 'block_linked'`
+  - [x] Create a `requirement_blocks` junction record linking the requirement to the source block
+  - [x] Populate `requirement.statement` with plain-text fallback from block content (pipe-delimited for table blocks; verbatim text for prose blocks)
+  - [x] Copy LLM-suggested metadata as before: title, classification, classification_subtype, discipline, source_clause
+  - [x] Set Owner = current user, Status = Draft
+ 
+### Backend — Requirement Detail Endpoint (updated `GET /api/requirements/{id}`)
+- [x] If `content_source = 'block_linked'`, include a `linked_blocks` array in the response (id, clause_number, heading, content, block_type, table_data, depth) ordered by `requirement_blocks.sort_order`
+- [x] Include `content_source` in both list and detail responses
+ 
+### Backend — Requirement List Endpoint (updated `GET /api/requirements`)
+- [x] `content_source` included in list response; table view uses `statement` plain-text fallback for display — no extra block queries
+ 
+### Backend — Block Linkage Management
+- [x] `POST /api/requirement-blocks` — link an existing document block to a requirement; sets `content_source = 'block_linked'`; ignores duplicates; returns updated `linked_blocks`
+- [x] `DELETE /api/requirement-blocks` — unlink a block from a requirement; reverts `content_source` to `'manual'` when the last block is removed; returns updated state
 
-At this point, the application additionally supports:
-- AI-assisted requirement extraction from uploaded PDFs via Anthropic API
-- Block-based document viewer with hierarchical clause structure (Notion-style)
-- Selective extraction from individual blocks or block ranges
-- Candidate review and acceptance workflow for extracted requirements
-- Source document dependency graph (interactive force-directed network)
-- Cross-reference detection during LLM extraction
-- Impact analysis ("if this code is revised, what specs are affected?")
-- Conflict record tracking between requirements
-- Orphan report identifying requirements with missing traceability
-- Gap analysis showing where requirement flow-down is incomplete
-- Global full-text search across requirements and documents
-- Source document revision tracking with stale requirement flagging
-- Formatted requirements document export (PDF/Word)
-- Email + password authentication with JWT tokens
+### Backend — Block Editing Propagation
+- [ ] `PUT /api/document-blocks/{id}`: regenerate plain-text `statement` fallback on all linked requirements after block edit — **deferred to future stage**
+ 
+### Backend — Updated Extraction Prompt
+- [ ] Simplify extraction prompt so LLM identifies block indices rather than rewriting body text — **deferred; current prompt still functional, body rewriting produces the candidate.statement used for preview**
+ 
+### Frontend — Requirement Detail View (Block Renderer)
+- [x] `BlockRenderer` component added to `RequirementDetail.tsx`: renders heading, prose (`requirement_clause`, `informational`), and table (`table_block`) blocks with clause number prefix and `TablePreview` for tabular data
+- [x] Statement section: if `content_source === 'block_linked'`, renders `BlockRenderer` inside a purple-bordered panel with "Linked to source document" badge and "View source document →" link; otherwise renders the existing textarea
+- [x] "View source document →" link passes linked block IDs through navigation; `SourceDocumentDetail` auto-switches to the Document Blocks tab, scrolls to the first linked block, and applies a persistent blue highlight to all linked blocks (distinct from the temporary yellow flash used for candidate source-clause links)
+- [x] `contentSource` and `linkedBlocks` state variables; populated from loaded detail response
+- [x] Save validation: statement is only required for `manual` requirements; block-linked requirements skip the statement check
+- [x] `LinkedBlock` and `TableData` types imported from `types.ts`
 
+### Backend — Vision-Assisted Table Parsing (Merged Cell Handling)
+- [x] pdfplumber's role is reduced to **table detection only** — use `find_tables()` to identify table bounding boxes and page locations, but do NOT rely on its cell-level text extraction for the final table structure
+- [x] For each detected table bounding box, **rasterize the table region** from the PDF page at 200+ DPI using pdfplumber's `.to_image()` cropped to the table's bounding box plus an 8-point margin (to capture caption text directly above)
+- [x] Send each rasterized table image to Gemini's vision API with a structured prompt requesting `headers: string[][]`, `rows`, `caption`, and `footnotes`; `response_mime_type="application/json"` enforced
+- [x] Parse Gemini's JSON response and store in the `table_data` JSONB field on the `document_block` — `table_data` schema extended:
+  ```
+  {
+    caption: string | null,
+    headers: string[][],          // array of arrays for multi-level headers
+    rows: string[][],
+    footnotes: string | null,     // new field
+    context_note: string | null,
+    table_parse_quality: 'vision' | 'fallback'   // new field
+  }
+  ```
+- [x] Fallback: if Gemini vision fails or returns unparseable JSON, fall back to pdfplumber's raw cell extraction; fallback `headers` is still wrapped as `string[][]` (`[padded[0]]`); `table_parse_quality` set to `'fallback'`
+- [x] `Pillow>=10.0.0` added to `api/requirements.txt` (required by pdfplumber `.to_image()`)
+ 
+### Backend — Table Detection Pipeline Updates
+- [x] Updated `services/table_extraction.py` — new pipeline:
+  - [x] **Step 1 — Bounding box detection**: pdfplumber `find_tables()` (unchanged)
+  - [x] **Step 2 — Table rasterization**: `_crop_table_image()` crops each table region and returns PNG bytes at 200 DPI
+  - [x] **Step 3 — Vision extraction**: `_vision_extract_table()` sends each PNG to Gemini Vision; normalises flat-array response to `string[][]`
+  - [x] **Step 4 — Region classification / prose extraction**: unchanged
+  - [x] **Step 5 — Text assembly**: prose sections interleaved with `[TABLE BLOCK — Page N, ID: TABLE_PN_IX]` markers; vision-extracted `table_data` embedded inline under `TABLE_DATA:` prefix for downstream Gemini to copy
+- [x] `extract_content_with_tables` return type changed to `tuple[str | None, dict[str, dict]]` (text + table_map); caller updated
+- [x] `decompose_document` in `extraction.py` post-processes blocks after LLM call: matches each `table_block` to its pre-extracted vision `table_data` by marker ID (primary) or positional order (fallback), replacing LLM-generated `table_data`
+- [x] DECOMPOSE_USER prompt updated: instructs Gemini to copy embedded `TABLE_DATA:` JSON verbatim; example updated to show `headers: string[][]` format
+ 
+### Frontend — Multi-Level Header Rendering
+- [x] `normalizeHeaders(headers: string[] | string[][]): string[][]` helper coerces legacy flat arrays to `[headers]` so both old and new DB records render identically
+- [x] `colspanGroups(row: string[]): {value, colspan}[]` helper compresses consecutive identical non-empty cells for `colspan` rendering
+- [x] `TablePreview` in `SourceDocumentDetail.tsx` updated: each inner array renders as a `<tr>` in `<thead>`; top row gets darker purple background when multi-level; `colspan` applied via `colspanGroups`
+- [x] `BlockRenderer` table section in `RequirementDetail.tsx` updated with the same logic
+- [x] `TypeScript TableData.headers` changed to `string[] | string[][]` in `types.ts`
+- [ ] The inline table editor for multi-level headers — **partially deferred**: in edit mode, multi-level headers are flattened to the leaf row for editing; header rows are read-only with a note; full per-row header editing (with colspan propagation) is a future enhancement
+ 
+### Frontend — Table Parse Quality Indicator
+- [x] Amber warning badge ("Table parsed with reduced accuracy — review for errors") shown above any table with `table_parse_quality === 'fallback'`
+- [x] Fallback tables have an amber left border (`border-l-2 border-l-amber-400`) in both `TablePreview` and `BlockRenderer`
+- [x] Vision-parsed tables display with no indicator (no visual noise when parsing succeeded)
+ 
+### Frontend — Block Editing in Requirement Detail
+- [x] Inline block editing: click prose block to edit in-place (textarea); table blocks have "Edit table" button with per-cell inputs
+ 
+### Frontend — "Merge to Requirement" Rewiring
+- [x] "Merge to Requirement" currently concatenates text → statement; rewire to create block-linked requirement — **deferred to future stage**
+ 
+### Frontend — Post-Acceptance Block Linking (Add/Remove Source Blocks)
+- [x] Per-block `× Remove` button in `BlockRenderer`; removing the last block converts the requirement back to `content_source = 'manual'` and shows the statement textarea
+- [x] `AddBlockPicker` component below the block panel: fetches all blocks from the linked source document, already-linked blocks shown as disabled, click "Add" to link additional blocks
+ 
+### Frontend — Candidate Review Panel Updates
+- [ ] Show source block content via BlockRenderer in candidate card (currently shows LLM statement preview) — **deferred to future stage**
+ 
+### Frontend — Requirements Table View
+- [x] No changes required — `statement` plain-text fallback populates the Statement column for both `manual` and `block_linked` requirements
+ 
+### Frontend — Requirements Document Export (PDF and Word)
+- [x] Export renderer reads `linked_blocks` for `block_linked` requirements — Word: prose blocks as paragraphs, `table_block` blocks as `Table Grid` Word tables (header rows bold, multi-level header support); PDF: prose as paragraphs, tables as ReportLab `Table` flowables (distributed column widths, header shading); single batch query per export call
+ 
+### Backend — Migration of Existing Stage 14 Requirements
+- [ ] One-time migration script for any existing Stage 14 tabular requirements — **deferred; no such requirements exist in production yet**
+ 
+### Stage 15 Verification
+- [x] Upload a Kiewit MSPEC-KIE document, decompose, and extract requirements — accept a prose candidate — verify the created requirement has `content_source = 'block_linked'` and the detail view renders the original block content (not a rewritten statement)
+- [x] Accept a tabular candidate (table_block) — verify the detail view renders a formatted table directly from the linked block, not from a `table_data` copy on the requirement
+- [ ] Accept a multi-block candidate (prose + table) — verify the detail view renders both blocks in order with appropriate spacing
+- [x] Select a prose block (e.g., §6.2.3 "Field butt welds shall be prepared...") and its associated table block (e.g., Table 1) via checkboxes — click "Merge to Requirement" — verify a single requirement is created with both blocks linked (not concatenated into a text string)
+- [x] Verify the merged requirement's detail view renders the prose paragraph followed by the formatted table, preserving the original document structure
+- [ ] Verify the merged requirement's `statement` field contains a plain-text fallback (for search), not the rendered body
+- [x] On a block-linked requirement, click "Add Source Block" — select an additional block from the source document — verify it appends to the requirement body in the detail view
+- [x] On a block-linked requirement with 3+ blocks, remove a middle block — verify the remaining blocks re-render in order with no gap
+- [x] Remove all blocks from a block-linked requirement — verify it converts to `content_source = 'manual'` with the statement fallback as editable body (no warning — converts silently)
+- [x] Edit the body of a block-linked requirement — verify the edit saves to the `document_blocks` record and the change is visible both in the requirement detail view and in the source document's block viewer
+- [x] Verify the warning banner appears when editing a shared block
+- [x] Create a manual requirement (no source document) — verify it uses the `statement` text field, has `content_source = 'manual'`, and the detail view renders the text area as before
+- [x] Search for a term that appears in a block-linked requirement's body — verify the full-text search finds it (via the `statement` plain-text fallback)
+- [x] Open the requirements table — verify block-linked and manual requirements both display correctly in the Statement column
+- [x] Export a requirements document containing both block-linked and manual requirements — verify prose blocks export as paragraphs, table blocks export as formatted tables, and manual requirements export as before
+- [x] Click "View source document →" on a block-linked requirement — verify navigation to the document viewer with the Document Blocks tab active and all linked blocks highlighted in blue
+- [descope] Run the Stage 14 migration script — verify any existing tabular requirements are converted to block-linked where source block linkage exists
+- [ ] Verify that accepting a candidate for a compound requirement (single block with multiple obligations) creates separate requirements that each link to the same source block but have different metadata
+- [x] Re-extract requirements from a document that already has accepted candidates — verify no duplicate `requirement_blocks` records are created
+ 
+---
+ 
 Proceed to Phase 3 (PRD §13) for AI-assisted conflict detection and
 AI-assisted derivation suggestions.
-
+ 
 Proceed to Phase 4 (PRD §13) for roles/permissions, owner dashboard,
-approval workflows, SSO, multi-project, API integrations, notifications,
+approval workflows, multi-project, API integrations, notifications,
 system-managed audit trail, CSV import/export, standard reports, and
-saved filter sharing.
+saved filter sharing. SSO is already handled via Azure AD.

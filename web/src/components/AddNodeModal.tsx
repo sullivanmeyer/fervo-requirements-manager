@@ -4,20 +4,50 @@ import { createNode } from '../api/hierarchy'
 interface Props {
   parentId: string | null
   parentName: string
+  parentDisciplines?: string[]  // pre-populate from parent node
   onCreated: () => void
   onCancel: () => void
+}
+
+const ALL_DISCIPLINES = [
+  'Mechanical',
+  'Electrical',
+  'I&C',
+  'Civil/Structural',
+  'Process',
+  'Fire Protection',
+  'General',
+]
+
+const DISC_COLORS: Record<string, string> = {
+  'Mechanical':        'bg-blue-100 text-blue-700 border-blue-200',
+  'Electrical':        'bg-amber-100 text-amber-700 border-amber-200',
+  'I&C':               'bg-purple-100 text-purple-700 border-purple-200',
+  'Civil/Structural':  'bg-orange-100 text-orange-700 border-orange-200',
+  'Process':           'bg-green-100 text-green-700 border-green-200',
+  'Fire Protection':   'bg-red-100 text-red-700 border-red-200',
+  'General':           'bg-gray-100 text-gray-500 border-gray-200',
 }
 
 export default function AddNodeModal({
   parentId,
   parentName,
+  parentDisciplines = [],
   onCreated,
   onCancel,
 }: Props) {
   const [name, setName] = useState('')
   const [description, setDescription] = useState('')
+  // Default to parent's disciplines so the tree inherits discipline context automatically
+  const [disciplines, setDisciplines] = useState<string[]>(parentDisciplines)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
+
+  const toggleDiscipline = (d: string) => {
+    setDisciplines((prev) =>
+      prev.includes(d) ? prev.filter((x) => x !== d) : [...prev, d],
+    )
+  }
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -29,6 +59,7 @@ export default function AddNodeModal({
         name: name.trim(),
         description: description.trim() || undefined,
         parent_id: parentId,
+        applicable_disciplines: disciplines.length > 0 ? disciplines : undefined,
       })
       onCreated()
     } catch (err) {
@@ -71,6 +102,43 @@ export default function AddNodeModal({
               className="w-full border border-gray-300 rounded px-3 py-2 text-sm focus:outline-none focus:ring-1 focus:ring-blue-400 resize-none"
               placeholder="Brief description of this node"
             />
+          </div>
+
+          <div>
+            <label className="block text-xs font-medium text-gray-600 mb-1.5">
+              Applicable Disciplines
+              <span className="ml-1 font-normal text-gray-400">
+                {parentDisciplines.length > 0 ? '(inherited from parent)' : '(leave empty = universal)'}
+              </span>
+            </label>
+            <div className="flex flex-wrap gap-1.5">
+              {ALL_DISCIPLINES.map((d) => {
+                const active = disciplines.includes(d)
+                return (
+                  <button
+                    key={d}
+                    type="button"
+                    onClick={() => toggleDiscipline(d)}
+                    className={`px-2.5 py-1 text-xs rounded border transition-colors ${
+                      active
+                        ? (DISC_COLORS[d] ?? 'bg-blue-100 text-blue-700 border-blue-200')
+                        : 'bg-white text-gray-400 border-gray-200 hover:border-gray-400'
+                    }`}
+                  >
+                    {d}
+                  </button>
+                )
+              })}
+              {disciplines.length > 0 && (
+                <button
+                  type="button"
+                  onClick={() => setDisciplines([])}
+                  className="px-2.5 py-1 text-xs rounded border border-dashed border-gray-300 text-gray-400 hover:text-gray-600"
+                >
+                  Clear
+                </button>
+              )}
+            </div>
           </div>
 
           {error && <p className="text-sm text-red-600">{error}</p>}

@@ -34,12 +34,15 @@ export default function SourceDocumentRegistry({ onOpenDetail, onCreateNew }: Pr
   const [search, setSearch] = useState('')
   const [typeFilter, setTypeFilter] = useState('')
   const [hideStubs, setHideStubs] = useState(true)
+  const [hideArchived, setHideArchived] = useState(true)
 
   const load = async () => {
     setLoading(true)
     setError(null)
     try {
-      setItems(await fetchSourceDocuments())
+      // Always fetch all (including archived) so the toggle works client-side
+      // without a round-trip.  The list is never large enough to matter.
+      setItems(await fetchSourceDocuments({ includeArchived: true }))
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load documents')
     } finally {
@@ -50,16 +53,18 @@ export default function SourceDocumentRegistry({ onOpenDetail, onCreateNew }: Pr
   useEffect(() => { void load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
   const stubCount = items.filter((d) => d.is_stub).length
+  const archivedCount = items.filter((d) => d.archived).length
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase()
     return items.filter((d) => {
       if (hideStubs && d.is_stub) return false
+      if (hideArchived && d.archived) return false
       if (typeFilter && d.document_type !== typeFilter) return false
       if (q && !d.document_id.toLowerCase().includes(q) && !d.title.toLowerCase().includes(q)) return false
       return true
     })
-  }, [items, search, typeFilter, hideStubs])
+  }, [items, search, typeFilter, hideStubs, hideArchived])
 
   return (
     <div className="flex flex-col h-full">
@@ -98,6 +103,19 @@ export default function SourceDocumentRegistry({ onOpenDetail, onCreateNew }: Pr
           title={hideStubs ? 'Showing registered documents only — click to show stubs' : 'Click to hide auto-detected stub documents'}
         >
           {hideStubs ? `Stubs hidden (${stubCount})` : `Stubs: ${stubCount}`}
+        </button>
+
+        {/* Archived toggle */}
+        <button
+          onClick={() => setHideArchived((v) => !v)}
+          className={`px-3 py-1.5 text-sm rounded border transition-colors ${
+            !hideArchived
+              ? 'bg-gray-200 border-gray-400 text-gray-700'
+              : 'border-gray-300 text-gray-600 hover:bg-gray-50'
+          }`}
+          title={hideArchived ? 'Click to show archived documents' : 'Click to hide archived documents'}
+        >
+          {hideArchived ? `Archived hidden (${archivedCount})` : `Archived: ${archivedCount}`}
         </button>
 
         {/* Count */}
@@ -142,7 +160,7 @@ export default function SourceDocumentRegistry({ onOpenDetail, onCreateNew }: Pr
               <>
                 <p className="text-base font-medium">No documents match the current filters</p>
                 <button
-                  onClick={() => { setSearch(''); setTypeFilter(''); setHideStubs(false) }}
+                  onClick={() => { setSearch(''); setTypeFilter(''); setHideStubs(false); setHideArchived(false) }}
                   className="text-sm mt-2 text-blue-600 underline"
                 >
                   Clear filters
@@ -169,7 +187,7 @@ export default function SourceDocumentRegistry({ onOpenDetail, onCreateNew }: Pr
                     key={doc.id}
                     onClick={() => onOpenDetail(doc.id)}
                     className={`border-b border-gray-100 cursor-pointer hover:bg-blue-50 transition-colors ${
-                      i % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'
+                      doc.archived ? 'opacity-50' : i % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'
                     }`}
                   >
                     <td className="px-3 py-2">
@@ -179,8 +197,13 @@ export default function SourceDocumentRegistry({ onOpenDetail, onCreateNew }: Pr
                           Stub
                         </span>
                       )}
+                      {doc.archived && (
+                        <span className="ml-1.5 px-1.5 py-0.5 text-xs bg-gray-100 text-gray-500 border border-gray-300 rounded font-medium">
+                          Archived
+                        </span>
+                      )}
                     </td>
-                    <td className={`px-3 py-2 text-sm max-w-xs truncate ${doc.is_stub ? 'text-gray-400 italic' : 'text-gray-800'}`}>{doc.title}</td>
+                    <td className={`px-3 py-2 text-sm max-w-xs truncate ${doc.is_stub || doc.archived ? 'text-gray-400 italic' : 'text-gray-800'}`}>{doc.title}</td>
                     <td className="px-3 py-2">
                       <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${typeCls}`}>
                         {doc.document_type}

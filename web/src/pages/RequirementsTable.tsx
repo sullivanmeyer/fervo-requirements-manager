@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { fetchRequirementsFiltered, type FilterConfig } from '../api/requirements'
+import { exportRequirementsDocument, fetchRequirementsFiltered, type FilterConfig } from '../api/requirements'
 import { fetchSites, fetchUnits } from '../api/requirements'
 import { fetchSourceDocuments } from '../api/sourceDocuments'
 import {
@@ -31,6 +31,9 @@ const DEFAULT_COLUMNS: Column[] = [
   { key: 'hierarchy_nodes', label: 'Hierarchy Nodes', visible: true, width: 200 },
   { key: 'sites', label: 'Site', visible: true, width: 120 },
   { key: 'units', label: 'Applicable Units', visible: true, width: 150 },
+  { key: 'open_conflict_count', label: 'Conflicts', visible: true, width: 90 },
+  { key: 'classification_subtype', label: 'Subtype', visible: false, width: 160 },
+  { key: 'stale', label: 'Stale', visible: false, width: 70 },
   { key: 'created_by', label: 'Created By', visible: true, width: 120 },
   { key: 'created_date', label: 'Created Date', visible: true, width: 110 },
 ]
@@ -76,7 +79,7 @@ const STATUS_CLASSES: Record<string, string> = {
 const STATUSES = ['Draft', 'Under Review', 'Approved', 'Superseded', 'Withdrawn']
 const CLASSIFICATIONS = ['Requirement', 'Guideline']
 const SOURCE_TYPES = ['Manual Entry', 'Derived from Document']
-const DISCIPLINES = ['Mechanical', 'Electrical', 'I&C', 'Civil/Structural', 'Process', 'Fire Protection', 'General']
+const DISCIPLINES = ['Mechanical', 'Electrical', 'I&C', 'Civil/Structural', 'Process', 'Fire Protection', 'General', 'Build', 'Operations']
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -108,11 +111,17 @@ function hasActiveFilters(f: FilterConfig): boolean {
     f.created_date_from ||
     f.created_date_to ||
     f.modified_date_from ||
-    f.modified_date_to
+    f.modified_date_to ||
+    f.has_open_conflicts !== undefined ||
+    f.classification_subtype ||
+    f.stale !== undefined ||
+    f.archived_only
   )
 }
 
 const EMPTY_FILTERS: FilterConfig = {}
+// On first load, hide terminal statuses — users can clear this to see everything.
+const DEFAULT_FILTERS: FilterConfig = { status: ['Draft', 'Under Review', 'Approved'] }
 
 // ---------------------------------------------------------------------------
 // Cell renderer
@@ -121,7 +130,17 @@ const EMPTY_FILTERS: FilterConfig = {}
 function renderCell(col: string, req: RequirementListItem): React.ReactNode {
   switch (col) {
     case 'requirement_id':
-      return <span className="font-mono text-xs font-medium text-blue-700">{req.requirement_id}</span>
+      return (
+        <span className="flex items-center gap-1">
+          {req.stale && (
+            <span
+              className="inline-block w-2 h-2 rounded-full bg-amber-400 shrink-0"
+              title="Stale — source document has been revised"
+            />
+          )}
+          <span className="font-mono text-xs font-medium text-blue-700">{req.requirement_id}</span>
+        </span>
+      )
     case 'status': {
       const cls = STATUS_CLASSES[req.status] ?? 'bg-gray-100 text-gray-700'
       return <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${cls}`}>{req.status}</span>
@@ -156,6 +175,23 @@ function renderCell(col: string, req: RequirementListItem): React.ReactNode {
           ))}
         </div>
       )
+    case 'open_conflict_count': {
+      const count = req.open_conflict_count ?? 0
+      if (count === 0) return <span className="text-gray-400 text-xs">—</span>
+      return (
+        <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">
+          {count} active
+        </span>
+      )
+    }
+    case 'classification_subtype':
+      return req.classification_subtype
+        ? <span className="text-xs text-gray-600 italic">{req.classification_subtype}</span>
+        : <span className="text-gray-400 text-xs">—</span>
+    case 'stale':
+      return req.stale
+        ? <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">Stale</span>
+        : <span className="text-gray-400 text-xs">—</span>
     default:
       return <span className="text-sm text-gray-700">{String(req[col as keyof RequirementListItem] ?? '—')}</span>
   }
@@ -317,6 +353,8 @@ interface Props {
   userName: string
   onOpenDetail: (id: string) => void
   onCreateNew: () => void
+  /** Pre-seed the hierarchy filter and open the filter bar (used by Block Diagram "View all requirements" links) */
+  initialHierarchyNodeId?: string
 }
 
 // ---------------------------------------------------------------------------
@@ -328,6 +366,7 @@ export default function RequirementsTable({
   userName,
   onOpenDetail,
   onCreateNew,
+  initialHierarchyNodeId,
 }: Props) {
   const [items, setItems] = useState<RequirementListItem[]>([])
   const [total, setTotal] = useState(0)
@@ -350,10 +389,14 @@ export default function RequirementsTable({
   const [sortKey, setSortKey] = useState<string>('requirement_id')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
 
-  // Filter state
-  const [filters, setFilters] = useState<FilterConfig>(EMPTY_FILTERS)
+  // Filter state — pre-seed hierarchy filter when navigated from the block diagram
+  const [filters, setFilters] = useState<FilterConfig>(
+    initialHierarchyNodeId
+      ? { ...DEFAULT_FILTERS, hierarchy_node_id: initialHierarchyNodeId, include_descendants: true }
+      : DEFAULT_FILTERS
+  )
   const [ownerInput, setOwnerInput] = useState('')
-  const [showFilterBar, setShowFilterBar] = useState(false)
+  const [showFilterBar, setShowFilterBar] = useState(!!initialHierarchyNodeId)
 
   // Reference data for filter dropdowns
   const [sites, setSites] = useState<Site[]>([])
@@ -412,7 +455,7 @@ export default function RequirementsTable({
 
   const clearFilters = () => {
     setPage(1)
-    setFilters(EMPTY_FILTERS)
+    setFilters(DEFAULT_FILTERS)
     setOwnerInput('')
   }
 
@@ -652,6 +695,15 @@ export default function RequirementsTable({
             </div>
           )}
           <button
+            onClick={() => exportRequirementsDocument({ ...filters, doc_title: 'Requirements Document' })}
+            className="px-3 py-1.5 text-sm bg-gray-100 text-gray-700 border border-gray-300 rounded hover:bg-gray-200 flex items-center gap-1.5"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+            </svg>
+            Export
+          </button>
+          <button
             onClick={onCreateNew}
             className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
           >
@@ -775,6 +827,51 @@ export default function RequirementsTable({
                 className={`px-1.5 py-1 text-xs border rounded ${filters.created_date_to ? 'border-blue-400' : 'border-gray-300'}`}
               />
             </div>
+
+            {/* Open conflicts filter */}
+            <label className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs border rounded cursor-pointer ${
+              filters.has_open_conflicts !== undefined
+                ? 'border-red-400 bg-red-50 text-red-700'
+                : 'border-gray-300 text-gray-600 hover:bg-gray-50'
+            }`}>
+              <input
+                type="checkbox"
+                checked={filters.has_open_conflicts === true}
+                onChange={(e) => setFilter('has_open_conflicts', e.target.checked ? true : undefined)}
+                className="rounded"
+              />
+              Has active conflicts
+            </label>
+
+            {/* Stale filter */}
+            <label className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs border rounded cursor-pointer ${
+              filters.stale !== undefined
+                ? 'border-amber-400 bg-amber-50 text-amber-700'
+                : 'border-gray-300 text-gray-600 hover:bg-gray-50'
+            }`}>
+              <input
+                type="checkbox"
+                checked={filters.stale === true}
+                onChange={(e) => setFilter('stale', e.target.checked ? true : undefined)}
+                className="rounded"
+              />
+              Stale only
+            </label>
+
+            {/* Archived filter */}
+            <label className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs border rounded cursor-pointer ${
+              filters.archived_only
+                ? 'border-red-400 bg-red-50 text-red-700'
+                : 'border-gray-300 text-gray-600 hover:bg-gray-50'
+            }`}>
+              <input
+                type="checkbox"
+                checked={filters.archived_only === true}
+                onChange={(e) => setFilter('archived_only', e.target.checked ? true : undefined)}
+                className="rounded"
+              />
+              Archived
+            </label>
 
           </div>
         </div>
