@@ -341,7 +341,49 @@ def _run_decomposition(doc_id: str, file_path: str):
             print(f"[decompose] ERROR: doc {doc_id} not found in DB")
             return
 
-        # Delete existing blocks
+        # ── Save block-linkage map before deleting ────────────────────────────
+        # Any block with requirement_blocks records needs its links preserved
+        # across re-decompose.  We key on (clause_number, block_type) — clause
+        # numbers are stable across document revisions.  Blocks without a clause
+        # number fall back to (sort_order, block_type).
+        linked_old_blocks = (
+            db.query(DocumentBlock)
+            .join(RequirementBlock, RequirementBlock.block_id == DocumentBlock.id)
+            .filter(DocumentBlock.source_document_id == doc_uuid)
+            .distinct()
+            .all()
+        )
+
+        # key → [(requirement_id, sort_order), ...]
+        clause_linkage: dict[tuple, list[tuple]] = {}
+        sort_linkage: dict[tuple, list[tuple]] = {}
+        all_pre_linked_req_ids: set[UUID] = set()
+
+        for blk in linked_old_blocks:
+            rbs = (
+                db.query(RequirementBlock)
+                .filter(RequirementBlock.block_id == blk.id)
+                .all()
+            )
+            pairs = [(rb.requirement_id, rb.sort_order) for rb in rbs]
+            for req_id, _ in pairs:
+                all_pre_linked_req_ids.add(req_id)
+            if blk.clause_number:
+                clause_linkage[(blk.clause_number, blk.block_type)] = pairs
+            else:
+                sort_linkage[(blk.sort_order, blk.block_type)] = pairs
+
+        # Pre-load all affected requirements so we can update content_source
+        req_by_id: dict[UUID, Requirement] = {}
+        if all_pre_linked_req_ids:
+            for req in (
+                db.query(Requirement)
+                .filter(Requirement.id.in_(list(all_pre_linked_req_ids)))
+                .all()
+            ):
+                req_by_id[req.id] = req
+
+        # ── Delete existing blocks (cascades to requirement_blocks) ───────────
         db.query(DocumentBlock).filter(
             DocumentBlock.source_document_id == doc_uuid
         ).delete(synchronize_session=False)
@@ -376,8 +418,46 @@ def _run_decomposition(doc_id: str, file_path: str):
             if parent_clause and parent_clause in clause_to_id:
                 block.parent_block_id = clause_to_id[parent_clause]
 
+        # ── Re-link requirements to new blocks ────────────────────────────────
+        relinked_req_ids: set[UUID] = set()
+
+        if clause_linkage or sort_linkage:
+            for block in new_blocks:
+                matched: list[tuple] | None = None
+                if block.clause_number:
+                    matched = clause_linkage.get((block.clause_number, block.block_type))
+                if matched is None:
+                    matched = sort_linkage.get((block.sort_order, block.block_type))
+
+                if matched:
+                    for req_id, sort_order in matched:
+                        db.add(RequirementBlock(
+                            id=uuid.uuid4(),
+                            requirement_id=req_id,
+                            block_id=block.id,
+                            sort_order=sort_order,
+                            created_at=datetime.utcnow(),
+                        ))
+                        relinked_req_ids.add(req_id)
+                        if req_id in req_by_id:
+                            req_by_id[req_id].content_source = "block_linked"
+
+            # Requirements whose blocks disappeared after re-decompose → manual
+            orphaned = all_pre_linked_req_ids - relinked_req_ids
+            for req_id in orphaned:
+                if req_id in req_by_id:
+                    req_by_id[req_id].content_source = "manual"
+            if orphaned:
+                print(
+                    f"[decompose] {len(orphaned)} requirement(s) reverted to manual "
+                    f"(no matching block found in new decomposition)"
+                )
+
         db.commit()
-        print(f"[decompose] {len(new_blocks)} blocks written for doc {doc_id}")
+        print(
+            f"[decompose] {len(new_blocks)} blocks written for doc {doc_id}"
+            + (f", {len(relinked_req_ids)} requirement link(s) preserved" if relinked_req_ids else "")
+        )
 
         # ---- Reference detection ----
         block_texts = [b.content for b in new_blocks if b.content.strip()]
