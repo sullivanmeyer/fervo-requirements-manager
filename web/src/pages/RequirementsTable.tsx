@@ -114,7 +114,8 @@ function hasActiveFilters(f: FilterConfig): boolean {
     f.modified_date_to ||
     f.has_open_conflicts !== undefined ||
     f.classification_subtype ||
-    f.stale !== undefined
+    f.stale !== undefined ||
+    f.archived_only
   )
 }
 
@@ -407,10 +408,6 @@ export default function RequirementsTable({
   const [showSavePrompt, setShowSavePrompt] = useState(false)
   const [saveFilterName, setSaveFilterName] = useState('')
 
-  // Export menu
-  const [showExportMenu, setShowExportMenu] = useState(false)
-  const exportMenuRef = useRef<HTMLDivElement>(null)
-
   // -------------------------------------------------------------------------
   // Load reference data on mount
   // -------------------------------------------------------------------------
@@ -446,18 +443,6 @@ export default function RequirementsTable({
   useEffect(() => {
     void load(page, filters)
   }, [page, filters]) // eslint-disable-line react-hooks/exhaustive-deps
-
-  // Close export menu when clicking outside
-  useEffect(() => {
-    if (!showExportMenu) return
-    const handler = (e: MouseEvent) => {
-      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
-        setShowExportMenu(false)
-      }
-    }
-    document.addEventListener('mousedown', handler)
-    return () => document.removeEventListener('mousedown', handler)
-  }, [showExportMenu])
 
   // -------------------------------------------------------------------------
   // Filter helpers
@@ -709,39 +694,15 @@ export default function RequirementsTable({
               ))}
             </div>
           )}
-          <div className="relative" ref={exportMenuRef}>
-            <button
-              onClick={() => setShowExportMenu((v) => !v)}
-              className="px-3 py-1.5 text-sm bg-gray-100 text-gray-700 border border-gray-300 rounded hover:bg-gray-200 flex items-center gap-1.5"
-            >
-              <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
-              </svg>
-              Export
-            </button>
-            {showExportMenu && (
-              <div className="absolute right-0 top-full mt-1 w-40 bg-white border border-gray-200 rounded shadow-lg z-50">
-                <button
-                  className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
-                  onClick={() => {
-                    setShowExportMenu(false)
-                    exportRequirementsDocument({ ...filters, format: 'word', doc_title: 'Requirements Document' })
-                  }}
-                >
-                  Download Word (.docx)
-                </button>
-                <button
-                  className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-gray-50"
-                  onClick={() => {
-                    setShowExportMenu(false)
-                    exportRequirementsDocument({ ...filters, format: 'pdf', doc_title: 'Requirements Document' })
-                  }}
-                >
-                  Download PDF
-                </button>
-              </div>
-            )}
-          </div>
+          <button
+            onClick={() => exportRequirementsDocument({ ...filters, doc_title: 'Requirements Document' })}
+            className="px-3 py-1.5 text-sm bg-gray-100 text-gray-700 border border-gray-300 rounded hover:bg-gray-200 flex items-center gap-1.5"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+            </svg>
+            Export
+          </button>
           <button
             onClick={onCreateNew}
             className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
@@ -895,6 +856,21 @@ export default function RequirementsTable({
                 className="rounded"
               />
               Stale only
+            </label>
+
+            {/* Archived filter */}
+            <label className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs border rounded cursor-pointer ${
+              filters.archived_only
+                ? 'border-red-400 bg-red-50 text-red-700'
+                : 'border-gray-300 text-gray-600 hover:bg-gray-50'
+            }`}>
+              <input
+                type="checkbox"
+                checked={filters.archived_only === true}
+                onChange={(e) => setFilter('archived_only', e.target.checked ? true : undefined)}
+                className="rounded"
+              />
+              Archived only
             </label>
 
           </div>

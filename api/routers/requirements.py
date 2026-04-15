@@ -290,7 +290,7 @@ def list_requirements(
     has_open_conflicts: Optional[bool] = Query(None),
     classification_subtype: Optional[str] = Query(None),
     stale: Optional[bool] = Query(None),
-    include_archived: bool = Query(False),
+    archived_only: bool = Query(False),
     db: Session = Depends(get_db),
 ):
     """
@@ -305,7 +305,9 @@ def list_requirements(
     base_q = db.query(Requirement).filter(
         Requirement.requirement_id != SELF_DERIVED_ID
     )
-    if not include_archived:
+    if archived_only:
+        base_q = base_q.filter(Requirement.archived == True)   # noqa: E712
+    else:
         base_q = base_q.filter(Requirement.archived == False)  # noqa: E712
 
     if status:

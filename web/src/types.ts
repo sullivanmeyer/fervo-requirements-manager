@@ -362,7 +362,6 @@ export interface OrphanRequirement {
 }
 
 export interface ExportParams {
-  format: 'word' | 'pdf'
   doc_title?: string
   status?: string[]
   classification?: string

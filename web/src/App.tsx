@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import React, { useCallback, useEffect, useRef, useState } from 'react'
 import { fetchHierarchy } from './api/hierarchy'
 import { globalSearch } from './api/search'
 import type { FlatNode, HierarchyNode, SearchResults } from './types'
@@ -187,6 +187,25 @@ export default function App() {
     () => localStorage.getItem('userName') ?? '',
   )
 
+  // Right detail panel width — user-draggable
+  const [detailWidth, setDetailWidth] = useState(288)
+
+  const handleResizeStart = (e: React.MouseEvent) => {
+    e.preventDefault()
+    const startX = e.clientX
+    const startW = detailWidth
+    const onMove = (me: MouseEvent) => {
+      const newW = Math.max(240, Math.min(600, startW + startX - me.clientX))
+      setDetailWidth(newW)
+    }
+    const onUp = () => {
+      document.removeEventListener('mousemove', onMove)
+      document.removeEventListener('mouseup', onUp)
+    }
+    document.addEventListener('mousemove', onMove)
+    document.addEventListener('mouseup', onUp)
+  }
+
   const selectedIdRef = useRef<string | null>(null)
   selectedIdRef.current = selectedNode?.id ?? null
 
@@ -344,19 +363,33 @@ export default function App() {
                 onViewAllRequirements={(nodeId) =>
                   setView({ page: 'requirements', initialHierarchyNodeId: nodeId })
                 }
+                onSelectNode={(nodeId) => {
+                  const found = flatNodes.find((f) => f.node.id === nodeId)?.node
+                  if (found) setSelectedNode(found)
+                }}
               />
             </section>
 
             {/* Right: node detail / edit panel — slides in when a node is selected */}
             {selectedNode && (
-              <aside className="w-72 bg-white border-l border-gray-200 flex flex-col overflow-hidden shrink-0 overflow-y-auto p-4">
-                <SidePanel
-                  node={selectedNode}
-                  flatNodes={flatNodes}
-                  onRefresh={() => void loadHierarchy()}
-                  onSelect={setSelectedNode}
+              <>
+                {/* Drag-resize handle — the thin bar the user grabs */}
+                <div
+                  className="w-1 shrink-0 bg-gray-200 hover:bg-blue-400 active:bg-blue-500 transition-colors cursor-col-resize"
+                  onMouseDown={handleResizeStart}
                 />
-              </aside>
+                <aside
+                  className="bg-white border-l border-gray-200 flex flex-col overflow-hidden shrink-0 overflow-y-auto p-4"
+                  style={{ width: detailWidth }}
+                >
+                  <SidePanel
+                    node={selectedNode}
+                    flatNodes={flatNodes}
+                    onRefresh={() => void loadHierarchy()}
+                    onSelect={setSelectedNode}
+                  />
+                </aside>
+              </>
             )}
           </>
         )}

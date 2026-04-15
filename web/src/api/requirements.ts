@@ -139,6 +139,7 @@ export type FilterConfig = {
   has_open_conflicts?: boolean
   classification_subtype?: string
   stale?: boolean
+  archived_only?: boolean
 }
 
 export async function fetchRequirementsFiltered(
@@ -170,6 +171,7 @@ export async function fetchRequirementsFiltered(
   if (filters.has_open_conflicts !== undefined) params.set('has_open_conflicts', String(filters.has_open_conflicts))
   if (filters.classification_subtype) params.set('classification_subtype', filters.classification_subtype)
   if (filters.stale !== undefined) params.set('stale', String(filters.stale))
+  if (filters.archived_only) params.set('archived_only', 'true')
 
   const res = await fetch(`${BASE}/requirements?${params.toString()}`)
   if (!res.ok) throw new Error(`Failed to load requirements (${res.status})`)
@@ -242,7 +244,6 @@ export async function fetchUnits(): Promise<Unit[]> {
  */
 export function exportRequirementsDocument(params: ExportParams): void {
   const qs = new URLSearchParams()
-  qs.set('format', params.format)
   if (params.doc_title) qs.set('doc_title', params.doc_title)
   if (params.status?.length) params.status.forEach((v) => qs.append('status', v))
   if (params.classification) qs.set('classification', params.classification)

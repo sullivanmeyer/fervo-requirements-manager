@@ -32,9 +32,10 @@ interface Props {
   hierarchyNodes: HierarchyNode[]
   onOpenDetail: (id: string) => void
   onViewAllRequirements: (nodeId: string) => void
+  onSelectNode?: (nodeId: string) => void
 }
 
-export default function BlockDiagram({ hierarchyNodes, onOpenDetail, onViewAllRequirements }: Props) {
+export default function BlockDiagram({ hierarchyNodes, onOpenDetail, onViewAllRequirements, onSelectNode }: Props) {
   const [currentNodeId, setCurrentNodeId] = useState<string | null>(null)
   const [blockView, setBlockView] = useState<BlockView | null>(null)
   const [ancestors, setAncestors] = useState<AncestorNode[]>([])
@@ -164,7 +165,11 @@ export default function BlockDiagram({ hierarchyNodes, onOpenDetail, onViewAllRe
 
         {/* Parent node header card */}
         <div className="mb-5 rounded-xl border-2 border-indigo-200 bg-indigo-50/60 overflow-hidden">
-          <div className="px-4 py-3 bg-indigo-100/80 flex items-center justify-between gap-3 flex-wrap">
+          <div
+            className="px-4 py-3 bg-indigo-100/80 flex items-center justify-between gap-3 flex-wrap cursor-pointer hover:bg-indigo-200/80 transition-colors"
+            onClick={() => onSelectNode?.(blockView.node.id)}
+            title="Click to open node details"
+          >
             <div className="flex items-center gap-2 min-w-0">
               <div className="w-2.5 h-2.5 rounded-sm bg-indigo-500 shrink-0" />
               <span className="text-sm font-bold text-indigo-900">{blockView.node.name}</span>
@@ -175,7 +180,7 @@ export default function BlockDiagram({ hierarchyNodes, onOpenDetail, onViewAllRe
               )}
             </div>
             <button
-              onClick={() => onViewAllRequirements(blockView.node.id)}
+              onClick={(e) => { e.stopPropagation(); onViewAllRequirements(blockView.node.id) }}
               className="text-xs text-indigo-600 hover:text-indigo-800 underline shrink-0"
               title="Open requirements table filtered to this node (all types, with descendants)"
             >
@@ -243,12 +248,16 @@ export default function BlockDiagram({ hierarchyNodes, onOpenDetail, onViewAllRe
                 key={child.id}
                 className="bg-white border border-gray-200 rounded-xl shadow-sm overflow-hidden flex flex-col"
               >
-                {/* Card header */}
-                <div className="px-3 py-2.5 bg-indigo-50 border-b border-indigo-100 flex items-center justify-between gap-2">
+                {/* Card header — clicking the background selects the node for the detail panel */}
+                <div
+                  className="px-3 py-2.5 bg-indigo-50 border-b border-indigo-100 flex items-center justify-between gap-2 cursor-pointer hover:bg-indigo-100/70 transition-colors"
+                  onClick={() => onSelectNode?.(child.id)}
+                  title="Click to open node details"
+                >
                   <div className="min-w-0 flex-1">
                     {child.has_children ? (
                       <button
-                        onClick={() => navigateTo(child.id)}
+                        onClick={(e) => { e.stopPropagation(); navigateTo(child.id) }}
                         className="text-xs font-bold text-indigo-800 hover:text-indigo-600 hover:underline truncate text-left w-full block"
                         title="Drill into this sub-system"
                       >
@@ -261,7 +270,7 @@ export default function BlockDiagram({ hierarchyNodes, onOpenDetail, onViewAllRe
                     )}
                   </div>
                   <button
-                    onClick={() => onViewAllRequirements(child.id)}
+                    onClick={(e) => { e.stopPropagation(); onViewAllRequirements(child.id) }}
                     className="text-xs text-indigo-400 hover:text-indigo-700 shrink-0 ml-1"
                     title="View all requirements for this node"
                   >

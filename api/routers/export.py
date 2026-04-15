@@ -1,14 +1,11 @@
-"""Requirements document export — Word (.docx) and PDF formats.
+"""Requirements document export — Word (.docx) format.
 
 Generates a structured document organized by the system hierarchy tree, with
 requirements listed under each node.  Accepts the same filter parameters as
 the requirements list endpoint so the export scope matches what the user sees
 in the table.
 
-Word format uses python-docx (headings + paragraphs).
-PDF format uses reportlab Platypus (headings + paragraphs).
-
-Both formats are streamed back as file downloads so the browser triggers Save As.
+Streamed back as a file download so the browser triggers Save As.
 """
 from __future__ import annotations
 
@@ -256,180 +253,12 @@ def _generate_word(
     return buf.getvalue()
 
 
-def _generate_pdf(
-    doc_title: str,
-    nodes_with_reqs: list[tuple[HierarchyNode, int, list[dict]]],
-    unassigned: list[dict],
-) -> bytes:
-    from reportlab.lib.pagesizes import LETTER  # type: ignore[import]
-    from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle  # type: ignore[import]
-    from reportlab.lib.units import inch  # type: ignore[import]
-    from reportlab.lib import colors  # type: ignore[import]
-    from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer  # type: ignore[import]
-
-    buf = io.BytesIO()
-    pdf_doc = SimpleDocTemplate(
-        buf,
-        pagesize=LETTER,
-        leftMargin=inch,
-        rightMargin=inch,
-        topMargin=inch,
-        bottomMargin=inch,
-        title=doc_title,
-    )
-    styles = getSampleStyleSheet()
-
-    h_styles = [
-        ParagraphStyle("H1", parent=styles["Heading1"], fontSize=16, spaceAfter=8),
-        ParagraphStyle("H2", parent=styles["Heading2"], fontSize=14, spaceAfter=6),
-        ParagraphStyle("H3", parent=styles["Heading3"], fontSize=12, spaceAfter=4),
-        ParagraphStyle("H4", parent=styles["Heading4"], fontSize=11, spaceAfter=4),
-    ]
-    req_id_style = ParagraphStyle(
-        "ReqId", parent=styles["Normal"], fontSize=10,
-        fontName="Helvetica-Bold", spaceAfter=2,
-    )
-    req_id_stale_style = ParagraphStyle(
-        "ReqIdStale", parent=styles["Normal"], fontSize=10,
-        fontName="Helvetica-Bold", textColor=colors.HexColor("#B45A09"), spaceAfter=2,
-    )
-    meta_style = ParagraphStyle(
-        "Meta", parent=styles["Normal"], fontSize=8,
-        textColor=colors.grey, spaceAfter=2,
-    )
-    body_style = ParagraphStyle(
-        "Body", parent=styles["Normal"], fontSize=10, spaceAfter=4,
-    )
-
-    story = []
-    story.append(Paragraph(doc_title, styles["Title"]))
-    story.append(Spacer(1, 0.2 * inch))
-
-    # Page width minus 1-inch margins on each side
-    CONTENT_WIDTH = 6.5 * inch
-
-    def _render_table_pdf(td: dict) -> None:
-        """Render a table_data dict as a ReportLab Table flowable."""
-        from reportlab.platypus import Table as RLTable, TableStyle  # type: ignore[import]
-
-        caption = td.get("caption")
-        raw_headers = td.get("headers") or []
-        rows = td.get("rows") or []
-        footnotes = td.get("footnotes")
-
-        if not raw_headers and not rows:
-            return
-
-        # Normalize headers to list-of-rows
-        if raw_headers and isinstance(raw_headers[0], str):
-            header_rows: list[list] = [list(raw_headers)]
-        else:
-            header_rows = [list(r) for r in raw_headers]
-
-        all_rows = header_rows + [list(r) for r in rows]
-        n_cols = max((len(r) for r in all_rows), default=1)
-
-        # Pad every row to n_cols
-        padded = [r + [""] * (n_cols - len(r)) for r in all_rows]
-
-        if caption:
-            story.append(Paragraph(caption, meta_style))
-
-        col_widths = [CONTENT_WIDTH / n_cols] * n_cols
-        tbl = RLTable(padded, colWidths=col_widths, hAlign="LEFT")
-
-        n_header_rows = len(header_rows)
-        tbl.setStyle(TableStyle([
-            ("FONTNAME", (0, 0), (-1, n_header_rows - 1), "Helvetica-Bold"),
-            ("BACKGROUND", (0, 0), (-1, n_header_rows - 1), colors.HexColor("#E8E8E8")),
-            ("FONTSIZE", (0, 0), (-1, -1), 8),
-            ("GRID", (0, 0), (-1, -1), 0.5, colors.grey),
-            ("TOPPADDING", (0, 0), (-1, -1), 3),
-            ("BOTTOMPADDING", (0, 0), (-1, -1), 3),
-            ("LEFTPADDING", (0, 0), (-1, -1), 4),
-            ("RIGHTPADDING", (0, 0), (-1, -1), 4),
-            ("VALIGN", (0, 0), (-1, -1), "TOP"),
-            ("WORDWRAP", (0, 0), (-1, -1), True),
-        ]))
-        story.append(tbl)
-        story.append(Spacer(1, 0.1 * inch))
-
-        if footnotes:
-            story.append(Paragraph(footnotes, meta_style))
-
-    def _render_block_pdf(block: dict) -> None:
-        bt = block.get("block_type", "")
-        td = block.get("table_data") or (
-            _parse_pipe_table(block.get("content", "")) if bt == "table_block" else None
-        )
-        content = block.get("content", "")
-
-        if bt == "table_block" and td:
-            _render_table_pdf(td)
-        elif bt == "heading":
-            heading_style = ParagraphStyle(
-                "BlockHeading", parent=styles["Normal"],
-                fontSize=10, fontName="Helvetica-Bold", spaceAfter=2,
-            )
-            story.append(Paragraph(content, heading_style))
-        else:
-            story.append(Paragraph(content, body_style))
-
-    def _add_requirement(req: dict) -> None:
-        id_text = f"[{req['id']}]  {req['title']}"
-        if req.get("stale"):
-            id_text += "  ⚠ STALE"
-            story.append(Paragraph(id_text, req_id_stale_style))
-        else:
-            story.append(Paragraph(id_text, req_id_style))
-
-        class_text = req["classification"]
-        if req.get("classification_subtype"):
-            class_text += f" — {req['classification_subtype']}"
-        meta = (
-            f"Classification: {class_text} | Discipline: {req['discipline']} "
-            f"| Status: {req['status']} | Owner: {req['owner']}"
-        )
-        story.append(Paragraph(meta, meta_style))
-
-        if req.get("content_source") == "block_linked" and req.get("blocks"):
-            for block in req["blocks"]:
-                _render_block_pdf(block)
-        else:
-            story.append(Paragraph(req["statement"], body_style))
-
-        source_parts = []
-        if req.get("source_document"):
-            source_parts.append(f"Source: {req['source_document']}")
-        if req.get("source_clause"):
-            source_parts.append(f"Clause: {req['source_clause']}")
-        if source_parts:
-            story.append(Paragraph("  ".join(source_parts), meta_style))
-
-        story.append(Spacer(1, 0.1 * inch))
-
-    for node, depth, reqs in nodes_with_reqs:
-        level = min(depth, 3)
-        story.append(Paragraph(node.name, h_styles[level]))
-        for req in reqs:
-            _add_requirement(req)
-
-    if unassigned:
-        story.append(Paragraph("Unassigned Requirements", h_styles[0]))
-        for req in unassigned:
-            _add_requirement(req)
-
-    pdf_doc.build(story)
-    return buf.getvalue()
-
-
 # ---------------------------------------------------------------------------
 # Export endpoint
 # ---------------------------------------------------------------------------
 
 @router.get("/export/requirements-document")
 def export_requirements(
-    format: str = Query("word", pattern="^(word|pdf)$"),
     doc_title: str = Query("Requirements Document"),
     status: Optional[list[str]] = Query(None),
     classification: Optional[str] = Query(None),
@@ -442,9 +271,9 @@ def export_requirements(
     db: Session = Depends(get_db),
 ):
     """
-    Export all matching requirements as a Word (.docx) or PDF file, organized
-    by the system hierarchy tree.  Accepts a subset of the list-requirements
-    filter params so the exported scope matches what the user sees in the table.
+    Export all matching requirements as a Word (.docx) file, organized by the
+    system hierarchy tree.  Accepts a subset of the list-requirements filter
+    params so the exported scope matches what the user sees in the table.
 
     Requirements are grouped under their hierarchy node headings in tree order.
     Requirements assigned to no node appear at the end under "Unassigned".
@@ -533,14 +362,9 @@ def export_requirements(
     # Requirements not assigned to any hierarchy node
     unassigned = [req_dicts[str(r.id)] for r in reqs if str(r.id) not in assigned_req_ids]
 
-    if format == "word":
-        content = _generate_word(doc_title, nodes_with_reqs, unassigned)
-        media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        filename = f"{doc_title.replace(' ', '_')}.docx"
-    else:
-        content = _generate_pdf(doc_title, nodes_with_reqs, unassigned)
-        media_type = "application/pdf"
-        filename = f"{doc_title.replace(' ', '_')}.pdf"
+    content = _generate_word(doc_title, nodes_with_reqs, unassigned)
+    media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    filename = f"{doc_title.replace(' ', '_')}.docx"
 
     return StreamingResponse(
         io.BytesIO(content),
