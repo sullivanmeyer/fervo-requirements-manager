@@ -870,7 +870,7 @@ export default function RequirementsTable({
                 onChange={(e) => setFilter('archived_only', e.target.checked ? true : undefined)}
                 className="rounded"
               />
-              Archived only
+              Archived
             </label>
 
           </div>
