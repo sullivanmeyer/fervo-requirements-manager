@@ -83,6 +83,34 @@ def _req_dict(req: Requirement, blocks: list[dict] | None = None) -> dict[str, A
 
 
 # ---------------------------------------------------------------------------
+# Table helpers
+# ---------------------------------------------------------------------------
+
+def _parse_pipe_table(content: str) -> dict | None:
+    """
+    Parse newline-and-pipe-delimited block content into a table_data dict.
+
+    Used as a fallback when a table_block has no structured table_data
+    (e.g. blocks extracted by pdfplumber before Vision parsing was active).
+
+    Each line becomes a row; `|` separates cells.  The first row is treated
+    as the header row when there are multiple rows.  Returns None if the
+    content has fewer than two pipe characters (not obviously tabular).
+    """
+    if content.count("|") < 2:
+        return None
+    lines = [ln.strip() for ln in content.splitlines() if ln.strip()]
+    if not lines:
+        return None
+    rows = [[cell.strip() for cell in ln.split("|")] for ln in lines]
+    n_cols = max(len(r) for r in rows)
+    rows = [r + [""] * (n_cols - len(r)) for r in rows]
+    if len(rows) > 1:
+        return {"caption": None, "headers": rows[0], "rows": rows[1:], "context_note": None}
+    return {"caption": None, "headers": [], "rows": rows, "context_note": None}
+
+
+# ---------------------------------------------------------------------------
 # Document generation
 # ---------------------------------------------------------------------------
 
@@ -160,7 +188,9 @@ def _generate_word(
 
     def _render_block_word(block: dict) -> None:
         bt = block.get("block_type", "")
-        td = block.get("table_data")
+        td = block.get("table_data") or (
+            _parse_pipe_table(block.get("content", "")) if bt == "table_block" else None
+        )
         content = block.get("content", "")
 
         if bt == "table_block" and td:
@@ -329,7 +359,9 @@ def _generate_pdf(
 
     def _render_block_pdf(block: dict) -> None:
         bt = block.get("block_type", "")
-        td = block.get("table_data")
+        td = block.get("table_data") or (
+            _parse_pipe_table(block.get("content", "")) if bt == "table_block" else None
+        )
         content = block.get("content", "")
 
         if bt == "table_block" and td:
