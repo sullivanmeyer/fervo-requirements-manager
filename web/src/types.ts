@@ -41,10 +41,20 @@ export interface BlockViewChild {
   performance_requirements: BlockViewReq[]
 }
 
+export interface InterfaceConnection {
+  id: string
+  requirement_id: string
+  title: string
+  status: string
+  node_ids: string[]
+  has_external: boolean
+}
+
 export interface BlockView {
   node: { id: string; name: string; description: string | null }
   performance_requirements: BlockViewReq[]
   children: BlockViewChild[]
+  interface_connections: InterfaceConnection[]
 }
 
 // ---------------------------------------------------------------------------

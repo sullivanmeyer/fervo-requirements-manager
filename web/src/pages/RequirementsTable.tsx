@@ -95,9 +95,14 @@ const DISCIPLINES = ['Mechanical', 'Electrical', 'I&C', 'Civil/Structural', 'Pro
 const VERIFICATION_METHODS = ['Analysis', 'Inspection', 'Test', 'Demonstration', 'Review of Record']
 
 const SUBTYPES_BY_CLASSIFICATION: Record<string, string[]> = {
-  Requirement: ['Performance Requirement', 'Design Requirement', 'Derived Requirement'],
-  Guideline: ['Lesson Learned', 'Procedure', 'Code'],
+  Requirement: ['Performance Requirement', 'Design Requirement', 'Derived Requirement', 'System Interface'],
+  Guideline: ['Lesson Learned', 'Procedure', 'Code', 'Technology Selection'],
 }
+
+const ALL_SUBTYPES = [
+  ...SUBTYPES_BY_CLASSIFICATION.Requirement,
+  ...SUBTYPES_BY_CLASSIFICATION.Guideline,
+]
 
 // Columns that support inline editing in Edit Mode
 const EDITABLE_COLS = new Set([
@@ -956,6 +961,7 @@ export default function RequirementsTable({
         if (field === 'status') updates.status = value
         else if (field === 'owner') updates.owner = value
         else if (field === 'classification') updates.classification = value
+        else if (field === 'classification_subtype') updates.classification_subtype = value || null
         else if (field === 'verification_method') updates.verification_method = value || null
         else updates[field] = value
 
@@ -1196,6 +1202,25 @@ export default function RequirementsTable({
                 {bulkField === 'classification' && bulkValue && (
                   <button
                     onClick={() => confirmBulkAction('classification', bulkValue, `Set Classification → "${String(bulkValue)}" (clears subtype)`)}
+                    className="text-xs px-2 py-1 bg-indigo-600 text-white rounded hover:bg-indigo-700"
+                  >Apply</button>
+                )}
+              </div>
+
+              {/* Set Subtype */}
+              <div className="flex items-center gap-1">
+                <select
+                  onFocus={() => setBulkField('classification_subtype')}
+                  onChange={(e) => { setBulkField('classification_subtype'); setBulkValue(e.target.value || null) }}
+                  className="text-xs border border-gray-300 rounded px-1.5 py-1 bg-white"
+                >
+                  <option value="" disabled>Set Subtype…</option>
+                  <option value="">— Clear subtype —</option>
+                  {ALL_SUBTYPES.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+                {bulkField === 'classification_subtype' && (
+                  <button
+                    onClick={() => confirmBulkAction('classification_subtype', bulkValue, bulkValue ? `Set Subtype → "${String(bulkValue)}"` : 'Clear Subtype')}
                     className="text-xs px-2 py-1 bg-indigo-600 text-white rounded hover:bg-indigo-700"
                   >Apply</button>
                 )}

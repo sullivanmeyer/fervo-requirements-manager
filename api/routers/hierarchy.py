@@ -210,6 +210,30 @@ def get_block_view(node_id: UUID, db: Session = Depends(get_db)):
                 node_reqs[hn_id_str].append(_req_dict(req))
                 seen_per_node[hn_id_str].add(req_id_str)
 
+    # System Interface requirements — returned separately as connection arrows
+    iface_reqs: list[Requirement] = (
+        db.query(Requirement)
+        .filter(
+            Requirement.classification_subtype == "System Interface",
+            Requirement.hierarchy_nodes.any(HierarchyNode.id.in_(all_node_ids)),
+        )
+        .order_by(Requirement.requirement_id)
+        .all()
+    )
+
+    interface_connections: list[dict[str, Any]] = []
+    for req in iface_reqs:
+        assigned_ids = [str(hn.id) for hn in req.hierarchy_nodes]
+        visible_ids = [nid for nid in assigned_ids if nid in all_node_id_strs]
+        if not visible_ids:
+            continue
+        has_external = any(nid not in all_node_id_strs for nid in assigned_ids)
+        interface_connections.append({
+            **_req_dict(req),
+            "node_ids": visible_ids,
+            "has_external": has_external,
+        })
+
     return {
         "node": {
             "id": str(node.id),
@@ -228,4 +252,5 @@ def get_block_view(node_id: UUID, db: Session = Depends(get_db)):
             }
             for c in children
         ],
+        "interface_connections": interface_connections,
     }

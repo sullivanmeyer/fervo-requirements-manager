@@ -7,7 +7,8 @@
  *     and their own Performance Requirements)
  *   - A breadcrumb trail and Back button for navigation
  *
- * Performance Requirements and Derived Requirements are shown as boxes.
+ * Performance Requirements and Derived Requirements are shown as boxes inside each node card.
+ * System Interface requirements appear as labeled connection arrows between the nodes they govern.
  * All other classification types are hidden to keep density manageable.
  * Users who need all requirement types can click "View all requirements" to open
  * the requirements table pre-filtered to that node.
@@ -18,7 +19,7 @@
  */
 import { useEffect, useState } from 'react'
 import { fetchAncestors, fetchBlockView } from '../api/hierarchy'
-import type { AncestorNode, BlockView, HierarchyNode } from '../types'
+import type { AncestorNode, BlockView, HierarchyNode, InterfaceConnection } from '../types'
 
 const STATUS_CLASSES: Record<string, string> = {
   Draft: 'bg-gray-100 text-gray-600',
@@ -33,6 +34,93 @@ interface Props {
   onOpenDetail: (id: string) => void
   onViewAllRequirements: (nodeId: string) => void
   onSelectNode?: (nodeId: string) => void
+}
+
+// ---------------------------------------------------------------------------
+// InterfacePanel — system interface connections rendered as labeled arrows
+// ---------------------------------------------------------------------------
+
+function InterfacePanel({
+  connections,
+  parentNode,
+  children,
+  statusClasses,
+  onOpenDetail,
+  onSelectNode,
+}: {
+  connections: InterfaceConnection[]
+  parentNode: BlockView['node']
+  children: BlockView['children']
+  statusClasses: Record<string, string>
+  onOpenDetail: (id: string) => void
+  onSelectNode?: (id: string) => void
+}) {
+  const resolveName = (nodeId: string): string | null => {
+    if (nodeId === parentNode.id) return parentNode.name
+    return children.find((c) => c.id === nodeId)?.name ?? null
+  }
+
+  return (
+    <div className="mb-5">
+      <p className="text-xs font-semibold text-gray-400 uppercase tracking-wider mb-2 px-1">
+        System Interfaces
+      </p>
+      <div className="flex flex-col gap-2">
+        {connections.map((conn) => {
+          const statusCls = statusClasses[conn.status] ?? 'bg-gray-100 text-gray-600'
+          const nodeLabels: { id: string | null; name: string; isExternal: boolean }[] = [
+            ...conn.node_ids.map((id) => ({ id, name: resolveName(id) ?? id, isExternal: false })),
+            ...(conn.has_external ? [{ id: null, name: 'External', isExternal: true }] : []),
+          ]
+
+          return (
+            <div
+              key={conn.id}
+              className="flex items-center gap-2 flex-wrap bg-white border border-violet-200 rounded-lg px-3 py-2 shadow-sm"
+            >
+              {/* Connected node chips */}
+              {nodeLabels.map((node, i) => (
+                <span key={node.id ?? 'external'} className="flex items-center gap-2">
+                  {i > 0 && (
+                    <span className="text-violet-300 font-bold text-sm select-none">↔</span>
+                  )}
+                  {node.isExternal ? (
+                    <span className="px-2 py-0.5 text-xs rounded border border-dashed border-gray-300 text-gray-400 italic">
+                      External
+                    </span>
+                  ) : (
+                    <button
+                      onClick={() => node.id && onSelectNode?.(node.id)}
+                      className="px-2 py-0.5 text-xs rounded border border-violet-300 bg-violet-50 text-violet-800 font-medium hover:bg-violet-100 transition-colors"
+                    >
+                      {node.name}
+                    </button>
+                  )}
+                </span>
+              ))}
+
+              {/* Divider */}
+              <span className="text-gray-200 select-none mx-1">|</span>
+
+              {/* Requirement chip */}
+              <div
+                onClick={() => onOpenDetail(conn.id)}
+                className="flex items-center gap-2 cursor-pointer hover:bg-gray-50 rounded px-1.5 py-0.5 transition-colors min-w-0 flex-1"
+              >
+                <span className="font-mono text-xs font-semibold text-violet-700 shrink-0">
+                  {conn.requirement_id}
+                </span>
+                <span className="text-xs text-gray-600 truncate">{conn.title}</span>
+                <span className={`px-1.5 py-0.5 rounded-full text-xs font-medium shrink-0 ${statusCls}`}>
+                  {conn.status}
+                </span>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </div>
+  )
 }
 
 export default function BlockDiagram({ hierarchyNodes, onOpenDetail, onViewAllRequirements, onSelectNode }: Props) {
@@ -235,6 +323,18 @@ export default function BlockDiagram({ hierarchyNodes, onOpenDetail, onViewAllRe
               </button>
             )}
           </div>
+        )}
+
+        {/* System Interface connections panel */}
+        {blockView.interface_connections.length > 0 && (
+          <InterfacePanel
+            connections={blockView.interface_connections}
+            parentNode={blockView.node}
+            children={blockView.children}
+            statusClasses={STATUS_CLASSES}
+            onOpenDetail={onOpenDetail}
+            onSelectNode={onSelectNode}
+          />
         )}
 
         {/* Child cards — responsive auto-fill grid */}
