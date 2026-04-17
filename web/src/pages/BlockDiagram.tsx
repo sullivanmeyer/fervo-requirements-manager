@@ -7,8 +7,8 @@
  *     and their own Performance Requirements)
  *   - A breadcrumb trail and Back button for navigation
  *
- * Only Performance Requirements (classification_subtype = 'Performance Requirement')
- * are shown. All other classification types are hidden to keep density manageable.
+ * Performance Requirements and Derived Requirements are shown as boxes.
+ * All other classification types are hidden to keep density manageable.
  * Users who need all requirement types can click "View all requirements" to open
  * the requirements table pre-filtered to that node.
  *

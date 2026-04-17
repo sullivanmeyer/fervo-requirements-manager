@@ -1597,7 +1597,7 @@ function EditCellWidget({
           <div className="text-xs text-indigo-600 italic px-1">Selecting…</div>
           <InlineMultiPicker
             anchorRect={rect}
-            options={hierarchyNodes}
+            options={flatHierarchy}
             selectedIds={value as string[]}
             onChange={onChange}
             onClose={onSave}

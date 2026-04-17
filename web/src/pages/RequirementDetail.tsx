@@ -61,8 +61,8 @@ import TagInput from '../components/TagInput'
 
 const CLASSIFICATIONS = ['Requirement', 'Guideline']
 const CLASSIFICATION_SUBTYPES: Record<string, string[]> = {
-  Requirement: ['Performance Requirement', 'Design Requirement', 'Derived Requirement'],
-  Guideline: ['Lesson Learned', 'Procedure', 'Code'],
+  Requirement: ['Performance Requirement', 'Design Requirement', 'Derived Requirement', 'System Interface'],
+  Guideline: ['Lesson Learned', 'Procedure', 'Code', 'Technology Selection'],
 }
 const SOURCE_TYPES = ['Manual Entry', 'Derived from Document']
 const STATUSES = ['Draft', 'Under Review', 'Approved', 'Superseded', 'Withdrawn']

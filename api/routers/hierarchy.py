@@ -176,12 +176,12 @@ def get_block_view(node_id: UUID, db: Session = Depends(get_db)):
         gc_by_parent.setdefault(pid, []).append(gc.name)
         gc_has_children.add(pid)
 
-    # Fetch Performance Requirements for this node and all its direct children
+    # Fetch Performance and Derived Requirements for this node and all its direct children
     all_node_ids = [node_id] + child_ids
     perf_reqs: list[Requirement] = (
         db.query(Requirement)
         .filter(
-            Requirement.classification_subtype == "Performance Requirement",
+            Requirement.classification_subtype.in_(["Performance Requirement", "Derived Requirement"]),
             Requirement.hierarchy_nodes.any(HierarchyNode.id.in_(all_node_ids)),
         )
         .order_by(Requirement.requirement_id)

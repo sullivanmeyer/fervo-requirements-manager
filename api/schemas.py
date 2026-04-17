@@ -22,8 +22,8 @@ DOCUMENT_TYPES = {
 CLASSIFICATIONS = {"Requirement", "Guideline"}
 
 CLASSIFICATION_SUBTYPES: dict[str, list[str]] = {
-    "Requirement": ["Performance Requirement", "Design Requirement", "Derived Requirement"],
-    "Guideline": ["Lesson Learned", "Procedure", "Code"],
+    "Requirement": ["Performance Requirement", "Design Requirement", "Derived Requirement", "System Interface"],
+    "Guideline": ["Lesson Learned", "Procedure", "Code", "Technology Selection"],
 }
 SOURCE_TYPES = {"Manual Entry", "Derived from Document"}
 STATUSES = {"Draft", "Under Review", "Approved", "Superseded", "Withdrawn"}
