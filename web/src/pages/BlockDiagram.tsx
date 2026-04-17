@@ -86,7 +86,7 @@ function InterfacePanel({
                   )}
                   {node.isExternal ? (
                     <span className="px-2 py-0.5 text-xs rounded border border-dashed border-gray-300 text-gray-400 italic">
-                      External
+                      {node.name}
                     </span>
                   ) : (
                     <button
