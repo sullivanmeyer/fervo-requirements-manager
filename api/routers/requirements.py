@@ -11,7 +11,7 @@ from sqlalchemy.orm import Session
 
 from database import get_db
 from models import ConflictRecord, DocumentBlock, HierarchyNode, Requirement, RequirementBlock, RequirementLink, Site, SourceDocument, Unit
-from schemas import RequirementCreate, RequirementUpdate
+from schemas import BulkUpdateRequest, RequirementCreate, RequirementUpdate
 
 router = APIRouter()
 
@@ -83,6 +83,11 @@ def _requirement_to_dict(
         "archived": req.archived,
         "created_by": req.created_by,
         "created_date": req.created_date.isoformat() if req.created_date else None,
+        # These two fields are included in the list response so the table view can
+        # display them in columns and use them for inline edit / bulk merge operations
+        # without an extra detail fetch.
+        "tags": req.tags or [],
+        "verification_method": req.verification_method,
         "hierarchy_nodes": [
             {"id": str(n.id), "name": n.name} for n in req.hierarchy_nodes
         ],
@@ -572,6 +577,132 @@ def update_requirement(
     db.commit()
     db.refresh(req)
     return _requirement_to_dict(req, detail=True, db=db)
+
+
+# ---------------------------------------------------------------------------
+# Bulk update
+# ---------------------------------------------------------------------------
+
+@router.patch("/requirements/bulk")
+def bulk_update_requirements(
+    data: BulkUpdateRequest,
+    db: Session = Depends(get_db),
+):
+    """
+    Apply the same field updates to multiple requirements in a single transaction.
+
+    Only the fields defined in BulkUpdateFields are accepted (status, classification,
+    classification_subtype, owner, verification_method, tags, hierarchy_node_ids,
+    site_ids, unit_ids).  All other fields require the full detail view.
+
+    Maximum batch size: 200 requirements.
+    Returns {"updated": N} on success.
+    """
+    if not data.requirement_ids:
+        raise HTTPException(status_code=400, detail="requirement_ids cannot be empty")
+    if len(data.requirement_ids) > 200:
+        raise HTTPException(status_code=400, detail="Maximum batch size is 200 requirements")
+
+    # Verify at least one field is being changed
+    updates_dict = data.updates.model_dump(
+        exclude_unset=True,
+        exclude={"hierarchy_node_ids", "site_ids", "unit_ids"},
+    )
+    has_rel = (
+        data.updates.hierarchy_node_ids is not None
+        or data.updates.site_ids is not None
+        or data.updates.unit_ids is not None
+    )
+    if not updates_dict and not has_rel:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    # Fetch all target requirements, excluding the self-derived sentinel
+    reqs = (
+        db.query(Requirement)
+        .filter(
+            Requirement.id.in_(data.requirement_ids),
+            Requirement.requirement_id != SELF_DERIVED_ID,
+            Requirement.archived == False,  # noqa: E712
+        )
+        .all()
+    )
+
+    found_ids = {str(r.id) for r in reqs}
+    missing = [str(i) for i in data.requirement_ids if str(i) not in found_ids]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Requirements not found or not editable: {', '.join(missing)}",
+        )
+
+    # Pre-validate and load relationship objects once (shared across all requirements)
+    new_nodes = None
+    if data.updates.hierarchy_node_ids is not None:
+        new_nodes = (
+            db.query(HierarchyNode)
+            .filter(HierarchyNode.id.in_(data.updates.hierarchy_node_ids))
+            .all()
+        )
+        if len(new_nodes) != len(data.updates.hierarchy_node_ids):
+            raise HTTPException(status_code=400, detail="One or more hierarchy_node_ids not found")
+
+    new_sites = None
+    if data.updates.site_ids is not None:
+        new_sites = db.query(Site).filter(Site.id.in_(data.updates.site_ids)).all()
+        if len(new_sites) != len(data.updates.site_ids):
+            raise HTTPException(status_code=400, detail="One or more site_ids not found")
+
+    new_units = None
+    if data.updates.unit_ids is not None:
+        new_units = db.query(Unit).filter(Unit.id.in_(data.updates.unit_ids)).all()
+        if len(new_units) != len(data.updates.unit_ids):
+            raise HTTPException(status_code=400, detail="One or more unit_ids not found")
+
+    now = datetime.utcnow()
+    user_tag = f" (bulk edit by {data.user_name})" if data.user_name else " (bulk edit)"
+    today_str = now.strftime("%Y-%m-%d")
+
+    for req in reqs:
+        history_entries: list[str] = []
+
+        # Apply scalar field updates
+        for field, new_val in updates_dict.items():
+            old_val = getattr(req, field, None)
+            if old_val != new_val:
+                history_entries.append(
+                    f"{field} changed from '{old_val}' to '{new_val}'"
+                )
+                setattr(req, field, new_val)
+
+        # When classification changes, clear subtype (preserve domain invariant)
+        if "classification" in updates_dict:
+            req.classification_subtype = None
+
+        # Apply relationship replacements
+        if new_nodes is not None:
+            req.hierarchy_nodes = new_nodes
+            history_entries.append("hierarchy_nodes updated")
+        if new_sites is not None:
+            req.sites = new_sites
+            history_entries.append("sites updated")
+        if new_units is not None:
+            req.units = new_units
+            history_entries.append("units updated")
+
+        # Append change_history entry
+        if history_entries:
+            entry = f"[{today_str}] " + "; ".join(history_entries) + user_tag
+            req.change_history = (
+                f"{entry}\n{req.change_history}" if req.change_history else entry
+            )
+
+        req.updated_at = now
+        if data.user_name:
+            req.last_modified_by = data.user_name
+        req.last_modified_date = now.date()
+
+    db.commit()
+    return {"updated": len(reqs)}
 
 
 # ---------------------------------------------------------------------------

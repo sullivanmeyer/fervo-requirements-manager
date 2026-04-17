@@ -249,3 +249,53 @@ class RequirementUpdate(BaseModel):
                 f"Must be one of: {', '.join(sorted(VERIFICATION_METHODS))}"
             )
         return v
+
+
+# ---------------------------------------------------------------------------
+# Bulk update
+# ---------------------------------------------------------------------------
+
+class BulkUpdateFields(BaseModel):
+    """Fields that can be changed via the bulk update endpoint.
+    Only the subset of requirement fields that are safe to bulk-edit is exposed.
+    Title, statement, discipline, rationale, comments, and traceability links
+    require the full detail view and are intentionally excluded.
+    """
+    status: Optional[str] = None
+    classification: Optional[str] = None
+    classification_subtype: Optional[str] = None
+    owner: Optional[str] = None
+    verification_method: Optional[str] = None
+    tags: Optional[List[str]] = None
+    hierarchy_node_ids: Optional[List[UUID]] = None
+    site_ids: Optional[List[UUID]] = None
+    unit_ids: Optional[List[UUID]] = None
+
+    @field_validator("status")
+    @classmethod
+    def validate_status_bulk(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in STATUSES:
+            raise ValueError(f"Must be one of: {', '.join(sorted(STATUSES))}")
+        return v
+
+    @field_validator("classification")
+    @classmethod
+    def validate_classification_bulk(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in CLASSIFICATIONS:
+            raise ValueError(f"Must be one of: {', '.join(sorted(CLASSIFICATIONS))}")
+        return v
+
+    @field_validator("verification_method")
+    @classmethod
+    def validate_verification_method_bulk(cls, v: Optional[str]) -> Optional[str]:
+        if v is not None and v not in VERIFICATION_METHODS:
+            raise ValueError(
+                f"Must be one of: {', '.join(sorted(VERIFICATION_METHODS))}"
+            )
+        return v
+
+
+class BulkUpdateRequest(BaseModel):
+    requirement_ids: List[UUID]
+    updates: BulkUpdateFields
+    user_name: Optional[str] = None

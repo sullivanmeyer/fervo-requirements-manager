@@ -1,6 +1,14 @@
+import { createPortal } from 'react-dom'
 import { useEffect, useRef, useState } from 'react'
-import { exportRequirementsDocument, fetchRequirementsFiltered, type FilterConfig } from '../api/requirements'
-import { fetchSites, fetchUnits } from '../api/requirements'
+import {
+  bulkUpdateRequirements,
+  exportRequirementsDocument,
+  fetchRequirementsFiltered,
+  fetchSites,
+  fetchUnits,
+  updateRequirement,
+  type FilterConfig,
+} from '../api/requirements'
 import { fetchSourceDocuments } from '../api/sourceDocuments'
 import {
   createSavedFilter,
@@ -8,7 +16,7 @@ import {
   fetchSavedFilters,
   type SavedFilter,
 } from '../api/savedFilters'
-import type { HierarchyNode, RequirementListItem, Site, Unit, SourceDocumentListItem } from '../types'
+import type { HierarchyNode, RequirementListItem, RequirementUpdatePayload, Site, Unit, SourceDocumentListItem } from '../types'
 
 // ---------------------------------------------------------------------------
 // Column definition
@@ -33,6 +41,8 @@ const DEFAULT_COLUMNS: Column[] = [
   { key: 'units', label: 'Applicable Units', visible: true, width: 150 },
   { key: 'open_conflict_count', label: 'Conflicts', visible: true, width: 90 },
   { key: 'classification_subtype', label: 'Subtype', visible: false, width: 160 },
+  { key: 'verification_method', label: 'Verification', visible: false, width: 150 },
+  { key: 'tags', label: 'Tags', visible: false, width: 180 },
   { key: 'stale', label: 'Stale', visible: false, width: 70 },
   { key: 'created_by', label: 'Created By', visible: true, width: 120 },
   { key: 'created_date', label: 'Created Date', visible: true, width: 110 },
@@ -45,7 +55,6 @@ function loadColumns(): Column[] {
     const raw = localStorage.getItem(COLUMNS_STORAGE_KEY)
     if (raw) {
       const saved = JSON.parse(raw) as { key: string; visible: boolean; width: number }[]
-      // Restore saved order + settings, add any new columns at the end
       const result: Column[] = []
       for (const s of saved) {
         const def = DEFAULT_COLUMNS.find((d) => d.key === s.key)
@@ -67,6 +76,10 @@ function saveColumns(cols: Column[]) {
   )
 }
 
+// ---------------------------------------------------------------------------
+// Enum constants
+// ---------------------------------------------------------------------------
+
 const STATUS_CLASSES: Record<string, string> = {
   Draft: 'bg-gray-100 text-gray-700',
   'Under Review': 'bg-yellow-100 text-yellow-800',
@@ -75,11 +88,23 @@ const STATUS_CLASSES: Record<string, string> = {
   Withdrawn: 'bg-red-100 text-red-800',
 }
 
-// Enum options matching the backend
 const STATUSES = ['Draft', 'Under Review', 'Approved', 'Superseded', 'Withdrawn']
 const CLASSIFICATIONS = ['Requirement', 'Guideline']
 const SOURCE_TYPES = ['Manual Entry', 'Derived from Document']
 const DISCIPLINES = ['Mechanical', 'Electrical', 'I&C', 'Civil/Structural', 'Process', 'Fire Protection', 'General', 'Build', 'Operations']
+const VERIFICATION_METHODS = ['Analysis', 'Inspection', 'Test', 'Demonstration', 'Review of Record']
+
+const SUBTYPES_BY_CLASSIFICATION: Record<string, string[]> = {
+  Requirement: ['Performance Requirement', 'Design Requirement', 'Derived Requirement'],
+  Guideline: ['Lesson Learned', 'Procedure', 'Code'],
+}
+
+// Columns that support inline editing in Edit Mode
+const EDITABLE_COLS = new Set([
+  'status', 'classification', 'classification_subtype',
+  'owner', 'verification_method', 'tags',
+  'hierarchy_nodes', 'sites', 'units',
+])
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -98,33 +123,47 @@ function flattenHierarchy(nodes: HierarchyNode[], depth = 0): { id: string; name
 
 function hasActiveFilters(f: FilterConfig): boolean {
   return !!(
-    f.status?.length ||
-    f.classification ||
-    f.discipline?.length ||
-    f.owner ||
-    f.source_type ||
-    f.source_document_id ||
-    f.hierarchy_node_id ||
-    f.site_id?.length ||
-    f.unit_id?.length ||
-    f.tags?.length ||
-    f.created_date_from ||
-    f.created_date_to ||
-    f.modified_date_from ||
-    f.modified_date_to ||
-    f.has_open_conflicts !== undefined ||
-    f.classification_subtype ||
-    f.stale !== undefined ||
-    f.archived_only
+    f.status?.length || f.classification || f.discipline?.length || f.owner ||
+    f.source_type || f.source_document_id || f.hierarchy_node_id || f.site_id?.length ||
+    f.unit_id?.length || f.tags?.length || f.created_date_from || f.created_date_to ||
+    f.modified_date_from || f.modified_date_to || f.has_open_conflicts !== undefined ||
+    f.classification_subtype || f.stale !== undefined || f.archived_only
   )
 }
 
-const EMPTY_FILTERS: FilterConfig = {}
-// On first load, hide terminal statuses — users can clear this to see everything.
 const DEFAULT_FILTERS: FilterConfig = { status: ['Draft', 'Under Review', 'Approved'] }
 
+/** Build the PUT payload for a single inline cell save. */
+function buildCellPayload(colKey: string, value: unknown): RequirementUpdatePayload {
+  switch (colKey) {
+    case 'status': return { status: String(value) }
+    case 'classification': return { classification: String(value), classification_subtype: null }
+    case 'classification_subtype': return { classification_subtype: value as string | null }
+    case 'owner': return { owner: String(value) }
+    case 'verification_method': return { verification_method: value as string | null }
+    case 'tags': return { tags: value as string[] }
+    case 'hierarchy_nodes': return { hierarchy_node_ids: value as string[] }
+    case 'sites': return { site_ids: value as string[] }
+    case 'units': return { unit_ids: value as string[] }
+    default: return {}
+  }
+}
+
+/** Read the current value for a cell from a list item (for edit initial state). */
+function getCellValue(colKey: string, req: RequirementListItem): unknown {
+  switch (colKey) {
+    case 'hierarchy_nodes': return req.hierarchy_nodes.map((n) => n.id)
+    case 'sites': return req.sites.map((s) => s.id)
+    case 'units': return req.units.map((u) => u.id)
+    case 'tags': return [...(req.tags ?? [])]
+    case 'classification_subtype': return req.classification_subtype
+    case 'verification_method': return req.verification_method
+    default: return req[colKey as keyof RequirementListItem] ?? null
+  }
+}
+
 // ---------------------------------------------------------------------------
-// Cell renderer
+// Cell renderer (display mode — unchanged from before, plus new tag/vm cases)
 // ---------------------------------------------------------------------------
 
 function renderCell(col: string, req: RequirementListItem): React.ReactNode {
@@ -133,10 +172,7 @@ function renderCell(col: string, req: RequirementListItem): React.ReactNode {
       return (
         <span className="flex items-center gap-1">
           {req.stale && (
-            <span
-              className="inline-block w-2 h-2 rounded-full bg-amber-400 shrink-0"
-              title="Stale — source document has been revised"
-            />
+            <span className="inline-block w-2 h-2 rounded-full bg-amber-400 shrink-0" title="Stale — source document has been revised" />
           )}
           <span className="font-mono text-xs font-medium text-blue-700">{req.requirement_id}</span>
         </span>
@@ -188,6 +224,20 @@ function renderCell(col: string, req: RequirementListItem): React.ReactNode {
       return req.classification_subtype
         ? <span className="text-xs text-gray-600 italic">{req.classification_subtype}</span>
         : <span className="text-gray-400 text-xs">—</span>
+    case 'verification_method':
+      return req.verification_method
+        ? <span className="text-xs text-gray-700">{req.verification_method}</span>
+        : <span className="text-gray-400 text-xs">—</span>
+    case 'tags':
+      return !req.tags || req.tags.length === 0 ? (
+        <span className="text-gray-400 italic text-xs">—</span>
+      ) : (
+        <div className="flex flex-wrap gap-1">
+          {req.tags.map((t) => (
+            <span key={t} className="px-1.5 py-0.5 bg-gray-100 text-gray-600 text-xs rounded">{t}</span>
+          ))}
+        </div>
+      )
     case 'stale':
       return req.stale
         ? <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">Stale</span>
@@ -198,14 +248,188 @@ function renderCell(col: string, req: RequirementListItem): React.ReactNode {
 }
 
 // ---------------------------------------------------------------------------
-// Multi-checkbox dropdown (reusable for status, discipline, etc.)
+// Inline edit cell widget — rendered in place of the display cell
+// ---------------------------------------------------------------------------
+
+function InlineDropdown({
+  value, options, nullable, onChange, onKeyDown,
+}: {
+  value: string | null
+  options: string[]
+  nullable?: boolean
+  onChange: (v: string | null) => void
+  onKeyDown: (e: React.KeyboardEvent) => void
+}) {
+  return (
+    <select
+      autoFocus
+      value={value ?? ''}
+      onChange={(e) => onChange(e.target.value || null)}
+      onKeyDown={onKeyDown}
+      className="w-full text-xs border border-blue-400 rounded px-1 py-0.5 bg-white focus:outline-none focus:ring-1 focus:ring-blue-500"
+    >
+      {nullable && <option value="">— None —</option>}
+      {options.map((o) => <option key={o} value={o}>{o}</option>)}
+    </select>
+  )
+}
+
+function InlineText({
+  value, onSave, onCancel,
+}: {
+  value: string
+  onSave: (v: string) => void
+  onCancel: () => void
+}) {
+  const [local, setLocal] = useState(value)
+  // Guard against double-save (Enter key fires save, then unmount triggers blur)
+  const submitted = useRef(false)
+  const submit = (v: string) => {
+    if (submitted.current) return
+    submitted.current = true
+    onSave(v)
+  }
+  return (
+    <input
+      autoFocus
+      type="text"
+      value={local}
+      onChange={(e) => setLocal(e.target.value)}
+      onBlur={() => submit(local)}
+      onKeyDown={(e) => {
+        if (e.key === 'Escape') { e.preventDefault(); onCancel() }
+        if (e.key === 'Enter') { e.preventDefault(); submit(local) }
+        // Tab: browser moves focus → blur fires → triggers save automatically
+      }}
+      className="w-full text-xs border border-blue-400 rounded px-1 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-500"
+    />
+  )
+}
+
+/** Tag chip editor: chips with × + text input to add. */
+function InlineTagEditor({
+  value,
+  onChange,
+  onSave,
+  onCancel,
+}: {
+  value: string[]
+  onChange: (v: string[]) => void
+  onSave: () => void
+  onCancel: () => void
+}) {
+  const [input, setInput] = useState('')
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onSave()
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [onSave])
+
+  const add = () => {
+    const t = input.trim()
+    if (t && !value.includes(t)) onChange([...value, t])
+    setInput('')
+  }
+
+  return (
+    <div ref={ref} className="flex flex-col gap-1 min-w-44 bg-white border border-blue-400 rounded p-1.5 shadow-sm">
+      <div className="flex flex-wrap gap-1">
+        {value.map((t) => (
+          <span key={t} className="flex items-center gap-0.5 px-1.5 py-0.5 bg-gray-100 text-gray-700 text-xs rounded">
+            {t}
+            <button type="button" onClick={() => onChange(value.filter((x) => x !== t))} className="text-gray-400 hover:text-red-500 ml-0.5 leading-none">×</button>
+          </span>
+        ))}
+      </div>
+      <div className="flex gap-1">
+        <input
+          autoFocus
+          type="text"
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter') { e.preventDefault(); add() }
+            if (e.key === 'Escape') { e.preventDefault(); onCancel() }
+          }}
+          placeholder="Add tag…"
+          className="flex-1 text-xs border border-gray-300 rounded px-1 py-0.5 focus:outline-none focus:ring-1 focus:ring-blue-400"
+        />
+        <button type="button" onClick={add} className="text-xs px-1.5 py-0.5 bg-blue-600 text-white rounded hover:bg-blue-700">+</button>
+        <button type="button" onClick={onSave} className="text-xs px-1.5 py-0.5 bg-gray-100 text-gray-600 border border-gray-300 rounded hover:bg-gray-200">✓</button>
+      </div>
+    </div>
+  )
+}
+
+/** Multi-select checkbox list, rendered in a fixed portal to escape table overflow. */
+function InlineMultiPicker({
+  anchorRect,
+  options,
+  selectedIds,
+  onChange,
+  onClose,
+}: {
+  anchorRect: DOMRect
+  options: { id: string; name: string; depth?: number }[]
+  selectedIds: string[]
+  onChange: (ids: string[]) => void
+  onClose: () => void
+}) {
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose()
+    }
+    // Slight delay so the initial click that opened this doesn't immediately close it
+    const id = setTimeout(() => document.addEventListener('mousedown', handler), 0)
+    return () => { clearTimeout(id); document.removeEventListener('mousedown', handler) }
+  }, [onClose])
+
+  const toggle = (id: string) =>
+    onChange(selectedIds.includes(id) ? selectedIds.filter((x) => x !== id) : [...selectedIds, id])
+
+  const style: React.CSSProperties = {
+    position: 'fixed',
+    top: anchorRect.bottom + 2,
+    left: anchorRect.left,
+    zIndex: 9999,
+    minWidth: 200,
+    maxWidth: 320,
+    maxHeight: 240,
+  }
+
+  return createPortal(
+    <div ref={ref} style={style} className="bg-white border border-gray-300 rounded shadow-lg overflow-y-auto py-1">
+      {options.length === 0 && <div className="px-3 py-2 text-xs text-gray-400 italic">No options</div>}
+      {options.map((opt) => (
+        <label
+          key={opt.id}
+          className="flex items-center gap-2 px-3 py-1.5 hover:bg-blue-50 cursor-pointer"
+          style={opt.depth !== undefined ? { paddingLeft: `${12 + opt.depth * 14}px` } : undefined}
+        >
+          <input type="checkbox" checked={selectedIds.includes(opt.id)} onChange={() => toggle(opt.id)} className="rounded" />
+          <span className="text-xs text-gray-700">{opt.name}</span>
+        </label>
+      ))}
+      <div className="border-t border-gray-100 px-3 py-1.5 flex justify-end gap-1.5 bg-gray-50">
+        <button type="button" onClick={onClose} className="text-xs px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-700">Done</button>
+      </div>
+    </div>,
+    document.body,
+  )
+}
+
+// ---------------------------------------------------------------------------
+// Multi-checkbox dropdown (reusable for filter bar)
 // ---------------------------------------------------------------------------
 
 function MultiCheckDropdown({
-  label,
-  options,
-  selected,
-  onChange,
+  label, options, selected, onChange,
 }: {
   label: string
   options: string[]
@@ -226,7 +450,6 @@ function MultiCheckDropdown({
 
   const toggle = (v: string) =>
     onChange(selected.includes(v) ? selected.filter((x) => x !== v) : [...selected, v])
-
   const active = selected.length > 0
 
   return (
@@ -260,11 +483,7 @@ function MultiCheckDropdown({
 // ---------------------------------------------------------------------------
 
 function HierarchyFilterPicker({
-  nodes,
-  selectedId,
-  includeDescendants,
-  onChangeId,
-  onChangeDescendants,
+  nodes, selectedId, includeDescendants, onChangeId, onChangeDescendants,
 }: {
   nodes: HierarchyNode[]
   selectedId: string
@@ -303,24 +522,12 @@ function HierarchyFilterPicker({
         <div className="absolute top-9 left-0 z-30 bg-white border border-gray-200 rounded shadow-lg w-64 flex flex-col max-h-72">
           <div className="overflow-y-auto flex-1 py-1">
             <label className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-50 cursor-pointer border-b border-gray-100">
-              <input
-                type="radio"
-                checked={!selectedId}
-                onChange={() => onChangeId('')}
-              />
+              <input type="radio" checked={!selectedId} onChange={() => onChangeId('')} />
               <span className="text-sm text-gray-500 italic">Any node</span>
             </label>
             {flat.map((n) => (
-              <label
-                key={n.id}
-                className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-50 cursor-pointer"
-                style={{ paddingLeft: `${12 + n.depth * 14}px` }}
-              >
-                <input
-                  type="radio"
-                  checked={selectedId === n.id}
-                  onChange={() => onChangeId(n.id)}
-                />
+              <label key={n.id} className="flex items-center gap-2 px-3 py-1.5 hover:bg-gray-50 cursor-pointer" style={{ paddingLeft: `${12 + n.depth * 14}px` }}>
+                <input type="radio" checked={selectedId === n.id} onChange={() => onChangeId(n.id)} />
                 <span className="text-sm text-gray-700">{n.name}</span>
               </label>
             ))}
@@ -328,12 +535,7 @@ function HierarchyFilterPicker({
           {selectedId && (
             <div className="border-t border-gray-100 px-3 py-2 shrink-0 bg-white">
               <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={includeDescendants}
-                  onChange={(e) => onChangeDescendants(e.target.checked)}
-                  className="rounded"
-                />
+                <input type="checkbox" checked={includeDescendants} onChange={(e) => onChangeDescendants(e.target.checked)} className="rounded" />
                 <span className="text-xs text-gray-600">Include sub-components</span>
               </label>
             </div>
@@ -353,7 +555,6 @@ interface Props {
   userName: string
   onOpenDetail: (id: string) => void
   onCreateNew: () => void
-  /** Pre-seed the hierarchy filter and open the filter bar (used by Block Diagram "View all requirements" links) */
   initialHierarchyNodeId?: string
 }
 
@@ -379,17 +580,14 @@ export default function RequirementsTable({
   const [columns, setColumns] = useState<Column[]>(loadColumns)
   const [showColMenu, setShowColMenu] = useState(false)
 
-  // Drag-and-drop column reorder state
   const [dragColKey, setDragColKey] = useState<string | null>(null)
   const [dropTargetKey, setDropTargetKey] = useState<string | null>(null)
 
-  // Resize tracking ref (avoids re-render per pixel)
   const resizingRef = useRef<{ key: string; startX: number; startWidth: number } | null>(null)
 
   const [sortKey, setSortKey] = useState<string>('requirement_id')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('asc')
 
-  // Filter state — pre-seed hierarchy filter when navigated from the block diagram
   const [filters, setFilters] = useState<FilterConfig>(
     initialHierarchyNodeId
       ? { ...DEFAULT_FILTERS, hierarchy_node_id: initialHierarchyNodeId, include_descendants: true }
@@ -398,20 +596,39 @@ export default function RequirementsTable({
   const [ownerInput, setOwnerInput] = useState('')
   const [showFilterBar, setShowFilterBar] = useState(!!initialHierarchyNodeId)
 
-  // Reference data for filter dropdowns
   const [sites, setSites] = useState<Site[]>([])
   const [units, setUnits] = useState<Unit[]>([])
   const [sourceDocs, setSourceDocs] = useState<SourceDocumentListItem[]>([])
 
-  // Saved filters
   const [savedFilters, setSavedFilters] = useState<SavedFilter[]>([])
   const [showSavePrompt, setShowSavePrompt] = useState(false)
   const [saveFilterName, setSaveFilterName] = useState('')
 
-  // -------------------------------------------------------------------------
-  // Load reference data on mount
-  // -------------------------------------------------------------------------
+  // ── Edit Mode ──────────────────────────────────────────────────────────────
+  const [editMode, setEditMode] = useState(false)
 
+  // Row selection
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [lastSelectedIdx, setLastSelectedIdx] = useState<number | null>(null)
+
+  // Active inline cell edit
+  const [editCell, setEditCell] = useState<{ rowId: string; colKey: string } | null>(null)
+  const [editValue, setEditValue] = useState<unknown>(null)
+  const [cellSaving, setCellSaving] = useState(false)
+  const [cellError, setCellError] = useState<string | null>(null)
+  /** "rowId:colKey" of the last successfully saved cell — drives the green flash */
+  const [flashCell, setFlashCell] = useState<string | null>(null)
+  /** Ref to the <td> being edited, used to anchor the InlineMultiPicker portal */
+  const editCellRef = useRef<HTMLTableCellElement | null>(null)
+
+  // Bulk toolbar
+  const [bulkField, setBulkField] = useState<string>('status')
+  const [bulkValue, setBulkValue] = useState<unknown>('')
+  const [bulkPending, setBulkPending] = useState<{ field: string; value: unknown; label: string } | null>(null)
+  const [bulkApplying, setBulkApplying] = useState(false)
+  const [bulkError, setBulkError] = useState<string | null>(null)
+
+  // ── Reference data ─────────────────────────────────────────────────────────
   useEffect(() => {
     void Promise.all([fetchSites(), fetchUnits(), fetchSourceDocuments(), fetchSavedFilters()])
       .then(([s, u, docs, sf]) => {
@@ -422,10 +639,7 @@ export default function RequirementsTable({
       })
   }, [])
 
-  // -------------------------------------------------------------------------
-  // Load requirements when page or filters change
-  // -------------------------------------------------------------------------
-
+  // ── Load requirements ──────────────────────────────────────────────────────
   const load = async (p = page, f = filters) => {
     setLoading(true)
     setError(null)
@@ -444,10 +658,14 @@ export default function RequirementsTable({
     void load(page, filters)
   }, [page, filters]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // -------------------------------------------------------------------------
-  // Filter helpers
-  // -------------------------------------------------------------------------
+  // Clear selection when filters or page change (selection is scoped to visible rows)
+  useEffect(() => {
+    setSelectedIds(new Set())
+    setLastSelectedIdx(null)
+    setEditCell(null)
+  }, [filters, page])
 
+  // ── Filter helpers ─────────────────────────────────────────────────────────
   const setFilter = <K extends keyof FilterConfig>(key: K, value: FilterConfig[K]) => {
     setPage(1)
     setFilters((f) => ({ ...f, [key]: value }))
@@ -461,10 +679,7 @@ export default function RequirementsTable({
 
   const active = hasActiveFilters(filters)
 
-  // -------------------------------------------------------------------------
-  // Saved filter actions
-  // -------------------------------------------------------------------------
-
+  // ── Saved filters ──────────────────────────────────────────────────────────
   const handleSaveFilter = async () => {
     if (!saveFilterName.trim()) return
     try {
@@ -492,17 +707,11 @@ export default function RequirementsTable({
     setOwnerInput(sf.filter_config.owner ?? '')
   }
 
-  // -------------------------------------------------------------------------
-  // Sort
-  // -------------------------------------------------------------------------
-
+  // ── Sort ───────────────────────────────────────────────────────────────────
   const handleSort = (key: string) => {
-    if (sortKey === key) {
-      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
-    } else {
-      setSortKey(key)
-      setSortDir('asc')
-    }
+    if (editMode) return // ignore sort clicks in edit mode to avoid accidental trigger
+    if (sortKey === key) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
+    else { setSortKey(key); setSortDir('asc') }
   }
 
   const sorted = [...items].sort((a, b) => {
@@ -515,15 +724,9 @@ export default function RequirementsTable({
     setColumns((cols) => cols.map((c) => (c.key === key ? { ...c, visible: !c.visible } : c)))
   }
 
-  // Persist column state whenever it changes
-  useEffect(() => {
-    saveColumns(columns)
-  }, [columns])
+  useEffect(() => { saveColumns(columns) }, [columns])
 
-  // -------------------------------------------------------------------------
-  // Column drag-and-drop reorder
-  // -------------------------------------------------------------------------
-
+  // ── Column drag-and-drop ───────────────────────────────────────────────────
   const handleColDragStart = (key: string) => setDragColKey(key)
   const handleColDragOver = (e: React.DragEvent, key: string) => {
     e.preventDefault()
@@ -542,17 +745,11 @@ export default function RequirementsTable({
     setDragColKey(null)
     setDropTargetKey(null)
   }
-  const handleColDragEnd = () => {
-    setDragColKey(null)
-    setDropTargetKey(null)
-  }
+  const handleColDragEnd = () => { setDragColKey(null); setDropTargetKey(null) }
 
-  // -------------------------------------------------------------------------
-  // Column resize
-  // -------------------------------------------------------------------------
-
+  // ── Column resize ──────────────────────────────────────────────────────────
   const handleResizeMouseDown = (e: React.MouseEvent, key: string, currentWidth: number) => {
-    e.stopPropagation()  // don't trigger sort
+    e.stopPropagation()
     e.preventDefault()
     resizingRef.current = { key, startX: e.clientX, startWidth: currentWidth }
 
@@ -564,30 +761,233 @@ export default function RequirementsTable({
         cols.map((c) => (c.key === resizingRef.current!.key ? { ...c, width: newWidth } : c)),
       )
     }
-
     const onMouseUp = () => {
       resizingRef.current = null
       document.removeEventListener('mousemove', onMouseMove)
       document.removeEventListener('mouseup', onMouseUp)
     }
-
     document.addEventListener('mousemove', onMouseMove)
     document.addEventListener('mouseup', onMouseUp)
   }
 
+  // ── Edit Mode toggle ───────────────────────────────────────────────────────
+  const toggleEditMode = () => {
+    setEditMode((prev) => {
+      if (prev) {
+        // Turning off — clear all edit state
+        setSelectedIds(new Set())
+        setLastSelectedIdx(null)
+        setEditCell(null)
+        setBulkPending(null)
+        setBulkError(null)
+      }
+      return !prev
+    })
+  }
+
+  // ── Row selection ──────────────────────────────────────────────────────────
+  const handleCheckboxClick = (req: RequirementListItem, idx: number, e: React.MouseEvent) => {
+    e.stopPropagation()
+    if (e.shiftKey && lastSelectedIdx !== null) {
+      const [from, to] = [Math.min(lastSelectedIdx, idx), Math.max(lastSelectedIdx, idx)]
+      const rangeIds = sorted.slice(from, to + 1).map((r) => r.id)
+      setSelectedIds((prev) => {
+        const next = new Set(prev)
+        rangeIds.forEach((id) => next.add(id))
+        return next
+      })
+    } else {
+      setSelectedIds((prev) => {
+        const next = new Set(prev)
+        if (next.has(req.id)) next.delete(req.id)
+        else next.add(req.id)
+        return next
+      })
+      setLastSelectedIdx(idx)
+    }
+  }
+
+  const allSelected = sorted.length > 0 && sorted.every((r) => selectedIds.has(r.id))
+  const someSelected = sorted.some((r) => selectedIds.has(r.id))
+
+  const handleSelectAll = () => {
+    if (allSelected) {
+      setSelectedIds((prev) => {
+        const next = new Set(prev)
+        sorted.forEach((r) => next.delete(r.id))
+        return next
+      })
+    } else {
+      setSelectedIds((prev) => {
+        const next = new Set(prev)
+        sorted.forEach((r) => next.add(r.id))
+        return next
+      })
+    }
+  }
+
+  // ── Inline cell edit ───────────────────────────────────────────────────────
+  const startEdit = (rowId: string, colKey: string, tdEl: HTMLTableCellElement) => {
+    if (!EDITABLE_COLS.has(colKey)) return
+    const req = items.find((r) => r.id === rowId)
+    if (!req) return
+    editCellRef.current = tdEl
+    setEditCell({ rowId, colKey })
+    setEditValue(getCellValue(colKey, req))
+    setCellError(null)
+  }
+
+  const cancelEdit = () => {
+    setEditCell(null)
+    setEditValue(null)
+    setCellError(null)
+    editCellRef.current = null
+  }
+
+  const saveCell = async (rowId: string, colKey: string, value: unknown) => {
+    setCellSaving(true)
+    setCellError(null)
+    try {
+      const payload = buildCellPayload(colKey, value)
+      const updated = await updateRequirement(rowId, payload)
+      // Merge the returned detail fields back into the list item
+      setItems((prev) =>
+        prev.map((r) =>
+          r.id === rowId
+            ? {
+                ...r,
+                status: updated.status,
+                classification: updated.classification,
+                classification_subtype: updated.classification_subtype,
+                owner: updated.owner,
+                verification_method: updated.verification_method,
+                tags: updated.tags,
+                hierarchy_nodes: updated.hierarchy_nodes,
+                sites: updated.sites,
+                units: updated.units,
+              }
+            : r,
+        ),
+      )
+      setEditCell(null)
+      setEditValue(null)
+      editCellRef.current = null
+      const flashKey = `${rowId}:${colKey}`
+      setFlashCell(flashKey)
+      setTimeout(() => setFlashCell(null), 900)
+    } catch (e) {
+      setCellError(e instanceof Error ? e.message : 'Save failed')
+    } finally {
+      setCellSaving(false)
+    }
+  }
+
+  const handleCellKeyDown = (e: React.KeyboardEvent, rowId: string, colKey: string) => {
+    if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); return }
+    if (e.key === 'Enter') {
+      e.preventDefault()
+      void saveCell(rowId, colKey, editValue)
+      return
+    }
+    if (e.key === 'Tab') {
+      e.preventDefault()
+      void saveCell(rowId, colKey, editValue)
+      // Move to next/prev editable visible column in same row
+      const editableCols = visibleColumns.filter((c) => EDITABLE_COLS.has(c.key))
+      const idx = editableCols.findIndex((c) => c.key === colKey)
+      const next = editableCols[e.shiftKey ? idx - 1 : idx + 1]
+      if (next) {
+        const tdEl = editCellRef.current?.closest('tr')?.querySelector<HTMLTableCellElement>(`[data-col="${next.key}"]`)
+        if (tdEl) startEdit(rowId, next.key, tdEl)
+      }
+    }
+  }
+
+  // ── Bulk actions ───────────────────────────────────────────────────────────
+  const selectedCount = selectedIds.size
+
+  const confirmBulkAction = (field: string, value: unknown, label: string) => {
+    if (selectedCount === 0) return
+    setBulkPending({ field, value, label })
+    setBulkError(null)
+  }
+
+  const applyBulkAction = async () => {
+    if (!bulkPending || bulkApplying) return
+    const { field, value } = bulkPending
+    setBulkApplying(true)
+    setBulkError(null)
+
+    try {
+      const ids = [...selectedIds]
+
+      if (field === 'add_hierarchy_node') {
+        // Append semantics: compute merged node IDs per requirement client-side
+        const newNodeIds = value as string[]
+        const results = await Promise.allSettled(
+          ids.map((id) => {
+            const req = items.find((r) => r.id === id)
+            const existing = req ? req.hierarchy_nodes.map((n) => n.id) : []
+            const merged = [...new Set([...existing, ...newNodeIds])]
+            return updateRequirement(id, { hierarchy_node_ids: merged })
+          })
+        )
+        // Refresh to get updated data
+        await load(page, filters)
+        const failed = results.filter((r) => r.status === 'rejected').length
+        if (failed > 0) throw new Error(`${failed} requirement(s) failed to update`)
+      } else if (field === 'add_tag') {
+        // Append semantics for tags
+        const newTag = String(value)
+        const results = await Promise.allSettled(
+          ids.map((id) => {
+            const req = items.find((r) => r.id === id)
+            const existing = req?.tags ?? []
+            const merged = existing.includes(newTag) ? existing : [...existing, newTag]
+            return updateRequirement(id, { tags: merged })
+          })
+        )
+        await load(page, filters)
+        const failed = results.filter((r) => r.status === 'rejected').length
+        if (failed > 0) throw new Error(`${failed} requirement(s) failed to update`)
+      } else {
+        // Set semantics: use bulk PATCH endpoint
+        const updates: Record<string, unknown> = {}
+        if (field === 'status') updates.status = value
+        else if (field === 'owner') updates.owner = value
+        else if (field === 'classification') updates.classification = value
+        else if (field === 'verification_method') updates.verification_method = value || null
+        else updates[field] = value
+
+        await bulkUpdateRequirements({
+          requirement_ids: ids,
+          updates,
+          user_name: userName || undefined,
+        })
+        await load(page, filters)
+      }
+
+      setSelectedIds(new Set())
+      setLastSelectedIdx(null)
+      setBulkPending(null)
+    } catch (e) {
+      setBulkError(e instanceof Error ? e.message : 'Bulk update failed')
+    } finally {
+      setBulkApplying(false)
+    }
+  }
+
+  // ── Derived ────────────────────────────────────────────────────────────────
   const visibleColumns = columns.filter((c) => c.visible)
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE))
 
-  // -------------------------------------------------------------------------
-  // Render
-  // -------------------------------------------------------------------------
+  const flatHierarchy = flattenHierarchy(hierarchyNodes)
 
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div className="flex flex-col h-full">
 
-      {/* ------------------------------------------------------------------ */}
-      {/* Saved filter quick-access bar                                        */}
-      {/* ------------------------------------------------------------------ */}
+      {/* Saved filter quick-access bar */}
       {savedFilters.length > 0 && (
         <div className="flex items-center gap-2 px-4 py-2 bg-gray-50 border-b border-gray-200 overflow-x-auto shrink-0">
           <span className="text-xs text-gray-400 shrink-0">Saved:</span>
@@ -611,14 +1011,18 @@ export default function RequirementsTable({
         </div>
       )}
 
-      {/* ------------------------------------------------------------------ */}
-      {/* Toolbar                                                              */}
-      {/* ------------------------------------------------------------------ */}
+      {/* Main toolbar */}
       <div className="flex items-center gap-2 px-4 py-3 bg-white border-b border-gray-200 shrink-0 flex-wrap">
         <span className="text-sm text-gray-500">
           {total} requirement{total !== 1 ? 's' : ''}
           {active && <span className="ml-1 text-blue-600 font-medium">(filtered)</span>}
         </span>
+
+        {editMode && selectedIds.size > 0 && (
+          <span className="px-2 py-0.5 text-xs font-medium bg-indigo-100 text-indigo-700 rounded-full">
+            {selectedIds.size} selected
+          </span>
+        )}
 
         <button
           onClick={() => setShowFilterBar((v) => !v)}
@@ -634,17 +1038,11 @@ export default function RequirementsTable({
 
         {active && (
           <>
-            <button
-              onClick={clearFilters}
-              className="px-2.5 py-1.5 text-xs border border-gray-300 text-gray-500 rounded hover:bg-gray-50"
-            >
+            <button onClick={clearFilters} className="px-2.5 py-1.5 text-xs border border-gray-300 text-gray-500 rounded hover:bg-gray-50">
               Clear filters
             </button>
             {!showSavePrompt && (
-              <button
-                onClick={() => setShowSavePrompt(true)}
-                className="px-2.5 py-1.5 text-xs border border-indigo-300 text-indigo-600 rounded hover:bg-indigo-50"
-              >
+              <button onClick={() => setShowSavePrompt(true)} className="px-2.5 py-1.5 text-xs border border-indigo-300 text-indigo-600 rounded hover:bg-indigo-50">
                 Save filter…
               </button>
             )}
@@ -659,24 +1057,30 @@ export default function RequirementsTable({
                   autoFocus
                   className="border border-gray-300 rounded px-2 py-1 text-xs w-36 focus:outline-none focus:ring-1 focus:ring-indigo-400"
                 />
-                <button
-                  onClick={() => void handleSaveFilter()}
-                  className="px-2 py-1 text-xs bg-indigo-600 text-white rounded hover:bg-indigo-700"
-                >
-                  Save
-                </button>
-                <button
-                  onClick={() => { setShowSavePrompt(false); setSaveFilterName('') }}
-                  className="px-2 py-1 text-xs border border-gray-300 text-gray-500 rounded hover:bg-gray-50"
-                >
-                  Cancel
-                </button>
+                <button onClick={() => void handleSaveFilter()} className="px-2 py-1 text-xs bg-indigo-600 text-white rounded hover:bg-indigo-700">Save</button>
+                <button onClick={() => { setShowSavePrompt(false); setSaveFilterName('') }} className="px-2 py-1 text-xs border border-gray-300 text-gray-500 rounded hover:bg-gray-50">Cancel</button>
               </div>
             )}
           </>
         )}
 
-        <div className="ml-auto flex gap-2 relative">
+        <div className="ml-auto flex gap-2 relative items-center">
+          {/* Edit Mode toggle */}
+          <button
+            onClick={toggleEditMode}
+            title={editMode ? 'Exit Edit Mode' : 'Enter Edit Mode — enables inline cell editing and bulk actions'}
+            className={`px-3 py-1.5 text-sm border rounded flex items-center gap-1.5 transition-colors ${
+              editMode
+                ? 'bg-indigo-600 text-white border-indigo-600 hover:bg-indigo-700'
+                : 'border-gray-300 text-gray-600 hover:bg-gray-50'
+            }`}
+          >
+            <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" />
+            </svg>
+            {editMode ? 'Editing' : 'Edit Mode'}
+          </button>
+
           <button
             onClick={() => setShowColMenu((v) => !v)}
             className="px-3 py-1.5 text-sm border border-gray-300 text-gray-600 rounded hover:bg-gray-50"
@@ -703,91 +1107,185 @@ export default function RequirementsTable({
             </svg>
             Export
           </button>
-          <button
-            onClick={onCreateNew}
-            className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700"
-          >
+          <button onClick={onCreateNew} className="px-3 py-1.5 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">
             + Create Requirement
           </button>
         </div>
       </div>
 
-      {/* ------------------------------------------------------------------ */}
-      {/* Filter bar — shown when toggled open                                 */}
-      {/* ------------------------------------------------------------------ */}
+      {/* ── Bulk Action Toolbar ── shown when editMode + selection */}
+      {editMode && selectedIds.size > 0 && (
+        <div className="px-4 py-2.5 bg-indigo-50 border-b border-indigo-200 shrink-0">
+          {bulkPending ? (
+            /* Confirmation row */
+            <div className="flex items-center gap-3 flex-wrap">
+              <span className="text-xs text-indigo-800 font-medium">
+                {bulkPending.label} on <strong>{selectedCount}</strong> requirement{selectedCount !== 1 ? 's' : ''}?
+              </span>
+              {bulkError && <span className="text-xs text-red-600">{bulkError}</span>}
+              <div className="flex gap-2 ml-auto">
+                <button
+                  onClick={() => { setBulkPending(null); setBulkError(null) }}
+                  disabled={bulkApplying}
+                  className="px-3 py-1 text-xs border border-gray-300 bg-white text-gray-600 rounded hover:bg-gray-50 disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={() => void applyBulkAction()}
+                  disabled={bulkApplying}
+                  className="px-3 py-1 text-xs bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:opacity-50 flex items-center gap-1"
+                >
+                  {bulkApplying && <span className="animate-spin">↻</span>}
+                  Confirm
+                </button>
+              </div>
+            </div>
+          ) : (
+            /* Action controls */
+            <div className="flex items-center gap-3 flex-wrap">
+              <span className="text-xs text-indigo-600 font-medium shrink-0">Bulk actions:</span>
+
+              {/* Set Status */}
+              <div className="flex items-center gap-1">
+                <select
+                  value={bulkField === 'status' ? String(bulkValue) : ''}
+                  onFocus={() => { setBulkField('status'); setBulkValue(STATUSES[0]) }}
+                  onChange={(e) => { setBulkField('status'); setBulkValue(e.target.value) }}
+                  className="text-xs border border-gray-300 rounded px-1.5 py-1 bg-white"
+                >
+                  <option value="" disabled>Set Status…</option>
+                  {STATUSES.map((s) => <option key={s} value={s}>{s}</option>)}
+                </select>
+                {bulkField === 'status' && bulkValue && (
+                  <button
+                    onClick={() => confirmBulkAction('status', bulkValue, `Set Status → "${String(bulkValue)}"`)}
+                    className="text-xs px-2 py-1 bg-indigo-600 text-white rounded hover:bg-indigo-700"
+                  >Apply</button>
+                )}
+              </div>
+
+              {/* Set Owner */}
+              <div className="flex items-center gap-1">
+                <input
+                  type="text"
+                  placeholder="Set Owner…"
+                  onFocus={() => setBulkField('owner')}
+                  onChange={(e) => { setBulkField('owner'); setBulkValue(e.target.value) }}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && bulkField === 'owner' && bulkValue) confirmBulkAction('owner', bulkValue, `Set Owner → "${String(bulkValue)}"`) }}
+                  className="text-xs border border-gray-300 rounded px-1.5 py-1 w-28 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                />
+                {bulkField === 'owner' && bulkValue && (
+                  <button
+                    onClick={() => confirmBulkAction('owner', bulkValue, `Set Owner → "${String(bulkValue)}"`)}
+                    className="text-xs px-2 py-1 bg-indigo-600 text-white rounded hover:bg-indigo-700"
+                  >Apply</button>
+                )}
+              </div>
+
+              {/* Set Classification */}
+              <div className="flex items-center gap-1">
+                <select
+                  onFocus={() => { setBulkField('classification'); setBulkValue(CLASSIFICATIONS[0]) }}
+                  onChange={(e) => { setBulkField('classification'); setBulkValue(e.target.value) }}
+                  className="text-xs border border-gray-300 rounded px-1.5 py-1 bg-white"
+                >
+                  <option value="" disabled>Set Classification…</option>
+                  {CLASSIFICATIONS.map((c) => <option key={c} value={c}>{c}</option>)}
+                </select>
+                {bulkField === 'classification' && bulkValue && (
+                  <button
+                    onClick={() => confirmBulkAction('classification', bulkValue, `Set Classification → "${String(bulkValue)}" (clears subtype)`)}
+                    className="text-xs px-2 py-1 bg-indigo-600 text-white rounded hover:bg-indigo-700"
+                  >Apply</button>
+                )}
+              </div>
+
+              {/* Set Verification Method */}
+              <div className="flex items-center gap-1">
+                <select
+                  onFocus={() => { setBulkField('verification_method'); setBulkValue(VERIFICATION_METHODS[0]) }}
+                  onChange={(e) => { setBulkField('verification_method'); setBulkValue(e.target.value) }}
+                  className="text-xs border border-gray-300 rounded px-1.5 py-1 bg-white"
+                >
+                  <option value="" disabled>Set Verification…</option>
+                  {VERIFICATION_METHODS.map((m) => <option key={m} value={m}>{m}</option>)}
+                </select>
+                {bulkField === 'verification_method' && bulkValue && (
+                  <button
+                    onClick={() => confirmBulkAction('verification_method', bulkValue, `Set Verification → "${String(bulkValue)}"`)}
+                    className="text-xs px-2 py-1 bg-indigo-600 text-white rounded hover:bg-indigo-700"
+                  >Apply</button>
+                )}
+              </div>
+
+              {/* Add Hierarchy Node */}
+              <AddHierarchyNodeBulk
+                flatNodes={flatHierarchy}
+                onApply={(nodeIds, names) =>
+                  confirmBulkAction('add_hierarchy_node', nodeIds, `Add Hierarchy Node(s): ${names.join(', ')}`)
+                }
+              />
+
+              {/* Add Tag */}
+              <div className="flex items-center gap-1">
+                <input
+                  type="text"
+                  placeholder="Add Tag…"
+                  onFocus={() => setBulkField('add_tag')}
+                  onChange={(e) => { setBulkField('add_tag'); setBulkValue(e.target.value) }}
+                  onKeyDown={(e) => { if (e.key === 'Enter' && bulkField === 'add_tag' && bulkValue) confirmBulkAction('add_tag', bulkValue, `Add Tag "${String(bulkValue)}"`) }}
+                  className="text-xs border border-gray-300 rounded px-1.5 py-1 w-24 focus:outline-none focus:ring-1 focus:ring-indigo-400"
+                />
+                {bulkField === 'add_tag' && bulkValue && (
+                  <button
+                    onClick={() => confirmBulkAction('add_tag', bulkValue, `Add Tag "${String(bulkValue)}"`)}
+                    className="text-xs px-2 py-1 bg-indigo-600 text-white rounded hover:bg-indigo-700"
+                  >Apply</button>
+                )}
+              </div>
+
+              <button
+                onClick={() => { setSelectedIds(new Set()); setLastSelectedIdx(null) }}
+                className="ml-auto text-xs text-indigo-500 hover:text-indigo-700 px-2 py-1 rounded hover:bg-indigo-100 shrink-0"
+              >
+                Clear selection
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* Filter bar */}
       {showFilterBar && (
         <div className="px-4 py-3 bg-gray-50 border-b border-gray-200 shrink-0">
           <div className="flex flex-wrap gap-2 items-center">
-
-            <MultiCheckDropdown
-              label="Status"
-              options={STATUSES}
-              selected={filters.status ?? []}
-              onChange={(v) => setFilter('status', v.length ? v : undefined)}
-            />
-
-            <MultiCheckDropdown
-              label="Discipline"
-              options={DISCIPLINES}
-              selected={filters.discipline ?? []}
-              onChange={(v) => setFilter('discipline', v.length ? v : undefined)}
-            />
-
-            {/* Classification single-select */}
-            <select
-              value={filters.classification ?? ''}
-              onChange={(e) => setFilter('classification', e.target.value || undefined)}
-              className={`px-2.5 py-1.5 text-xs border rounded bg-white ${
-                filters.classification ? 'border-blue-400 text-blue-700' : 'border-gray-300 text-gray-600'
-              }`}
-            >
+            <MultiCheckDropdown label="Status" options={STATUSES} selected={filters.status ?? []} onChange={(v) => setFilter('status', v.length ? v : undefined)} />
+            <MultiCheckDropdown label="Discipline" options={DISCIPLINES} selected={filters.discipline ?? []} onChange={(v) => setFilter('discipline', v.length ? v : undefined)} />
+            <select value={filters.classification ?? ''} onChange={(e) => setFilter('classification', e.target.value || undefined)} className={`px-2.5 py-1.5 text-xs border rounded bg-white ${filters.classification ? 'border-blue-400 text-blue-700' : 'border-gray-300 text-gray-600'}`}>
               <option value="">Classification</option>
               {CLASSIFICATIONS.map((c) => <option key={c} value={c}>{c}</option>)}
             </select>
-
-            {/* Source type single-select */}
-            <select
-              value={filters.source_type ?? ''}
-              onChange={(e) => setFilter('source_type', e.target.value || undefined)}
-              className={`px-2.5 py-1.5 text-xs border rounded bg-white ${
-                filters.source_type ? 'border-blue-400 text-blue-700' : 'border-gray-300 text-gray-600'
-              }`}
-            >
+            <select value={filters.source_type ?? ''} onChange={(e) => setFilter('source_type', e.target.value || undefined)} className={`px-2.5 py-1.5 text-xs border rounded bg-white ${filters.source_type ? 'border-blue-400 text-blue-700' : 'border-gray-300 text-gray-600'}`}>
               <option value="">Source Type</option>
               {SOURCE_TYPES.map((t) => <option key={t} value={t}>{t}</option>)}
             </select>
-
-            {/* Source document single-select */}
-            <select
-              value={filters.source_document_id ?? ''}
-              onChange={(e) => setFilter('source_document_id', e.target.value || undefined)}
-              className={`px-2.5 py-1.5 text-xs border rounded bg-white max-w-48 ${
-                filters.source_document_id ? 'border-blue-400 text-blue-700' : 'border-gray-300 text-gray-600'
-              }`}
-            >
+            <select value={filters.source_document_id ?? ''} onChange={(e) => setFilter('source_document_id', e.target.value || undefined)} className={`px-2.5 py-1.5 text-xs border rounded bg-white max-w-48 ${filters.source_document_id ? 'border-blue-400 text-blue-700' : 'border-gray-300 text-gray-600'}`}>
               <option value="">Source Document</option>
-              {sourceDocs.map((d) => (
-                <option key={d.id} value={d.id}>{d.document_id}</option>
-              ))}
+              {sourceDocs.map((d) => <option key={d.id} value={d.id}>{d.document_id}</option>)}
             </select>
-
-            {/* Sites multi-check */}
             <MultiCheckDropdown
               label="Site"
               options={sites.map((s) => s.name)}
               selected={(filters.site_id ?? []).map((id) => sites.find((s) => s.id === id)?.name ?? id)}
               onChange={(names) => setFilter('site_id', names.length ? names.map((n) => sites.find((s) => s.name === n)!.id) : undefined)}
             />
-
-            {/* Units multi-check */}
             <MultiCheckDropdown
               label="Unit"
               options={units.map((u) => u.name)}
               selected={(filters.unit_id ?? []).map((id) => units.find((u) => u.id === id)?.name ?? id)}
               onChange={(names) => setFilter('unit_id', names.length ? names.map((n) => units.find((u) => u.name === n)!.id) : undefined)}
             />
-
-            {/* Hierarchy node picker */}
             <HierarchyFilterPicker
               nodes={hierarchyNodes}
               selectedId={filters.hierarchy_node_id ?? ''}
@@ -795,84 +1293,31 @@ export default function RequirementsTable({
               onChangeId={(id) => setFilter('hierarchy_node_id', id || undefined)}
               onChangeDescendants={(v) => setFilter('include_descendants', v)}
             />
-
-            {/* Owner text search */}
             <input
               type="text"
               value={ownerInput}
-              onChange={(e) => {
-                setOwnerInput(e.target.value)
-                setFilter('owner', e.target.value || undefined)
-              }}
+              onChange={(e) => { setOwnerInput(e.target.value); setFilter('owner', e.target.value || undefined) }}
               placeholder="Owner…"
-              className={`px-2.5 py-1.5 text-xs border rounded w-28 focus:outline-none focus:ring-1 focus:ring-blue-400 ${
-                filters.owner ? 'border-blue-400' : 'border-gray-300'
-              }`}
+              className={`px-2.5 py-1.5 text-xs border rounded w-28 focus:outline-none focus:ring-1 focus:ring-blue-400 ${filters.owner ? 'border-blue-400' : 'border-gray-300'}`}
             />
-
-            {/* Date range filters */}
             <div className="flex items-center gap-1 text-xs text-gray-500">
               <span>Created</span>
-              <input
-                type="date"
-                value={filters.created_date_from ?? ''}
-                onChange={(e) => setFilter('created_date_from', e.target.value || undefined)}
-                className={`px-1.5 py-1 text-xs border rounded ${filters.created_date_from ? 'border-blue-400' : 'border-gray-300'}`}
-              />
+              <input type="date" value={filters.created_date_from ?? ''} onChange={(e) => setFilter('created_date_from', e.target.value || undefined)} className={`px-1.5 py-1 text-xs border rounded ${filters.created_date_from ? 'border-blue-400' : 'border-gray-300'}`} />
               <span>–</span>
-              <input
-                type="date"
-                value={filters.created_date_to ?? ''}
-                onChange={(e) => setFilter('created_date_to', e.target.value || undefined)}
-                className={`px-1.5 py-1 text-xs border rounded ${filters.created_date_to ? 'border-blue-400' : 'border-gray-300'}`}
-              />
+              <input type="date" value={filters.created_date_to ?? ''} onChange={(e) => setFilter('created_date_to', e.target.value || undefined)} className={`px-1.5 py-1 text-xs border rounded ${filters.created_date_to ? 'border-blue-400' : 'border-gray-300'}`} />
             </div>
-
-            {/* Open conflicts filter */}
-            <label className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs border rounded cursor-pointer ${
-              filters.has_open_conflicts !== undefined
-                ? 'border-red-400 bg-red-50 text-red-700'
-                : 'border-gray-300 text-gray-600 hover:bg-gray-50'
-            }`}>
-              <input
-                type="checkbox"
-                checked={filters.has_open_conflicts === true}
-                onChange={(e) => setFilter('has_open_conflicts', e.target.checked ? true : undefined)}
-                className="rounded"
-              />
+            <label className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs border rounded cursor-pointer ${filters.has_open_conflicts !== undefined ? 'border-red-400 bg-red-50 text-red-700' : 'border-gray-300 text-gray-600 hover:bg-gray-50'}`}>
+              <input type="checkbox" checked={filters.has_open_conflicts === true} onChange={(e) => setFilter('has_open_conflicts', e.target.checked ? true : undefined)} className="rounded" />
               Has active conflicts
             </label>
-
-            {/* Stale filter */}
-            <label className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs border rounded cursor-pointer ${
-              filters.stale !== undefined
-                ? 'border-amber-400 bg-amber-50 text-amber-700'
-                : 'border-gray-300 text-gray-600 hover:bg-gray-50'
-            }`}>
-              <input
-                type="checkbox"
-                checked={filters.stale === true}
-                onChange={(e) => setFilter('stale', e.target.checked ? true : undefined)}
-                className="rounded"
-              />
+            <label className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs border rounded cursor-pointer ${filters.stale !== undefined ? 'border-amber-400 bg-amber-50 text-amber-700' : 'border-gray-300 text-gray-600 hover:bg-gray-50'}`}>
+              <input type="checkbox" checked={filters.stale === true} onChange={(e) => setFilter('stale', e.target.checked ? true : undefined)} className="rounded" />
               Stale only
             </label>
-
-            {/* Archived filter */}
-            <label className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs border rounded cursor-pointer ${
-              filters.archived_only
-                ? 'border-red-400 bg-red-50 text-red-700'
-                : 'border-gray-300 text-gray-600 hover:bg-gray-50'
-            }`}>
-              <input
-                type="checkbox"
-                checked={filters.archived_only === true}
-                onChange={(e) => setFilter('archived_only', e.target.checked ? true : undefined)}
-                className="rounded"
-              />
+            <label className={`flex items-center gap-1.5 px-2.5 py-1.5 text-xs border rounded cursor-pointer ${filters.archived_only ? 'border-red-400 bg-red-50 text-red-700' : 'border-gray-300 text-gray-600 hover:bg-gray-50'}`}>
+              <input type="checkbox" checked={filters.archived_only === true} onChange={(e) => setFilter('archived_only', e.target.checked ? true : undefined)} className="rounded" />
               Archived
             </label>
-
           </div>
         </div>
       )}
@@ -885,9 +1330,7 @@ export default function RequirementsTable({
         </div>
       )}
 
-      {/* ------------------------------------------------------------------ */}
-      {/* Table                                                                */}
-      {/* ------------------------------------------------------------------ */}
+      {/* Table */}
       <div className="flex-1 overflow-auto">
         {loading ? (
           <div className="flex items-center justify-center h-32 text-gray-400 text-sm">Loading…</div>
@@ -906,37 +1349,58 @@ export default function RequirementsTable({
             )}
           </div>
         ) : (
-          <table className="text-left border-collapse" style={{ tableLayout: 'fixed', width: `${visibleColumns.reduce((s, c) => s + c.width, 0)}px`, minWidth: '100%' }}>
+          <table
+            className="text-left border-collapse"
+            style={{
+              tableLayout: 'fixed',
+              width: `${(editMode ? 36 : 0) + visibleColumns.reduce((s, c) => s + c.width, 0)}px`,
+              minWidth: '100%',
+            }}
+          >
             <colgroup>
+              {editMode && <col style={{ width: '36px' }} />}
               {visibleColumns.map((col) => (
                 <col key={col.key} style={{ width: `${col.width}px` }} />
               ))}
             </colgroup>
             <thead>
               <tr className="bg-gray-50 border-b border-gray-200 sticky top-0">
+                {editMode && (
+                  <th className="px-2 py-2.5 text-center w-9">
+                    <input
+                      type="checkbox"
+                      checked={allSelected}
+                      ref={(el) => { if (el) el.indeterminate = someSelected && !allSelected }}
+                      onChange={handleSelectAll}
+                      className="rounded cursor-pointer"
+                      title="Select / deselect all visible rows"
+                    />
+                  </th>
+                )}
                 {visibleColumns.map((col) => (
                   <th
                     key={col.key}
-                    draggable
+                    draggable={!editMode}
                     onDragStart={() => handleColDragStart(col.key)}
                     onDragOver={(e) => handleColDragOver(e, col.key)}
                     onDrop={() => handleColDrop(col.key)}
                     onDragEnd={handleColDragEnd}
                     onClick={() => handleSort(col.key)}
-                    className={`px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider cursor-pointer select-none whitespace-nowrap hover:bg-gray-100 relative ${
-                      dropTargetKey === col.key ? 'border-l-2 border-blue-400' : ''
-                    } ${dragColKey === col.key ? 'opacity-50' : ''}`}
+                    className={`px-3 py-2.5 text-xs font-semibold text-gray-500 uppercase tracking-wider select-none whitespace-nowrap relative ${
+                      editMode ? 'cursor-default' : 'cursor-pointer hover:bg-gray-100'
+                    } ${dropTargetKey === col.key ? 'border-l-2 border-blue-400' : ''} ${dragColKey === col.key ? 'opacity-50' : ''}`}
                     style={{ width: `${col.width}px` }}
                   >
                     {col.label}
-                    {sortKey === col.key && (
+                    {sortKey === col.key && !editMode && (
                       <span className="ml-1 text-blue-500">{sortDir === 'asc' ? '↑' : '↓'}</span>
                     )}
-                    {/* Resize handle */}
+                    {editMode && EDITABLE_COLS.has(col.key) && (
+                      <span className="ml-1 text-indigo-300" title="Editable — double-click a cell">✎</span>
+                    )}
                     <div
                       onMouseDown={(e) => handleResizeMouseDown(e, col.key, col.width)}
                       className="absolute right-0 top-0 h-full w-1.5 cursor-col-resize hover:bg-blue-300 opacity-0 hover:opacity-100"
-                      title="Drag to resize"
                     />
                   </th>
                 ))}
@@ -946,14 +1410,65 @@ export default function RequirementsTable({
               {sorted.map((req, i) => (
                 <tr
                   key={req.id}
-                  onClick={() => onOpenDetail(req.id)}
-                  className={`border-b border-gray-100 cursor-pointer hover:bg-blue-50 transition-colors ${
-                    i % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'
+                  onClick={editMode ? undefined : () => onOpenDetail(req.id)}
+                  className={`border-b border-gray-100 transition-colors ${
+                    editMode
+                      ? selectedIds.has(req.id)
+                        ? 'bg-indigo-50'
+                        : i % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'
+                      : `cursor-pointer hover:bg-blue-50 ${i % 2 === 0 ? 'bg-white' : 'bg-gray-50/50'}`
                   }`}
                 >
-                  {visibleColumns.map((col) => (
-                    <td key={col.key} className="px-3 py-2 align-top overflow-hidden" style={{ maxWidth: `${col.width}px` }}>{renderCell(col.key, req)}</td>
-                  ))}
+                  {editMode && (
+                    <td className="px-2 py-2 text-center w-9 align-middle">
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(req.id)}
+                        onClick={(e) => handleCheckboxClick(req, i, e)}
+                        onChange={() => {/* controlled via onClick */}}
+                        className="rounded cursor-pointer"
+                      />
+                    </td>
+                  )}
+                  {visibleColumns.map((col) => {
+                    const isEditing = editCell?.rowId === req.id && editCell?.colKey === col.key
+                    const isEditable = editMode && EDITABLE_COLS.has(col.key)
+                    const flashKey = `${req.id}:${col.key}`
+                    const isFlashing = flashCell === flashKey
+
+                    return (
+                      <td
+                        key={col.key}
+                        data-col={col.key}
+                        onDoubleClick={isEditable ? (e) => startEdit(req.id, col.key, e.currentTarget) : undefined}
+                        className={`px-3 py-2 align-top overflow-hidden transition-colors ${
+                          isFlashing ? 'bg-green-50' : ''
+                        } ${isEditing ? 'p-1' : ''} ${isEditable && !isEditing ? 'cursor-cell hover:bg-indigo-50/60' : ''}`}
+                        style={{ maxWidth: `${col.width}px` }}
+                      >
+                        {isEditing ? (
+                          <EditCellWidget
+                            colKey={col.key}
+                            req={req}
+                            value={editValue}
+                            onChange={setEditValue}
+                            onSave={() => void saveCell(req.id, col.key, editValue)}
+                            onSaveWithValue={(v) => void saveCell(req.id, col.key, v)}
+                            onCancel={cancelEdit}
+                            onKeyDown={(e) => handleCellKeyDown(e, req.id, col.key)}
+                            saving={cellSaving}
+                            error={cellError}
+                            hierarchyNodes={flatHierarchy}
+                            sites={sites}
+                            units={units}
+                            anchorEl={editCellRef.current}
+                          />
+                        ) : (
+                          renderCell(col.key, req)
+                        )}
+                      </td>
+                    )
+                  })}
                 </tr>
               ))}
             </tbody>
@@ -964,21 +1479,237 @@ export default function RequirementsTable({
       {/* Pagination */}
       {totalPages > 1 && (
         <div className="flex items-center justify-center gap-3 px-4 py-3 bg-white border-t border-gray-200 shrink-0 text-sm">
-          <button
-            onClick={() => setPage((p) => Math.max(1, p - 1))}
-            disabled={page === 1}
-            className="px-3 py-1 border border-gray-300 rounded disabled:opacity-40 hover:bg-gray-50"
-          >
-            ← Prev
-          </button>
+          <button onClick={() => setPage((p) => Math.max(1, p - 1))} disabled={page === 1} className="px-3 py-1 border border-gray-300 rounded disabled:opacity-40 hover:bg-gray-50">← Prev</button>
           <span className="text-gray-600">Page {page} of {totalPages}</span>
-          <button
-            onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-            disabled={page === totalPages}
-            className="px-3 py-1 border border-gray-300 rounded disabled:opacity-40 hover:bg-gray-50"
-          >
-            Next →
-          </button>
+          <button onClick={() => setPage((p) => Math.min(totalPages, p + 1))} disabled={page === totalPages} className="px-3 py-1 border border-gray-300 rounded disabled:opacity-40 hover:bg-gray-50">Next →</button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// EditCellWidget — renders the appropriate edit control for a cell
+// ---------------------------------------------------------------------------
+
+function EditCellWidget({
+  colKey,
+  req,
+  value,
+  onChange,
+  onSave,
+  onCancel,
+  onKeyDown,
+  saving,
+  error,
+  hierarchyNodes,
+  sites,
+  units,
+  anchorEl,
+}: {
+  colKey: string
+  req: RequirementListItem
+  value: unknown
+  onChange: (v: unknown) => void
+  onSave: () => void
+  onCancel: () => void
+  onKeyDown: (e: React.KeyboardEvent) => void
+  onSaveWithValue: (v: unknown) => void
+  saving: boolean
+  error: string | null
+  hierarchyNodes: { id: string; name: string; depth: number }[]
+  sites: Site[]
+  units: Unit[]
+  anchorEl: HTMLTableCellElement | null
+}) {
+  // Save immediately with the just-selected value.
+  // We bypass editValue state here because React state updates are async —
+  // the closure in `onSave` would still see the old value if we used setTimeout.
+  const handleSaveImmediately = (v: unknown) => {
+    onSaveWithValue(v)
+  }
+
+  switch (colKey) {
+    case 'status':
+      return (
+        <div>
+          <InlineDropdown value={String(value)} options={STATUSES} onChange={handleSaveImmediately} onKeyDown={onKeyDown} />
+          {error && <div className="text-xs text-red-500 mt-0.5">{error}</div>}
+          {saving && <div className="text-xs text-gray-400 mt-0.5">Saving…</div>}
+        </div>
+      )
+
+    case 'classification':
+      return (
+        <div>
+          <InlineDropdown value={String(value)} options={CLASSIFICATIONS} onChange={handleSaveImmediately} onKeyDown={onKeyDown} />
+          {error && <div className="text-xs text-red-500 mt-0.5">{error}</div>}
+        </div>
+      )
+
+    case 'classification_subtype': {
+      const opts = SUBTYPES_BY_CLASSIFICATION[req.classification] ?? []
+      return (
+        <div>
+          <InlineDropdown value={value as string | null} options={opts} nullable onChange={handleSaveImmediately} onKeyDown={onKeyDown} />
+          {error && <div className="text-xs text-red-500 mt-0.5">{error}</div>}
+        </div>
+      )
+    }
+
+    case 'verification_method':
+      return (
+        <div>
+          <InlineDropdown value={value as string | null} options={VERIFICATION_METHODS} nullable onChange={handleSaveImmediately} onKeyDown={onKeyDown} />
+          {error && <div className="text-xs text-red-500 mt-0.5">{error}</div>}
+        </div>
+      )
+
+    case 'owner':
+      return (
+        <div>
+          <InlineText
+            value={String(value ?? '')}
+            onSave={(v) => onSaveWithValue(v)}
+            onCancel={onCancel}
+          />
+          {error && <div className="text-xs text-red-500 mt-0.5">{error}</div>}
+        </div>
+      )
+
+    case 'tags':
+      return (
+        <div>
+          <InlineTagEditor
+            value={value as string[]}
+            onChange={onChange}
+            onSave={onSave}
+            onCancel={onCancel}
+          />
+          {error && <div className="text-xs text-red-500 mt-0.5">{error}</div>}
+        </div>
+      )
+
+    case 'hierarchy_nodes': {
+      const rect = anchorEl?.getBoundingClientRect()
+      return rect ? (
+        <div>
+          <div className="text-xs text-indigo-600 italic px-1">Selecting…</div>
+          <InlineMultiPicker
+            anchorRect={rect}
+            options={hierarchyNodes}
+            selectedIds={value as string[]}
+            onChange={onChange}
+            onClose={onSave}
+          />
+          {error && <div className="text-xs text-red-500 mt-0.5">{error}</div>}
+        </div>
+      ) : null
+    }
+
+    case 'sites': {
+      const rect = anchorEl?.getBoundingClientRect()
+      return rect ? (
+        <div>
+          <div className="text-xs text-indigo-600 italic px-1">Selecting…</div>
+          <InlineMultiPicker
+            anchorRect={rect}
+            options={sites}
+            selectedIds={value as string[]}
+            onChange={onChange}
+            onClose={onSave}
+          />
+          {error && <div className="text-xs text-red-500 mt-0.5">{error}</div>}
+        </div>
+      ) : null
+    }
+
+    case 'units': {
+      const rect = anchorEl?.getBoundingClientRect()
+      return rect ? (
+        <div>
+          <div className="text-xs text-indigo-600 italic px-1">Selecting…</div>
+          <InlineMultiPicker
+            anchorRect={rect}
+            options={units}
+            selectedIds={value as string[]}
+            onChange={onChange}
+            onClose={onSave}
+          />
+          {error && <div className="text-xs text-red-500 mt-0.5">{error}</div>}
+        </div>
+      ) : null
+    }
+
+    default:
+      return null
+  }
+}
+
+// ---------------------------------------------------------------------------
+// AddHierarchyNodeBulk — standalone inline picker for the bulk toolbar
+// ---------------------------------------------------------------------------
+
+function AddHierarchyNodeBulk({
+  flatNodes,
+  onApply,
+}: {
+  flatNodes: { id: string; name: string; depth: number }[]
+  onApply: (ids: string[], names: string[]) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [selectedIds, setSelectedIds] = useState<string[]>([])
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+
+  const toggle = (id: string) =>
+    setSelectedIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id])
+
+  return (
+    <div ref={ref} className="relative flex items-center gap-1">
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className={`text-xs border rounded px-1.5 py-1 whitespace-nowrap ${
+          selectedIds.length > 0
+            ? 'border-indigo-400 bg-indigo-50 text-indigo-700'
+            : 'border-gray-300 text-gray-600 bg-white hover:bg-gray-50'
+        }`}
+      >
+        Add Node{selectedIds.length > 0 ? ` (${selectedIds.length})` : '…'}
+      </button>
+      {selectedIds.length > 0 && (
+        <button
+          onClick={() => {
+            const names = selectedIds.map((id) => flatNodes.find((n) => n.id === id)?.name ?? id)
+            onApply(selectedIds, names)
+            setSelectedIds([])
+            setOpen(false)
+          }}
+          className="text-xs px-2 py-1 bg-indigo-600 text-white rounded hover:bg-indigo-700"
+        >
+          Apply
+        </button>
+      )}
+      {open && (
+        <div className="absolute top-8 left-0 z-30 bg-white border border-gray-300 rounded shadow-lg max-h-48 overflow-y-auto min-w-48 py-1">
+          {flatNodes.map((n) => (
+            <label
+              key={n.id}
+              className="flex items-center gap-2 px-3 py-1.5 hover:bg-blue-50 cursor-pointer"
+              style={{ paddingLeft: `${12 + n.depth * 14}px` }}
+            >
+              <input type="checkbox" checked={selectedIds.includes(n.id)} onChange={() => toggle(n.id)} className="rounded" />
+              <span className="text-xs text-gray-700">{n.name}</span>
+            </label>
+          ))}
         </div>
       )}
     </div>

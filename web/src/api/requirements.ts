@@ -1,4 +1,6 @@
 import type {
+  BulkUpdatePayload,
+  BulkUpdateResult,
   ExportParams,
   RequirementCreatePayload,
   RequirementDetail,
@@ -235,6 +237,27 @@ export async function fetchUnits(): Promise<Unit[]> {
   const res = await fetch(`${BASE}/units`)
   if (!res.ok) throw new Error(`Failed to load units (${res.status})`)
   return res.json() as Promise<Unit[]>
+}
+
+/**
+ * Apply a single set of field updates to multiple requirements in one transaction.
+ * "Set" operations (status, owner, etc.) call this directly.
+ * "Add" operations (append hierarchy nodes, tags) are handled client-side by computing
+ * the merged set per requirement and calling updateRequirement individually.
+ */
+export async function bulkUpdateRequirements(
+  payload: BulkUpdatePayload,
+): Promise<BulkUpdateResult> {
+  const res = await fetch(`${BASE}/requirements/bulk`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}))
+    throw new Error(extractDetail(err, `Bulk update failed (${res.status})`))
+  }
+  return res.json() as Promise<BulkUpdateResult>
 }
 
 /**
