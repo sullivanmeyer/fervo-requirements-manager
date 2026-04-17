@@ -573,6 +573,7 @@ export default function App() {
             <SourceDocumentDetail
               key={view.documentId ?? 'new-document'}
               documentId={view.documentId}
+              hierarchyNodes={nodes}
               initialHighlightBlockIds={view.highlightBlockIds}
               onSaved={(savedId) =>
                 setView({ page: 'document-detail', documentId: savedId })

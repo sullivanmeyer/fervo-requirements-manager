@@ -17,7 +17,7 @@
  *   • Accept (one-click), Edit & Accept (inline form), Reject
  *   • Accepted candidates display a link to the created requirement
  */
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef, useState, useMemo } from 'react'
 import {
   archiveSourceDocument,
   createSourceDocument,
@@ -43,13 +43,17 @@ import {
   fetchIncomingReferences,
   fetchOutgoingReferences,
 } from '../api/documentReferences'
+import { fetchSites, fetchUnits } from '../api/requirements'
 import type {
   DocumentBlock,
   DocumentReferenceListItem,
   ExtractionCandidate,
+  HierarchyNode,
+  Site,
   SourceDocumentDetail as DocDetail,
   SourceDocumentListItem,
   TableData,
+  Unit,
 } from '../types'
 
 // ---------------------------------------------------------------------------
@@ -76,6 +80,22 @@ const DISCIPLINES = [
   'Build',
   'Operations',
 ]
+
+const SUBTYPES_BY_CLASSIFICATION: Record<string, string[]> = {
+  Requirement: ['Performance Requirement', 'Design Requirement', 'Derived Requirement', 'System Interface'],
+  Guideline: ['Lesson Learned', 'Procedure', 'Code', 'Technology Selection'],
+}
+
+function flattenHierarchy(nodes: HierarchyNode[], depth = 0): { id: string; name: string; depth: number }[] {
+  const result: { id: string; name: string; depth: number }[] = []
+  for (const node of nodes) {
+    if (!node.archived) {
+      result.push({ id: node.id, name: node.name, depth })
+      result.push(...flattenHierarchy(node.children, depth + 1))
+    }
+  }
+  return result
+}
 
 const BLOCK_TYPE_STYLES: Record<string, string> = {
   heading: 'bg-blue-100 text-blue-700',
@@ -254,6 +274,7 @@ function candidateBorderClass(status: string): string {
 interface Props {
   documentId: string | null
   userName?: string
+  hierarchyNodes?: HierarchyNode[]
   onSaved: (savedId: string) => void
   onCancel: () => void
   onCreateRequirement: (sourceDocumentId: string, initialStatement: string) => void
@@ -270,6 +291,7 @@ interface Props {
 export default function SourceDocumentDetail({
   documentId,
   userName = '',
+  hierarchyNodes = [],
   onSaved,
   onCancel,
   onCreateRequirement,
@@ -324,18 +346,31 @@ export default function SourceDocumentDetail({
   const [detectingRefs, setDetectingRefs] = useState(false)
 
 
+  // Reference data for Edit & Accept pickers
+  const [sites, setSites] = useState<Site[]>([])
+  const [units, setUnits] = useState<Unit[]>([])
+  const flatHierarchy = useMemo(() => flattenHierarchy(hierarchyNodes), [hierarchyNodes])
+
   // Inline edit state for "Edit & Accept"
   const [editingCandidateId, setEditingCandidateId] = useState<string | null>(null)
   const [editForm, setEditForm] = useState<{
     title: string
     statement: string
     classification: string
+    classification_subtype: string | null
     discipline: string
+    hierarchy_node_ids: string[]
+    site_ids: string[]
+    unit_ids: string[]
   } | null>(null)
 
   // -------------------------------------------------------------------------
   // Load on mount
   // -------------------------------------------------------------------------
+
+  useEffect(() => {
+    void Promise.all([fetchSites(), fetchUnits()]).then(([s, u]) => { setSites(s); setUnits(u) })
+  }, [])
 
   useEffect(() => {
     if (isNew) return
@@ -552,12 +587,23 @@ export default function SourceDocumentDetail({
       title: c.title,
       statement: c.statement,
       classification: c.suggested_classification ?? 'Requirement',
+      classification_subtype: c.suggested_classification_subtype ?? null,
       discipline: c.suggested_discipline ?? 'General',
+      hierarchy_node_ids: [],
+      site_ids: [],
+      unit_ids: [],
     })
   }
 
   const handleAccept = async (c: ExtractionCandidate, overrides?: {
-    title?: string; statement?: string; classification?: string; discipline?: string
+    title?: string
+    statement?: string
+    classification?: string
+    classification_subtype?: string | null
+    discipline?: string
+    hierarchy_node_ids?: string[]
+    site_ids?: string[]
+    unit_ids?: string[]
   }) => {
     setCandidateError(null)
     try {
@@ -566,7 +612,11 @@ export default function SourceDocumentDetail({
         title: overrides?.title,
         statement: overrides?.statement,
         classification: overrides?.classification,
+        classification_subtype: overrides?.classification_subtype,
         discipline: overrides?.discipline,
+        hierarchy_node_ids: overrides?.hierarchy_node_ids ?? [],
+        site_ids: overrides?.site_ids ?? [],
+        unit_ids: overrides?.unit_ids ?? [],
       })
       setCandidates((prev) =>
         prev.map((x) => (x.id === c.id ? result.candidate : x))
@@ -1275,7 +1325,7 @@ export default function SourceDocumentDetail({
 
                             {/* Edit & Accept inline form */}
                             {isEditing && editForm && (
-                              <div className="space-y-2">
+                              <div className="space-y-2 pt-1">
                                 <input
                                   type="text"
                                   value={editForm.title}
@@ -1293,11 +1343,21 @@ export default function SourceDocumentDetail({
                                 <div className="flex gap-2">
                                   <select
                                     value={editForm.classification}
-                                    onChange={(e) => setEditForm((f) => f ? { ...f, classification: e.target.value } : f)}
+                                    onChange={(e) => setEditForm((f) => f ? { ...f, classification: e.target.value, classification_subtype: null } : f)}
                                     className="flex-1 border border-gray-300 rounded px-2 py-1 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-blue-400"
                                   >
                                     <option>Requirement</option>
                                     <option>Guideline</option>
+                                  </select>
+                                  <select
+                                    value={editForm.classification_subtype ?? ''}
+                                    onChange={(e) => setEditForm((f) => f ? { ...f, classification_subtype: e.target.value || null } : f)}
+                                    className="flex-1 border border-gray-300 rounded px-2 py-1 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-blue-400"
+                                  >
+                                    <option value="">— Subtype —</option>
+                                    {(SUBTYPES_BY_CLASSIFICATION[editForm.classification] ?? []).map((s) => (
+                                      <option key={s} value={s}>{s}</option>
+                                    ))}
                                   </select>
                                   <select
                                     value={editForm.discipline}
@@ -1306,6 +1366,26 @@ export default function SourceDocumentDetail({
                                   >
                                     {DISCIPLINES.map((d) => <option key={d}>{d}</option>)}
                                   </select>
+                                </div>
+                                <div className="flex gap-2">
+                                  <MiniMultiPicker
+                                    label="Hierarchy Nodes"
+                                    options={flatHierarchy}
+                                    selectedIds={editForm.hierarchy_node_ids}
+                                    onChange={(ids) => setEditForm((f) => f ? { ...f, hierarchy_node_ids: ids } : f)}
+                                  />
+                                  <MiniMultiPicker
+                                    label="Site"
+                                    options={sites}
+                                    selectedIds={editForm.site_ids}
+                                    onChange={(ids) => setEditForm((f) => f ? { ...f, site_ids: ids } : f)}
+                                  />
+                                  <MiniMultiPicker
+                                    label="Units"
+                                    options={units}
+                                    selectedIds={editForm.unit_ids}
+                                    onChange={(ids) => setEditForm((f) => f ? { ...f, unit_ids: ids } : f)}
+                                  />
                                 </div>
                                 <div className="flex gap-1.5">
                                   <button
@@ -1513,6 +1593,76 @@ export default function SourceDocumentDetail({
           </div>
         )}
       </div>
+    </div>
+  )
+}
+
+// ---------------------------------------------------------------------------
+// MiniMultiPicker — compact inline checkbox dropdown for Edit & Accept form
+// ---------------------------------------------------------------------------
+
+function MiniMultiPicker({
+  label,
+  options,
+  selectedIds,
+  onChange,
+}: {
+  label: string
+  options: { id: string; name: string; depth?: number }[]
+  selectedIds: string[]
+  onChange: (ids: string[]) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const ref = useRef<HTMLDivElement>(null)
+
+  useEffect(() => {
+    if (!open) return
+    const handler = (e: MouseEvent) => {
+      if (ref.current && !ref.current.contains(e.target as Node)) setOpen(false)
+    }
+    document.addEventListener('mousedown', handler)
+    return () => document.removeEventListener('mousedown', handler)
+  }, [open])
+
+  const toggle = (id: string) =>
+    onChange(selectedIds.includes(id) ? selectedIds.filter((x) => x !== id) : [...selectedIds, id])
+
+  return (
+    <div ref={ref} className="relative flex-1 min-w-0">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        className={`w-full border rounded px-2 py-1 text-xs bg-white text-left flex items-center justify-between gap-1 ${
+          selectedIds.length > 0 ? 'border-blue-400 text-blue-700' : 'border-gray-300 text-gray-500'
+        }`}
+      >
+        <span className="truncate">
+          {selectedIds.length > 0 ? `${label} (${selectedIds.length})` : label}
+        </span>
+        <span className="text-gray-400 shrink-0">▾</span>
+      </button>
+      {open && (
+        <div className="absolute z-30 top-full mt-0.5 left-0 right-0 bg-white border border-gray-300 rounded shadow-lg max-h-44 overflow-y-auto py-1 min-w-36">
+          {options.length === 0 && (
+            <div className="px-3 py-2 text-xs text-gray-400 italic">No options</div>
+          )}
+          {options.map((opt) => (
+            <label
+              key={opt.id}
+              className="flex items-center gap-2 px-3 py-1.5 hover:bg-blue-50 cursor-pointer"
+              style={opt.depth !== undefined ? { paddingLeft: `${12 + opt.depth * 12}px` } : undefined}
+            >
+              <input
+                type="checkbox"
+                checked={selectedIds.includes(opt.id)}
+                onChange={() => toggle(opt.id)}
+                className="rounded"
+              />
+              <span className="text-xs text-gray-700">{opt.name}</span>
+            </label>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
