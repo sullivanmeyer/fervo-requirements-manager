@@ -116,6 +116,9 @@ export interface RequirementListItem {
   archived: boolean
   created_by: string
   created_date: string
+  // Included in list response so inline editing / bulk merge don't need a detail fetch
+  tags: string[]
+  verification_method: string | null
   hierarchy_nodes: { id: string; name: string }[]
   sites: { id: string; name: string }[]
   units: { id: string; name: string }[]
@@ -178,6 +181,8 @@ export interface SourceDocumentListItem {
   has_file: boolean
   is_stub: boolean
   archived: boolean
+  decomposition_status: 'idle' | 'processing' | 'complete' | 'failed'
+  decomposition_error: string | null
   superseded_by_id: string | null
   created_at: string
   updated_at: string
@@ -397,6 +402,32 @@ export interface SearchRequirementResult {
   discipline: string
   status: string
   owner: string
+}
+
+// ---------------------------------------------------------------------------
+// Bulk update (Stage 16)
+// ---------------------------------------------------------------------------
+
+/** Fields accepted by PATCH /api/requirements/bulk */
+export interface BulkUpdatePayload {
+  requirement_ids: string[]
+  updates: {
+    status?: string
+    classification?: string
+    /** Explicit null clears the subtype */
+    classification_subtype?: string | null
+    owner?: string
+    verification_method?: string | null
+    tags?: string[]
+    hierarchy_node_ids?: string[]
+    site_ids?: string[]
+    unit_ids?: string[]
+  }
+  user_name?: string
+}
+
+export interface BulkUpdateResult {
+  updated: number
 }
 
 export interface SearchDocumentResult {

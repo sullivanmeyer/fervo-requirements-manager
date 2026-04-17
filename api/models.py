@@ -29,6 +29,11 @@ class SourceDocument(Base):
     # Soft-delete: archived documents are hidden from active workflows but
     # retained so that requirement traceability links remain intact
     archived = Column(Boolean, default=False, nullable=False)
+    # Decomposition pipeline status — updated by the background task so the
+    # frontend can poll this instead of counting blocks.
+    # Values: "idle" | "processing" | "complete" | "failed"
+    decomposition_status = Column(Text, nullable=False, server_default="idle")
+    decomposition_error = Column(Text, nullable=True)
     # When this document is superseded, point to the newer revision
     superseded_by_id = Column(
         UUID(as_uuid=True),

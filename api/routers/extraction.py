@@ -317,11 +317,19 @@ def _run_decomposition(doc_id: str, file_path: str):
     """
     Background task: fetch PDF from MinIO, call Gemini, persist blocks.
     Runs after the HTTP response has already been sent (no timeout risk).
+    Updates decomposition_status on SourceDocument so the frontend can poll
+    it instead of guessing from block count.
     """
     from database import SessionLocal  # local import to avoid circular deps
 
     db = SessionLocal()
     try:
+        doc_uuid = UUID(doc_id)
+        doc = db.query(SourceDocument).filter(SourceDocument.id == doc_uuid).first()
+        if not doc:
+            print(f"[decompose] ERROR: doc {doc_id} not found in DB")
+            return
+
         minio = _minio_client()
         try:
             response = minio.get_object(BUCKET, file_path)
@@ -334,12 +342,6 @@ def _run_decomposition(doc_id: str, file_path: str):
                 pass
 
         raw_blocks = decompose_document(pdf_bytes)
-
-        doc_uuid = UUID(doc_id)
-        doc = db.query(SourceDocument).filter(SourceDocument.id == doc_uuid).first()
-        if not doc:
-            print(f"[decompose] ERROR: doc {doc_id} not found in DB")
-            return
 
         # ── Save block-linkage map before deleting ────────────────────────────
         # Any block with requirement_blocks records needs its links preserved
@@ -453,6 +455,7 @@ def _run_decomposition(doc_id: str, file_path: str):
                     f"(no matching block found in new decomposition)"
                 )
 
+        doc.decomposition_status = "complete"
         db.commit()
         print(
             f"[decompose] {len(new_blocks)} blocks written for doc {doc_id}"
@@ -466,6 +469,15 @@ def _run_decomposition(doc_id: str, file_path: str):
     except Exception as e:
         db.rollback()
         print(f"[decompose] ERROR for doc {doc_id}: {e}")
+        # Write failure status in a fresh transaction so the frontend stops polling
+        try:
+            fail_doc = db.query(SourceDocument).filter(SourceDocument.id == UUID(doc_id)).first()
+            if fail_doc:
+                fail_doc.decomposition_status = "failed"
+                fail_doc.decomposition_error = str(e)[:2000]
+                db.commit()
+        except Exception:
+            pass
     finally:
         db.close()
 
@@ -483,6 +495,12 @@ def decompose(doc_id: str, background_tasks: BackgroundTasks, db: Session = Depe
             status_code=422,
             detail="No PDF uploaded for this document. Upload a PDF first.",
         )
+
+    # Mark processing before returning 202 so the frontend immediately sees
+    # the updated status on its first poll.
+    doc.decomposition_status = "processing"
+    doc.decomposition_error = None
+    db.commit()
 
     background_tasks.add_task(_run_decomposition, doc_id, doc.file_path)
     return {"status": "processing"}

@@ -451,23 +451,20 @@ export default function SourceDocumentDetail({
       // Kick off decomposition — returns 202 immediately, work runs in background
       await decomposeDocument(documentId)
 
-      // Poll GET /blocks every 5s until blocks appear (Gemini takes 60–120s).
-      // Times out after 5 minutes (60 attempts × 5s).
-      let attempts = 0
-      const MAX_ATTEMPTS = 60
+      // Poll GET /source-documents/{id} every 5s and check decomposition_status.
+      // No hard timeout — the backend always sets 'complete' or 'failed'.
       const poll = async (): Promise<void> => {
-        attempts++
-        if (attempts > MAX_ATTEMPTS) {
-          setBlockError('Decomposition timed out after 5 minutes. Check the server logs and try again.')
-          setDecomposing(false)
-          return
-        }
-        const blks = await fetchBlocks(documentId)
-        if (blks.length > 0) {
+        const doc = await fetchSourceDocument(documentId)
+        if (doc.decomposition_status === 'complete') {
+          const blks = await fetchBlocks(documentId)
           setBlocks(blks)
           setSelectedBlockIds(new Set())
           setDecomposing(false)
+        } else if (doc.decomposition_status === 'failed') {
+          setBlockError(doc.decomposition_error ?? 'Decomposition failed. Check the server logs.')
+          setDecomposing(false)
         } else {
+          // 'processing' (or unexpected value) — keep waiting
           setTimeout(() => void poll(), 5000)
         }
       }

@@ -73,6 +73,8 @@ def _doc_to_dict(doc: SourceDocument, include_text: bool = False) -> dict[str, A
         "has_file": doc.file_path is not None,
         "is_stub": bool(doc.is_stub),
         "archived": bool(doc.archived),
+        "decomposition_status": doc.decomposition_status,
+        "decomposition_error": doc.decomposition_error,
         "superseded_by_id": str(doc.superseded_by_id) if doc.superseded_by_id else None,
         "created_at": doc.created_at.isoformat(),
         "updated_at": doc.updated_at.isoformat(),
