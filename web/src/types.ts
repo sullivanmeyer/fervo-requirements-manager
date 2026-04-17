@@ -47,7 +47,7 @@ export interface InterfaceConnection {
   title: string
   status: string
   node_ids: string[]
-  has_external: boolean
+  external_nodes: { id: string; name: string }[]
 }
 
 export interface BlockView {

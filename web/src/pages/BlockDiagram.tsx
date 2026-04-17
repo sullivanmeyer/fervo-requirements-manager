@@ -70,7 +70,7 @@ function InterfacePanel({
           const statusCls = statusClasses[conn.status] ?? 'bg-gray-100 text-gray-600'
           const nodeLabels: { id: string | null; name: string; isExternal: boolean }[] = [
             ...conn.node_ids.map((id) => ({ id, name: resolveName(id) ?? id, isExternal: false })),
-            ...(conn.has_external ? [{ id: null, name: 'External', isExternal: true }] : []),
+            ...conn.external_nodes.map((n) => ({ id: n.id, name: n.name, isExternal: true })),
           ]
 
           return (

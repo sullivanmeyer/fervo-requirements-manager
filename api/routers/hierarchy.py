@@ -227,11 +227,15 @@ def get_block_view(node_id: UUID, db: Session = Depends(get_db)):
         visible_ids = [nid for nid in assigned_ids if nid in all_node_id_strs]
         if not visible_ids:
             continue
-        has_external = any(nid not in all_node_id_strs for nid in assigned_ids)
+        external_nodes = [
+            {"id": str(hn.id), "name": hn.name}
+            for hn in req.hierarchy_nodes
+            if str(hn.id) not in all_node_id_strs
+        ]
         interface_connections.append({
             **_req_dict(req),
             "node_ids": visible_ids,
-            "has_external": has_external,
+            "external_nodes": external_nodes,
         })
 
     return {
