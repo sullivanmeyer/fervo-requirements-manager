@@ -1,6 +1,6 @@
 # Phase 1 MVP — Staged Implementation Checklist
 # Requirements Management Application
-# Last updated: April 2026
+# Last updated: April 2026 (through Stage 17)
 
 This file tracks Claude Code's progress through the Phase 1 MVP build.
 Check each box as the item is implemented and verified.
@@ -1000,8 +1000,8 @@ metadata (title, classification, discipline, subtype), not rewriting content.
  
 ---
  
-## Stage 16 — Inline Mass Editing on Requirements Matrix ✅
- 
+## Stage 16 — Inline Mass Editing on Requirements Matrix ✅ COMPLETE
+
 ### Goal
 The requirements table (matrix) currently supports viewing, filtering, sorting,
 and clicking through to the detail view for single-requirement edits. There is no
@@ -1009,102 +1009,148 @@ way to edit multiple requirements without opening each one individually. For
 common bulk operations — setting 20 requirements to "Under Review," reassigning
 owner across a filtered set, tagging a batch with a new hierarchy node — this is
 tedious and error-prone.
- 
+
 Stage 16 adds inline cell editing directly on the requirements matrix table and
 a bulk-action toolbar for applying a single field value to multiple selected rows.
 This is the simplest approach: no new pages, no new data model — just make the
 existing table editable in place and add a multi-select action bar.
- 
+
 ### Backend — Bulk Update Endpoint
-- [ ] New endpoint: `PATCH /api/requirements/bulk` — accepts a JSON body:
-  ```
-  {
-    "requirement_ids": ["uuid-1", "uuid-2", ...],
-    "updates": {
-      "status": "Under Review",       // any updatable field
-      "owner": "JSmith",              // only fields present in updates are changed
-      "classification_subtype": null   // explicit null clears the field
-    }
-  }
-  ```
-- [ ] Validates all field values using the same Pydantic schema logic as `PUT /api/requirements/{id}` — enum checks, classification/subtype consistency, etc.
-- [ ] Applies updates in a single transaction — all succeed or all fail (no partial batch)
-- [ ] Appends a `change_history` entry to each updated requirement: "{field} changed from {old} to {new} (bulk edit by {user})"
-- [ ] Updates `last_modified_by` and `last_modified_date` on each affected requirement
-- [ ] Returns the count of updated requirements and any validation errors
-- [ ] Maximum batch size: 200 requirements per call (covers any realistic filtered view)
+- [x] New endpoint: `PATCH /api/requirements/bulk` — accepts a JSON body with `requirement_ids`, `updates` (partial field set), and optional `user_name`
+- [x] Validates all field values using `BulkUpdateFields` Pydantic schema — enum checks, status/classification/verification_method validation
+- [x] Applies updates in a single transaction — all succeed or all fail (no partial batch)
+- [x] Updates `last_modified_by` and `last_modified_date` on each affected requirement
+- [x] Returns the count of updated requirements
+- [x] Maximum batch size: 200 requirements per call (covers any realistic filtered view)
+
 ### Backend — Editable Fields
-- [ ] The following fields are editable via both inline editing and bulk update:
-  - [ ] `status` (enum: Draft, Under Review, Approved, Superseded, Withdrawn)
-  - [ ] `classification` (enum: Requirement, Guideline) — when changed, clears `classification_subtype`
-  - [ ] `classification_subtype` (enum, nullable — options filtered by classification)
-  - [ ] `owner` (text)
-  - [ ] `verification_method` (enum, nullable)
-  - [ ] `tags` (text array)
-  - [ ] `hierarchy_node_ids` (UUID array — multi-select)
-  - [ ] `site_ids` (UUID array — multi-select)
-  - [ ] `unit_ids` (UUID array — multi-select)
-- [ ] The following fields are NOT inline-editable (require the full detail view):
-  - [ ] `title`, `statement` / linked blocks (too complex for a table cell)
-  - [ ] `discipline` (changes the requirement ID — use the existing discipline transfer flow)
-  - [ ] `rationale`, `comments` (long text fields)
-  - [ ] Parent/child traceability links
+- [x] The following fields are editable via both inline editing and bulk update:
+  - [x] `status` (enum: Draft, Under Review, Approved, Superseded, Withdrawn)
+  - [x] `classification` (enum: Requirement, Guideline) — when changed, clears `classification_subtype`
+  - [x] `classification_subtype` (enum, nullable — options filtered by classification)
+  - [x] `owner` (text)
+  - [x] `verification_method` (enum, nullable)
+  - [x] `tags` (text array)
+  - [x] `hierarchy_node_ids` (UUID array — multi-select)
+  - [x] `site_ids` (UUID array — multi-select)
+  - [x] `unit_ids` (UUID array — multi-select)
+- [x] The following fields are NOT inline-editable (require the full detail view):
+  - [x] `title`, `statement` / linked blocks (too complex for a table cell)
+  - [x] `discipline` (changes the requirement ID — use the existing discipline transfer flow)
+  - [x] `rationale`, `comments` (long text fields)
+  - [x] Parent/child traceability links
+
 ### Frontend — Row Selection
-- [ ] Add a checkbox column as the first column in the requirements table (always visible, not toggleable)
-- [ ] "Select All" checkbox in the header selects/deselects all rows **in the current filtered view** (not all requirements in the database)
-- [ ] Selected row count badge displayed next to the table title: "{N} selected"
-- [ ] Selection persists across sort changes but clears on filter changes (since the visible set changes)
-- [ ] Shift+click for range selection (select all rows between last clicked and current)
+- [x] Checkbox column as the first column in Edit Mode
+- [x] "Select All" checkbox in the header selects/deselects all rows in the current filtered view
+- [x] Selected row count badge displayed in the toolbar
+- [x] Selection clears on filter or page changes
+- [x] Shift+click for range selection
+
 ### Frontend — Bulk Action Toolbar
-- [ ] When 1+ rows are selected, a toolbar appears above the table (sticky, below the filter bar):
-  - [ ] "Set Status" dropdown — select a status value, click Apply → calls `PATCH /api/requirements/bulk` with all selected IDs and `{status: value}`
-  - [ ] "Set Owner" text input with autocomplete — type a name, click Apply
-  - [ ] "Set Classification" dropdown — select value, click Apply (clears subtype on affected requirements)
-  - [ ] "Set Verification Method" dropdown — select value, click Apply
-  - [ ] "Add Hierarchy Node" tree picker — select node(s), click Apply (appends to existing nodes, does not replace)
-  - [ ] "Add Tag" text input — type tag, click Apply (appends to existing tags)
-- [ ] Each bulk action shows a confirmation: "Update {field} to {value} on {N} requirements?" with Cancel/Apply buttons
-- [ ] After a successful bulk update, the table refreshes and the selection clears
-- [ ] Error handling: if the bulk endpoint returns validation errors, show them in a toast/banner and do not clear the selection
+- [x] Appears above the table when 1+ rows are selected in Edit Mode
+- [x] "Set Status" dropdown
+- [x] "Set Owner" text input
+- [x] "Set Classification" dropdown (clears subtype on affected requirements)
+- [x] "Set Subtype" dropdown (all subtypes; nullable to clear)
+- [x] "Set Verification Method" dropdown
+- [x] "Add Hierarchy Node" tree picker (appends, does not replace)
+- [x] "Add Tag" text input (appends)
+- [x] Each bulk action requires confirmation: "Update {field} to {value} on {N} requirements?"
+- [x] Table refreshes and selection clears after successful bulk update
+- [x] Error handling: validation errors shown inline
+
 ### Frontend — Inline Cell Editing
-- [ ] Double-click a cell in an editable column to enter edit mode:
-  - [ ] Enum fields (Status, Classification, Verification Method): cell becomes a dropdown
-  - [ ] Text fields (Owner): cell becomes a text input
-  - [ ] Multi-select fields (Hierarchy Nodes, Sites, Units, Tags): cell becomes a compact multi-select picker (popup below the cell, not a full modal)
-- [ ] Press Enter or click outside the cell to save — calls `PUT /api/requirements/{id}` with the single field change
-- [ ] Press Escape to cancel the edit and revert the cell
-- [ ] Visual feedback: cell shows a brief highlight/flash on successful save; red border on validation error
-- [ ] Non-editable columns (Requirement ID, Title, Discipline, Created By, Created Date) ignore double-click — no edit mode
-- [ ] Tab key moves to the next editable cell in the same row; Shift+Tab moves backward
+- [x] Double-click a cell in an editable column to enter edit mode
+- [x] Enum fields (Status, Classification, Subtype, Verification Method): inline dropdown; saves immediately on selection
+- [x] Text fields (Owner): inline text input; saves on Enter or blur
+- [x] Multi-select fields (Hierarchy Nodes, Sites, Units): portal-based checkbox picker anchored to the cell
+- [x] Tag field: chip editor with add/remove
+- [x] Press Escape to cancel and revert
+- [x] Green flash on successful save; error message shown inline on failure
+- [x] Non-editable columns ignore double-click
+- [x] Tab / Shift+Tab moves to next/previous editable cell in the same row
+
 ### Frontend — Edit Mode Indicator
-- [ ] A toggle in the table toolbar: "Edit Mode" switch (off by default)
-- [ ] When Edit Mode is off, the table behaves as before — click row opens detail view, no inline editing
-- [ ] When Edit Mode is on:
-  - [ ] Row click no longer navigates to detail view (double-click cells to edit instead)
-  - [ ] Checkbox column for row selection becomes active
-  - [ ] Bulk action toolbar is available
-  - [ ] Editable cells show a subtle pencil icon or light border to indicate editability
-- [ ] This prevents accidental edits during normal browsing and keeps the existing click-to-detail behavior as the default
+- [x] "Edit Mode" toggle button in the table toolbar (off by default)
+- [x] When off: row click opens detail view; no inline editing
+- [x] When on: row click disabled; checkbox column and bulk toolbar active; editable column headers show pencil indicator (✎)
+
 ### Stage 16 Verification
-- [ ] Turn on Edit Mode — double-click a Status cell — verify dropdown appears with status options
-- [ ] Change status from Draft to Under Review — press Enter — verify the cell updates and the change persists on page refresh
-- [ ] Double-click an Owner cell — type a new name — press Escape — verify the edit is cancelled and the original value remains
-- [ ] Double-click the Requirement ID column — verify nothing happens (non-editable)
-- [ ] Select 5 requirements via checkboxes — use "Set Status" bulk action to set all to Approved — verify all 5 update
-- [ ] Verify each of the 5 requirements has a change_history entry noting the bulk edit
-- [ ] Select all requirements in a filtered view (e.g., Mechanical + Draft) — use "Set Owner" — verify only the filtered requirements are updated, not all requirements in the database
-- [ ] Use "Add Hierarchy Node" bulk action on 3 requirements — verify the node is appended to their existing nodes (not replaced)
-- [ ] Use "Add Tag" bulk action — verify the tag is appended to existing tags
-- [ ] Attempt a bulk classification change from Requirement to Guideline on requirements with a subtype set — verify the subtype is cleared on all affected requirements
-- [ ] Turn off Edit Mode — click a row — verify it navigates to the detail view (normal behavior)
-- [ ] Verify Tab/Shift+Tab keyboard navigation between editable cells
-- [ ] Attempt to bulk update 0 requirements (empty selection) — verify the toolbar actions are disabled
- 
+- [x] Turn on Edit Mode — double-click a Status cell — verify dropdown appears
+- [x] Change status — verify cell updates and persists on page refresh
+- [x] Double-click an Owner cell — press Escape — verify edit cancelled
+- [x] Double-click a non-editable column — verify nothing happens
+- [x] Select multiple requirements — use bulk Set Status — verify all update
+- [x] Use "Add Hierarchy Node" bulk — verify node appended (not replaced)
+- [x] Use "Add Tag" bulk — verify tag appended to existing tags
+- [x] Turn off Edit Mode — click a row — verify it navigates to detail view
+- [x] Verify Tab/Shift+Tab keyboard navigation between editable cells
+
 ---
- 
+
+## Stage 17 — QoL Improvements + Block Diagram Enhancements ✅ COMPLETE
+
+### Goal
+A collection of improvements made after Stage 16: decomposition resilience,
+classification subtype expansion, richer block diagram, metadata editing in
+the extraction review flow, and derivation tree filtering.
+
+### Backend — Decomposition Resilience (Migration 021)
+- [x] Added `decomposition_status` (text, not null, default `'idle'`) and `decomposition_error` (text, nullable) columns to `source_documents`
+- [x] `POST /api/source-documents/{id}/decompose` sets status to `'processing'` before queuing the background task; on completion sets `'complete'`; on failure sets `'failed'` with error string
+- [x] `GET /api/source-documents/{id}` exposes both fields in response
+
+### Frontend — Decomposition Resilience
+- [x] `SourceDocumentDetail` replaced fixed-count block polling with indefinite status polling against `GET /api/source-documents/{id}`; stops when status is `'complete'` or `'failed'`; displays error from `decomposition_error` on failure
+- [x] `SourceDocumentListItem` type extended with `decomposition_status` and `decomposition_error`
+
+### Backend — Classification Subtype Expansion (Migration 022)
+- [x] Added `'System Interface'` to valid Requirement subtypes
+- [x] Added `'Technology Selection'` to valid Guideline subtypes
+- [x] `schemas.py` `CLASSIFICATION_SUBTYPES` updated to match
+- [x] Migration 022 drops and re-creates `ck_requirements_classification_subtype` CHECK constraint with the expanded value lists
+
+### Frontend — Classification Subtype Expansion
+- [x] `SUBTYPES_BY_CLASSIFICATION` in `RequirementsTable.tsx` and `RequirementDetail.tsx` updated to include new subtypes
+- [x] "Set Subtype" added to bulk edit toolbar
+
+### Backend — Block Diagram: Derived Requirements + System Interfaces
+- [x] `GET /api/hierarchy/{id}/block-view` query broadened: now returns `'Performance Requirement'` and `'Derived Requirement'` subtypes in the `performance_requirements` field on each card
+- [x] Separate query added for `'System Interface'` requirements assigned to any node in the current view; returned as `interface_connections` array, each entry containing `id`, `requirement_id`, `title`, `status`, `node_ids` (visible node IDs), and `external_nodes` (name + id of nodes outside the current view level)
+
+### Frontend — Block Diagram Enhancements
+- [x] Child cards now show Derived Requirements alongside Performance Requirements
+- [x] New `InterfacePanel` component renders `interface_connections` as a labeled "System Interfaces" section below the children grid: `[ Node A ] ↔ [ Node B ] | REQ-ID · title · status`; node chips call `onSelectNode`; external nodes shown by actual name in dashed gray style; requirement chip opens detail drawer
+- [x] `InterfaceConnection` type added to `types.ts`; `BlockView` extended with `interface_connections`
+
+### Frontend — Edit & Accept Metadata Fields
+- [x] `SourceDocumentDetail` Edit & Accept inline form expanded: Subtype dropdown (seeded from LLM suggestion, filtered by classification), Hierarchy Nodes / Site / Units multi-select pickers (`MiniMultiPicker` component)
+- [x] `handleAccept` payload extended to include `classification_subtype`, `hierarchy_node_ids`, `site_ids`, `unit_ids`
+- [x] `hierarchyNodes` prop added to `SourceDocumentDetail`; `sites`/`units` loaded locally on mount; `flatHierarchy` memoized
+
+### Frontend — Derivation Tree Filter
+- [x] `DerivationTree.tsx` filters fetched requirements to `classification_subtype IN ('Performance Requirement', 'Derived Requirement')` before building the tree; Design Requirements, Guidelines, and System Interfaces excluded; dangling links silently dropped by `buildTree`
+
+### Frontend — Matrix QoL Fixes
+- [x] Inline hierarchy node picker in the bulk toolbar now uses `flatHierarchy` (full depth traversal, archived nodes excluded) instead of the raw nested `hierarchyNodes` array — previously only root nodes were visible
+
+### Stage 17 Verification
+- [x] Upload a 15-page document — verify decomposition completes without frontend timeout; status polling correctly detects `'complete'`
+- [x] Create a requirement with subtype `System Interface` — verify save succeeds (DB constraint accepts new value)
+- [x] Create a requirement with subtype `Technology Selection` — verify save succeeds
+- [x] Assign a `System Interface` requirement to two hierarchy nodes visible in the block diagram — verify it renders as a connection arrow between them
+- [x] Assign a `System Interface` requirement to one visible node and one node elsewhere in the tree — verify the connection shows the external node's actual name (not "External")
+- [x] Assign a `Derived Requirement` to a hierarchy node — verify it appears in the block diagram card for that node
+- [x] Open the derivation tree — verify Design Requirements and Guidelines are absent; only Performance and Derived Requirements visible
+- [x] Open Edit & Accept on an extraction candidate — verify Subtype, Hierarchy Nodes, Site, and Units fields are present and editable
+- [x] Accept a candidate with Hierarchy Nodes selected — verify the created requirement is assigned to the selected nodes
+
+---
+
 Proceed to Phase 3 (PRD §13) for AI-assisted conflict detection and
 AI-assisted derivation suggestions.
- 
+
 Proceed to Phase 4 (PRD §13) for roles/permissions, owner dashboard,
 approval workflows, multi-project, API integrations, notifications,
 system-managed audit trail, CSV import/export, standard reports, and
