@@ -292,7 +292,11 @@ export default function DerivationTree({ focusId, onSelect }: Props) {
         units: [],
       }
 
-      const tree = buildTree(reqs, links, selfDerived)
+      const filteredReqs = reqs.filter((r) =>
+        r.classification_subtype === 'Performance Requirement' ||
+        r.classification_subtype === 'Derived Requirement'
+      )
+      const tree = buildTree(filteredReqs, links, selfDerived)
       setLayout(computeLayout(tree))
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load derivation tree')
