@@ -293,8 +293,11 @@ export default function DerivationTree({ focusId, onSelect }: Props) {
       }
 
       const filteredReqs = reqs.filter((r) =>
-        r.classification_subtype === 'Performance Requirement' ||
-        r.classification_subtype === 'Derived Requirement'
+        (r.classification_subtype === 'Performance Requirement' ||
+          r.classification_subtype === 'Derived Requirement') &&
+        !r.archived &&
+        r.status !== 'Withdrawn' &&
+        r.status !== 'Superseded'
       )
       const tree = buildTree(filteredReqs, links, selfDerived)
       setLayout(computeLayout(tree))
