@@ -1,21 +1,19 @@
 /**
- * SourceDocumentDetail — Stage 7 update
+ * SourceDocumentDetail — Stage 18 update
  *
- * Right-panel tabs:
- *   PDF Viewer     — iframe, unchanged from Phase 1
- *   Document Blocks — LLM-decomposed clause tree with extract controls
- *   Extracted Text  — legacy raw text panel (kept for reference)
+ * Single-pass extraction workflow. The two-pass LLM candidate pipeline
+ * has been retired. Users now work directly with decomposed clauses:
  *
- * Document Blocks tab:
- *   • "Decompose Document" triggers Gemini decomposition and stores blocks in DB
- *   • Each block shows clause number, type badge, and content
- *   • Blocks can be checked for selective extraction
- *   • "Extract from Selected" / "Extract All" trigger LLM requirement extraction
+ *   1. Decompose Document → clauses appear in the Document Blocks tab
+ *   2. Check one or more clauses → "Extract to Requirement" button enables
+ *   3. Fill in metadata (Title, Classification, Discipline, etc.) in the
+ *      inline extraction form and click "Create Requirement"
+ *   4. The clause(s) show a green left border + requirement ID badge
+ *   5. Click the badge to navigate to the requirement detail view
+ *   6. Click "×" on the badge to unlink the block from the requirement
  *
- * Extraction Candidates panel (below blocks):
- *   • Lists all LLM-proposed requirements for this document
- *   • Accept (one-click), Edit & Accept (inline form), Reject
- *   • Accepted candidates display a link to the created requirement
+ * Stage 15 block-linked requirement infrastructure is preserved — the
+ * requirement detail view still renders linked blocks via BlockRenderer.
  */
 import { useEffect, useRef, useState, useMemo } from 'react'
 import {
@@ -28,13 +26,10 @@ import {
   uploadPdf,
 } from '../api/sourceDocuments'
 import {
-  acceptCandidate,
   decomposeDocument,
-  extractRequirements,
+  extractToRequirement,
   fetchBlocks,
-  fetchCandidates,
-  mergeBlocks,
-  updateCandidate,
+  unlinkBlock,
 } from '../api/extraction'
 import {
   addDocumentReference,
@@ -47,7 +42,6 @@ import { fetchSites, fetchUnits } from '../api/requirements'
 import type {
   DocumentBlock,
   DocumentReferenceListItem,
-  ExtractionCandidate,
   HierarchyNode,
   Site,
   SourceDocumentDetail as DocDetail,
@@ -126,6 +120,16 @@ interface FormState {
   disciplines: string[]
 }
 
+interface ExtractFormState {
+  title: string
+  classification: string
+  classification_subtype: string | null
+  discipline: string
+  hierarchy_node_ids: string[]
+  site_ids: string[]
+  unit_ids: string[]
+}
+
 function emptyForm(): FormState {
   return {
     document_id: '',
@@ -145,6 +149,18 @@ function formFromDetail(doc: DocDetail): FormState {
     revision: doc.revision ?? '',
     issuing_organization: doc.issuing_organization ?? '',
     disciplines: doc.disciplines ?? [],
+  }
+}
+
+function emptyExtractForm(): ExtractFormState {
+  return {
+    title: '',
+    classification: 'Requirement',
+    classification_subtype: null,
+    discipline: 'General',
+    hierarchy_node_ids: [],
+    site_ids: [],
+    unit_ids: [],
   }
 }
 
@@ -173,10 +189,6 @@ function BlockTypeBadge({ type }: { type: string }) {
   )
 }
 
-/**
- * Normalise headers to always be string[][] so the renderer is uniform.
- * Legacy flat string[] (old DB records) get wrapped in an outer array.
- */
 function normalizeHeaders(headers: string[] | string[][]): string[][] {
   if (!headers.length) return []
   return typeof headers[0] === 'string'
@@ -184,11 +196,6 @@ function normalizeHeaders(headers: string[] | string[][]): string[][] {
     : (headers as string[][])
 }
 
-/**
- * Compress consecutive identical non-empty cells in a single header row
- * into colspan groups.  Empty strings are never merged (they represent
- * deliberately blank sub-header cells).
- */
 function colspanGroups(row: string[]): { value: string; colspan: number }[] {
   const result: { value: string; colspan: number }[] = []
   for (const cell of row) {
@@ -205,7 +212,6 @@ function colspanGroups(row: string[]): { value: string; colspan: number }[] {
   return result
 }
 
-/** Render structured table_data as a compact HTML table. */
 function TablePreview({ data, compact = false }: { data: TableData; compact?: boolean }) {
   const headerRows = normalizeHeaders(data.headers)
   const isFallback = data.table_parse_quality === 'fallback'
@@ -260,13 +266,6 @@ function TablePreview({ data, compact = false }: { data: TableData; compact?: bo
   )
 }
 
-// Candidate status colours
-function candidateBorderClass(status: string): string {
-  if (status === 'Accepted') return 'border-l-4 border-l-green-400'
-  if (status === 'Rejected') return 'border-l-4 border-l-gray-300'
-  return 'border-l-4 border-l-blue-300'
-}
-
 // ---------------------------------------------------------------------------
 // Props
 // ---------------------------------------------------------------------------
@@ -280,7 +279,6 @@ interface Props {
   onCreateRequirement: (sourceDocumentId: string, initialStatement: string) => void
   onOpenRequirement: (requirementId: string) => void
   onViewInNetwork?: (documentId: string) => void
-  /** Block IDs to scroll to and persistently highlight on initial load (from requirement detail link). */
   initialHighlightBlockIds?: string[]
 }
 
@@ -301,8 +299,6 @@ export default function SourceDocumentDetail({
 }: Props) {
   const isNew = documentId === null
 
-  // Blocks that should be persistently highlighted (linked from a requirement detail view).
-  // Distinct from the temporary 2-second yellow flash used for candidate source-clause links.
   const [pinnedBlockIds, setPinnedBlockIds] = useState<Set<string>>(
     new Set(initialHighlightBlockIds ?? [])
   )
@@ -329,10 +325,10 @@ export default function SourceDocumentDetail({
   const [highlightedBlockId, setHighlightedBlockId] = useState<string | null>(null)
   const blockListRef = useRef<HTMLDivElement>(null)
 
-  // Extraction candidates
-  const [candidates, setCandidates] = useState<ExtractionCandidate[]>([])
+  // Inline extraction form
+  const [extractForm, setExtractForm] = useState<ExtractFormState | null>(null)
   const [extracting, setExtracting] = useState(false)
-  const [candidateError, setCandidateError] = useState<string | null>(null)
+  const [extractError, setExtractError] = useState<string | null>(null)
 
   // Document references
   const [outRefs, setOutRefs] = useState<DocumentReferenceListItem[]>([])
@@ -345,24 +341,10 @@ export default function SourceDocumentDetail({
   const [savingRef, setSavingRef] = useState(false)
   const [detectingRefs, setDetectingRefs] = useState(false)
 
-
-  // Reference data for Edit & Accept pickers
+  // Reference data for extraction form pickers
   const [sites, setSites] = useState<Site[]>([])
   const [units, setUnits] = useState<Unit[]>([])
   const flatHierarchy = useMemo(() => flattenHierarchy(hierarchyNodes), [hierarchyNodes])
-
-  // Inline edit state for "Edit & Accept"
-  const [editingCandidateId, setEditingCandidateId] = useState<string | null>(null)
-  const [editForm, setEditForm] = useState<{
-    title: string
-    statement: string
-    classification: string
-    classification_subtype: string | null
-    discipline: string
-    hierarchy_node_ids: string[]
-    site_ids: string[]
-    unit_ids: string[]
-  } | null>(null)
 
   // -------------------------------------------------------------------------
   // Load on mount
@@ -376,10 +358,9 @@ export default function SourceDocumentDetail({
     if (isNew) return
     const doLoad = async () => {
       try {
-        const [d, blks, cands, outgoing, incoming, docs] = await Promise.all([
+        const [d, blks, outgoing, incoming, docs] = await Promise.all([
           fetchSourceDocument(documentId!),
           fetchBlocks(documentId!).catch(() => [] as DocumentBlock[]),
-          fetchCandidates(documentId!).catch(() => [] as ExtractionCandidate[]),
           fetchOutgoingReferences(documentId!).catch(() => [] as DocumentReferenceListItem[]),
           fetchIncomingReferences(documentId!).catch(() => [] as DocumentReferenceListItem[]),
           fetchSourceDocuments().catch(() => [] as SourceDocumentListItem[]),
@@ -387,17 +368,12 @@ export default function SourceDocumentDetail({
         setDoc(d)
         setForm(formFromDetail(d))
         setBlocks(blks)
-        setCandidates(cands)
         setOutRefs(outgoing)
         setInRefs(incoming)
         setAllDocs(docs)
 
-        // If we arrived here from a requirement detail "View source document →" link,
-        // switch to the Document Blocks tab and scroll to the first pinned block.
         if (initialHighlightBlockIds && initialHighlightBlockIds.length > 0) {
           setActivePanel('blocks')
-          // scrollToBlock uses a short setTimeout internally; add a small extra
-          // delay to let the panel switch + React render complete first.
           setTimeout(() => scrollToBlock(initialHighlightBlockIds[0]), 150)
         }
       } catch (e) {
@@ -483,23 +459,18 @@ export default function SourceDocumentDetail({
     setDecomposing(true)
     setBlockError(null)
     try {
-      // Kick off decomposition — returns 202 immediately, work runs in background
       await decomposeDocument(documentId)
-
-      // Poll GET /source-documents/{id} every 5s and check decomposition_status.
-      // No hard timeout — the backend always sets 'complete' or 'failed'.
       const poll = async (): Promise<void> => {
-        const doc = await fetchSourceDocument(documentId)
-        if (doc.decomposition_status === 'complete') {
+        const d = await fetchSourceDocument(documentId)
+        if (d.decomposition_status === 'complete') {
           const blks = await fetchBlocks(documentId)
           setBlocks(blks)
           setSelectedBlockIds(new Set())
           setDecomposing(false)
-        } else if (doc.decomposition_status === 'failed') {
-          setBlockError(doc.decomposition_error ?? 'Decomposition failed. Check the server logs.')
+        } else if (d.decomposition_status === 'failed') {
+          setBlockError(d.decomposition_error ?? 'Decomposition failed. Check the server logs.')
           setDecomposing(false)
         } else {
-          // 'processing' (or unexpected value) — keep waiting
           setTimeout(() => void poll(), 5000)
         }
       }
@@ -521,137 +492,73 @@ export default function SourceDocumentDetail({
       return next
     })
 
-  const selectAllBlocks = () =>
-    setSelectedBlockIds(new Set(blocks.map((b) => b.id)))
+  const selectAllUnlinkedBlocks = () =>
+    setSelectedBlockIds(new Set(blocks.filter((b) => !b.linked_requirement_id).map((b) => b.id)))
 
   const clearSelection = () => setSelectedBlockIds(new Set())
 
   const scrollToBlock = (blockId: string) => {
     setActivePanel('blocks')
     setHighlightedBlockId(blockId)
-    // Wait a tick for the panel to render, then scroll the block into view
     setTimeout(() => {
       const el = blockListRef.current?.querySelector(`[data-block-id="${blockId}"]`)
       el?.scrollIntoView({ behavior: 'smooth', block: 'center' })
-      // Clear highlight after 2 seconds
       setTimeout(() => setHighlightedBlockId(null), 2000)
     }, 50)
   }
 
   // -------------------------------------------------------------------------
-  // Extraction
+  // Extract to requirement
   // -------------------------------------------------------------------------
 
-  const handleExtract = async (selectedOnly: boolean) => {
-    if (!documentId) return
+  const handleOpenExtractForm = () => {
+    setExtractForm(emptyExtractForm())
+    setExtractError(null)
+  }
+
+  const handleExtractToRequirement = async () => {
+    if (!documentId || selectedBlockIds.size === 0 || !extractForm) return
     setExtracting(true)
-    setCandidateError(null)
+    setExtractError(null)
     try {
-      const blockIds = selectedOnly ? Array.from(selectedBlockIds) : undefined
-      const newCands = await extractRequirements(documentId, blockIds)
-      setCandidates((prev) => [...prev, ...newCands])
+      await extractToRequirement({
+        block_ids: Array.from(selectedBlockIds),
+        owner: userName || 'Unknown',
+        title: extractForm.title || undefined,
+        classification: extractForm.classification,
+        classification_subtype: extractForm.classification_subtype,
+        discipline: extractForm.discipline,
+        hierarchy_node_ids: extractForm.hierarchy_node_ids,
+        site_ids: extractForm.site_ids,
+        unit_ids: extractForm.unit_ids,
+      })
+      // Refresh blocks to show green borders + linked badges
+      const updatedBlocks = await fetchBlocks(documentId)
+      setBlocks(updatedBlocks)
+      setSelectedBlockIds(new Set())
+      setExtractForm(null)
+      // Refresh linked requirements count in the left panel
+      fetchSourceDocument(documentId).then(setDoc).catch(() => null)
     } catch (e) {
-      setCandidateError(e instanceof Error ? e.message : 'Extraction failed')
+      setExtractError(e instanceof Error ? e.message : 'Extraction failed')
     } finally {
       setExtracting(false)
     }
   }
 
-  // -------------------------------------------------------------------------
-  // Candidate actions
-  // -------------------------------------------------------------------------
-
-  const handleReject = async (id: string) => {
-    setCandidateError(null)
+  const handleUnlinkBlock = async (blockId: string) => {
+    setBlockError(null)
     try {
-      const updated = await updateCandidate(id, { status: 'Rejected' })
-      setCandidates((prev) => prev.map((c) => (c.id === id ? updated : c)))
-    } catch (e) {
-      setCandidateError(e instanceof Error ? e.message : 'Failed to reject')
-    }
-  }
-
-  const handleRestorePending = async (id: string) => {
-    setCandidateError(null)
-    try {
-      const updated = await updateCandidate(id, { status: 'Pending' })
-      setCandidates((prev) => prev.map((c) => (c.id === id ? updated : c)))
-    } catch (e) {
-      setCandidateError(e instanceof Error ? e.message : 'Failed to restore')
-    }
-  }
-
-  const startEdit = (c: ExtractionCandidate) => {
-    setEditingCandidateId(c.id)
-    setEditForm({
-      title: c.title,
-      statement: c.statement,
-      classification: c.suggested_classification ?? 'Requirement',
-      classification_subtype: c.suggested_classification_subtype ?? null,
-      discipline: c.suggested_discipline ?? 'General',
-      hierarchy_node_ids: [],
-      site_ids: [],
-      unit_ids: [],
-    })
-  }
-
-  const handleAccept = async (c: ExtractionCandidate, overrides?: {
-    title?: string
-    statement?: string
-    classification?: string
-    classification_subtype?: string | null
-    discipline?: string
-    hierarchy_node_ids?: string[]
-    site_ids?: string[]
-    unit_ids?: string[]
-  }) => {
-    setCandidateError(null)
-    try {
-      const result = await acceptCandidate(c.id, {
-        owner: userName || 'Unknown',
-        title: overrides?.title,
-        statement: overrides?.statement,
-        classification: overrides?.classification,
-        classification_subtype: overrides?.classification_subtype,
-        discipline: overrides?.discipline,
-        hierarchy_node_ids: overrides?.hierarchy_node_ids ?? [],
-        site_ids: overrides?.site_ids ?? [],
-        unit_ids: overrides?.unit_ids ?? [],
-      })
-      setCandidates((prev) =>
-        prev.map((x) => (x.id === c.id ? result.candidate : x))
+      await unlinkBlock(blockId)
+      setBlocks((prev) =>
+        prev.map((b) =>
+          b.id === blockId
+            ? { ...b, linked_requirement_id: null, linked_requirement_summary: null }
+            : b
+        )
       )
-      setEditingCandidateId(null)
-      setEditForm(null)
-      // Refresh linked requirements list
-      if (documentId) {
-        fetchSourceDocument(documentId)
-          .then(setDoc)
-          .catch(() => null)
-      }
     } catch (e) {
-      setCandidateError(e instanceof Error ? e.message : 'Failed to accept')
-    }
-  }
-
-  // -------------------------------------------------------------------------
-  // Merge selected blocks into a new requirement form
-  // -------------------------------------------------------------------------
-
-  const handleMergeBlocks = async () => {
-    if (!documentId || selectedBlockIds.size < 2) return
-    // Preserve document order by sorting by sort_order, not selection order
-    const blockIds = blocks
-      .filter((b) => selectedBlockIds.has(b.id))
-      .sort((a, b) => a.sort_order - b.sort_order)
-      .map((b) => b.id)
-    setCandidateError(null)
-    try {
-      const result = await mergeBlocks(documentId, blockIds, userName)
-      // Navigate to the new requirement so the user can fill in metadata
-      onOpenRequirement(result.id)
-    } catch (e) {
-      setCandidateError(e instanceof Error ? e.message : 'Merge failed')
+      setBlockError(e instanceof Error ? e.message : 'Failed to unlink block')
     }
   }
 
@@ -708,7 +615,6 @@ export default function SourceDocumentDetail({
     setRefError(null)
     try {
       const result = await detectDocumentReferences(documentId)
-      // Reload outgoing references to show newly detected ones
       const [outgoing, incoming] = await Promise.all([
         fetchOutgoingReferences(documentId),
         fetchIncomingReferences(documentId),
@@ -729,9 +635,11 @@ export default function SourceDocumentDetail({
   // Derived values
   // -------------------------------------------------------------------------
 
-  const pendingCount = candidates.filter((c) => c.status === 'Pending').length
-  const acceptedCount = candidates.filter((c) => c.status === 'Accepted').length
-  const rejectedCount = candidates.filter((c) => c.status === 'Rejected').length
+  const linkedBlockCount = blocks.filter((b) => b.linked_requirement_id).length
+  const selectedLinkedCount = blocks.filter(
+    (b) => selectedBlockIds.has(b.id) && b.linked_requirement_id
+  ).length
+  const canExtract = selectedBlockIds.size > 0 && selectedLinkedCount === 0
 
   // -------------------------------------------------------------------------
   // Render
@@ -938,7 +846,6 @@ export default function SourceDocumentDetail({
             </div>
           )}
 
-
           {/* Linked requirements list */}
           {!isNew && doc && doc.linked_requirements.length > 0 && (
             <div className="pt-2 border-t border-gray-100">
@@ -992,9 +899,9 @@ export default function SourceDocumentDetail({
                         {blocks.length}
                       </span>
                     )}
-                    {panel === 'blocks' && candidates.length > 0 && (
+                    {panel === 'blocks' && linkedBlockCount > 0 && (
                       <span className="ml-1 px-1.5 py-0.5 text-xs bg-green-100 text-green-700 rounded-full">
-                        {acceptedCount}/{candidates.length}
+                        {linkedBlockCount}
                       </span>
                     )}
                     {panel === 'references' && (outRefs.length + inRefs.length) > 0 && (
@@ -1038,8 +945,8 @@ export default function SourceDocumentDetail({
             {activePanel === 'blocks' && (
               <div className="flex-1 flex flex-col overflow-hidden">
 
-                {/* Blocks section */}
-                <div className={`flex flex-col overflow-hidden ${candidates.length > 0 ? 'flex-[3]' : 'flex-1'}`}>
+                {/* Blocks section — shrinks to make room for extract form */}
+                <div className={`flex flex-col overflow-hidden ${extractForm ? 'flex-[3]' : 'flex-1'}`}>
 
                   {/* Blocks toolbar */}
                   <div className="bg-white border-b border-gray-200 px-4 py-2 flex items-center gap-2 shrink-0 flex-wrap">
@@ -1047,7 +954,7 @@ export default function SourceDocumentDetail({
                       <>
                         <p className="text-sm text-gray-500 flex-1">
                           {doc?.has_file
-                            ? 'Decompose this document into structured blocks for AI extraction.'
+                            ? 'Decompose this document into structured blocks for extraction.'
                             : 'Upload a PDF first, then decompose it into blocks.'}
                         </p>
                         <button
@@ -1063,36 +970,28 @@ export default function SourceDocumentDetail({
                         <span className="text-xs text-gray-500">
                           {blocks.length} blocks
                           {selectedBlockIds.size > 0 && ` · ${selectedBlockIds.size} selected`}
+                          {linkedBlockCount > 0 && ` · ${linkedBlockCount} extracted`}
                         </span>
                         <button
-                          onClick={selectedBlockIds.size > 0 ? clearSelection : selectAllBlocks}
+                          onClick={selectedBlockIds.size > 0 ? clearSelection : selectAllUnlinkedBlocks}
                           className="text-xs text-blue-600 hover:underline"
                         >
                           {selectedBlockIds.size > 0 ? 'Clear selection' : 'Select all'}
                         </button>
                         <div className="flex-1" />
-                        {selectedBlockIds.size >= 2 && (
-                          <button
-                            onClick={handleMergeBlocks}
-                            className="px-3 py-1.5 text-xs border border-purple-300 text-purple-700 rounded hover:bg-purple-50"
-                            title="Concatenate selected blocks into a single requirement form"
-                          >
-                            Merge to Requirement ({selectedBlockIds.size})
-                          </button>
-                        )}
                         <button
-                          onClick={() => void handleExtract(true)}
-                          disabled={extracting || selectedBlockIds.size === 0}
-                          className="px-3 py-1.5 text-xs border border-blue-300 text-blue-700 rounded hover:bg-blue-50 disabled:opacity-40"
+                          onClick={handleOpenExtractForm}
+                          disabled={!canExtract || !!extractForm}
+                          className="px-3 py-1.5 text-xs bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-40"
+                          title={
+                            selectedLinkedCount > 0
+                              ? 'Some selected blocks are already linked to a requirement — unlink them first'
+                              : selectedBlockIds.size === 0
+                              ? 'Select one or more blocks first'
+                              : 'Extract selected blocks to a new requirement'
+                          }
                         >
-                          {extracting ? 'Extracting…' : `Extract from Selected (${selectedBlockIds.size})`}
-                        </button>
-                        <button
-                          onClick={() => void handleExtract(false)}
-                          disabled={extracting}
-                          className="px-3 py-1.5 text-xs bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-40"
-                        >
-                          {extracting ? 'Extracting…' : 'Extract All'}
+                          Extract to Requirement ({selectedBlockIds.size})
                         </button>
                         <button
                           onClick={() => void handleDecompose()}
@@ -1135,26 +1034,37 @@ export default function SourceDocumentDetail({
                           const isSelected = selectedBlockIds.has(block.id)
                           const isBoilerplate = block.block_type === 'boilerplate'
                           const isPinned = pinnedBlockIds.has(block.id)
+                          const isLinked = !!block.linked_requirement_id
                           return (
                             <div
                               key={block.id}
                               data-block-id={block.id}
-                              className={`flex items-start gap-2 px-3 py-2 hover:bg-white cursor-pointer transition-colors ${
+                              className={`flex items-start gap-2 px-3 py-2 transition-colors ${
                                 highlightedBlockId === block.id
                                   ? 'bg-yellow-100 ring-2 ring-inset ring-yellow-400'
                                   : isPinned
                                   ? 'bg-blue-50 ring-2 ring-inset ring-blue-300'
-                                  : isSelected ? 'bg-blue-50' : ''
+                                  : isLinked
+                                  ? 'border-l-4 border-l-green-400 bg-green-50/40'
+                                  : isSelected
+                                  ? 'bg-blue-50 hover:bg-blue-100 cursor-pointer'
+                                  : 'hover:bg-white cursor-pointer'
                               } ${isBoilerplate ? 'opacity-50' : ''}`}
                               style={{ paddingLeft: `${12 + block.depth * 16}px` }}
-                              onClick={() => toggleBlock(block.id)}
+                              onClick={() => !isLinked && toggleBlock(block.id)}
                             >
                               <input
                                 type="checkbox"
                                 checked={isSelected}
-                                onChange={() => toggleBlock(block.id)}
+                                disabled={isLinked}
+                                onChange={() => !isLinked && toggleBlock(block.id)}
                                 onClick={(e) => e.stopPropagation()}
-                                className="mt-0.5 shrink-0"
+                                className="mt-0.5 shrink-0 disabled:opacity-40"
+                                title={
+                                  isLinked
+                                    ? `Already extracted to ${block.linked_requirement_summary?.requirement_id ?? 'a requirement'} — click × to unlink`
+                                    : undefined
+                                }
                               />
                               <div className="flex-1 min-w-0">
                                 <div className="flex items-center gap-1.5 mb-0.5 flex-wrap">
@@ -1164,6 +1074,30 @@ export default function SourceDocumentDetail({
                                     </span>
                                   )}
                                   <BlockTypeBadge type={block.block_type} />
+                                  {isLinked && block.linked_requirement_summary && (
+                                    <span className="flex items-center gap-0.5 shrink-0">
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation()
+                                          onOpenRequirement(block.linked_requirement_id!)
+                                        }}
+                                        className="text-xs font-mono bg-green-100 text-green-800 px-1.5 py-0.5 rounded hover:bg-green-200 transition-colors"
+                                        title="Open linked requirement"
+                                      >
+                                        {block.linked_requirement_summary.requirement_id}
+                                      </button>
+                                      <button
+                                        onClick={(e) => {
+                                          e.stopPropagation()
+                                          void handleUnlinkBlock(block.id)
+                                        }}
+                                        className="text-gray-400 hover:text-red-500 text-xs px-0.5 leading-none transition-colors"
+                                        title="Unlink this block from the requirement"
+                                      >
+                                        ×
+                                      </button>
+                                    </span>
+                                  )}
                                 </div>
                                 {block.block_type === 'table_block' && block.table_data ? (
                                   <TablePreview data={block.table_data} compact />
@@ -1185,227 +1119,143 @@ export default function SourceDocumentDetail({
                   </div>
                 </div>
 
-                {/* ---- Extraction Candidates panel ---- */}
-                {candidates.length > 0 && (
-                  <div className="flex-[2] flex flex-col overflow-hidden border-t-2 border-gray-300">
-                    {/* Candidates header */}
-                    <div className="bg-white border-b border-gray-200 px-4 py-2 flex items-center gap-3 shrink-0 flex-wrap">
+                {/* ---- Extraction form panel ---- */}
+                {extractForm && (
+                  <div className="flex-[2] flex flex-col overflow-hidden border-t-2 border-green-300">
+                    <div className="bg-white border-b border-gray-200 px-4 py-2 flex items-center gap-3 shrink-0">
                       <span className="text-sm font-semibold text-gray-700">
-                        Extraction Candidates
+                        Extract to Requirement
                       </span>
                       <span className="text-xs text-gray-500">
-                        {acceptedCount} accepted · {rejectedCount} rejected · {pendingCount} pending
+                        {selectedBlockIds.size} block{selectedBlockIds.size !== 1 ? 's' : ''} selected
+                        {(() => {
+                          const clauseNums = blocks
+                            .filter((b) => selectedBlockIds.has(b.id) && b.clause_number)
+                            .sort((a, b) => a.sort_order - b.sort_order)
+                            .map((b) => b.clause_number!)
+                          return clauseNums.length > 0 ? ` · ${clauseNums.join(', ')}` : ''
+                        })()}
                       </span>
-                      {candidateError && (
-                        <span className="text-xs text-red-600 ml-2">{candidateError}</span>
+                      {extractError && (
+                        <span className="text-xs text-red-600 ml-2">{extractError}</span>
                       )}
                     </div>
 
-                    {/* Candidates list */}
-                    <div className="flex-1 overflow-y-auto divide-y divide-gray-100 bg-gray-50">
-                      {candidates.map((c) => {
-                        const isEditing = editingCandidateId === c.id
-                        return (
-                          <div
-                            key={c.id}
-                            className={`bg-white p-3 ${candidateBorderClass(c.status)} ${
-                              c.status === 'Rejected' ? 'opacity-50' : ''
-                            }`}
+                    <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-gray-50">
+                      {/* Title */}
+                      <div>
+                        <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+                          Title
+                        </label>
+                        <input
+                          type="text"
+                          value={extractForm.title}
+                          onChange={(e) => setExtractForm((f) => f ? { ...f, title: e.target.value } : f)}
+                          placeholder="Requirement title (leave blank to auto-generate)"
+                          className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-green-400"
+                          autoFocus
+                        />
+                      </div>
+
+                      {/* Classification + Subtype + Discipline */}
+                      <div className="flex gap-2">
+                        <div className="flex-1">
+                          <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+                            Classification
+                          </label>
+                          <select
+                            value={extractForm.classification}
+                            onChange={(e) =>
+                              setExtractForm((f) =>
+                                f ? { ...f, classification: e.target.value, classification_subtype: null } : f
+                              )
+                            }
+                            className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-green-400"
                           >
-                            {/* Accepted state */}
-                            {c.status === 'Accepted' && (
-                              <div className="flex items-center gap-2">
-                                <span className="text-green-600 text-sm">✓</span>
-                                <div className="flex-1 min-w-0">
-                                  <p className="text-xs font-semibold text-gray-800 truncate">{c.title}</p>
-                                  <p className="text-xs text-gray-500">{c.source_clause && `§${c.source_clause} · `}{c.suggested_discipline}</p>
-                                </div>
-                                {c.accepted_requirement_id && (
-                                  <button
-                                    onClick={() => onOpenRequirement(c.accepted_requirement_id!)}
-                                    className="text-xs text-blue-600 hover:underline shrink-0"
-                                  >
-                                    Open →
-                                  </button>
-                                )}
-                              </div>
-                            )}
+                            <option>Requirement</option>
+                            <option>Guideline</option>
+                          </select>
+                        </div>
+                        <div className="flex-1">
+                          <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+                            Subtype
+                          </label>
+                          <select
+                            value={extractForm.classification_subtype ?? ''}
+                            onChange={(e) =>
+                              setExtractForm((f) =>
+                                f ? { ...f, classification_subtype: e.target.value || null } : f
+                              )
+                            }
+                            className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-green-400"
+                          >
+                            <option value="">— Subtype —</option>
+                            {(SUBTYPES_BY_CLASSIFICATION[extractForm.classification] ?? []).map((s) => (
+                              <option key={s} value={s}>{s}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div className="flex-1">
+                          <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-1">
+                            Discipline
+                          </label>
+                          <select
+                            value={extractForm.discipline}
+                            onChange={(e) =>
+                              setExtractForm((f) => f ? { ...f, discipline: e.target.value } : f)
+                            }
+                            className="w-full border border-gray-300 rounded px-2 py-1.5 text-sm bg-white focus:outline-none focus:ring-1 focus:ring-green-400"
+                          >
+                            {DISCIPLINES.map((d) => <option key={d}>{d}</option>)}
+                          </select>
+                        </div>
+                      </div>
 
-                            {/* Rejected state */}
-                            {c.status === 'Rejected' && (
-                              <div className="flex items-center gap-2">
-                                <span className="text-gray-400 text-sm">✕</span>
-                                <p className="text-xs text-gray-500 flex-1 truncate">{c.title}</p>
-                                <button
-                                  onClick={() => void handleRestorePending(c.id)}
-                                  className="text-xs text-blue-500 hover:underline shrink-0"
-                                >
-                                  Restore
-                                </button>
-                              </div>
-                            )}
+                      {/* Hierarchy / Site / Units */}
+                      <div className="flex gap-2">
+                        <MiniMultiPicker
+                          label="Hierarchy Nodes"
+                          options={flatHierarchy}
+                          selectedIds={extractForm.hierarchy_node_ids}
+                          onChange={(ids) =>
+                            setExtractForm((f) => f ? { ...f, hierarchy_node_ids: ids } : f)
+                          }
+                        />
+                        <MiniMultiPicker
+                          label="Site"
+                          options={sites}
+                          selectedIds={extractForm.site_ids}
+                          onChange={(ids) =>
+                            setExtractForm((f) => f ? { ...f, site_ids: ids } : f)
+                          }
+                        />
+                        <MiniMultiPicker
+                          label="Units"
+                          options={units}
+                          selectedIds={extractForm.unit_ids}
+                          onChange={(ids) =>
+                            setExtractForm((f) => f ? { ...f, unit_ids: ids } : f)
+                          }
+                        />
+                      </div>
 
-                            {/* Pending / Edited state */}
-                            {(c.status === 'Pending' || c.status === 'Edited') && !isEditing && (
-                              <>
-                                <div className="flex items-start gap-2 mb-2">
-                                  <div className="flex-1 min-w-0">
-                                    <p className="text-xs font-semibold text-gray-800 mb-0.5">{c.title}</p>
-                                    {/* If the candidate came from a table block, render a table preview */}
-                                    {(() => {
-                                      const srcBlock = c.source_block_id
-                                        ? blocks.find((b) => b.id === c.source_block_id)
-                                        : null
-                                      return srcBlock?.block_type === 'table_block' && srcBlock.table_data ? (
-                                        <div className="mt-1">
-                                          <span className="text-xs bg-purple-100 text-purple-700 px-1.5 py-0.5 rounded font-medium mr-1">
-                                            Tabular
-                                          </span>
-                                          <TablePreview data={srcBlock.table_data} compact />
-                                        </div>
-                                      ) : (
-                                        <p className="text-xs text-gray-600 line-clamp-2">{c.statement}</p>
-                                      )
-                                    })()}
-                                    <div className="flex items-center gap-1.5 mt-1 flex-wrap">
-                                      {c.source_clause && (
-                                        <button
-                                          onClick={() => c.source_block_id && scrollToBlock(c.source_block_id)}
-                                          disabled={!c.source_block_id}
-                                          className="text-xs font-mono bg-yellow-100 text-yellow-800 px-1.5 py-0.5 rounded hover:bg-yellow-200 disabled:cursor-default disabled:hover:bg-yellow-100 transition-colors"
-                                          title={c.source_block_id ? 'Click to highlight source block' : 'No block reference'}
-                                        >
-                                          §{c.source_clause}
-                                        </button>
-                                      )}
-                                      {c.suggested_classification && (
-                                        <span className={`text-xs px-1.5 py-0.5 rounded ${
-                                          c.suggested_classification === 'Requirement'
-                                            ? 'bg-green-100 text-green-700'
-                                            : 'bg-yellow-100 text-yellow-700'
-                                        }`}>
-                                          {c.suggested_classification}
-                                        </span>
-                                      )}
-                                      {c.suggested_classification_subtype && (
-                                        <span className="text-xs bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded italic">
-                                          {c.suggested_classification_subtype}
-                                        </span>
-                                      )}
-                                      {c.suggested_discipline && (
-                                        <span className="text-xs bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded">
-                                          {c.suggested_discipline}
-                                        </span>
-                                      )}
-                                    </div>
-                                  </div>
-                                </div>
-                                <div className="flex gap-1.5">
-                                  <button
-                                    onClick={() => void handleAccept(c)}
-                                    className="px-2.5 py-1 text-xs bg-green-600 text-white rounded hover:bg-green-700"
-                                  >
-                                    Accept
-                                  </button>
-                                  <button
-                                    onClick={() => startEdit(c)}
-                                    className="px-2.5 py-1 text-xs border border-blue-300 text-blue-700 rounded hover:bg-blue-50"
-                                  >
-                                    Edit & Accept
-                                  </button>
-                                  <button
-                                    onClick={() => void handleReject(c.id)}
-                                    className="px-2.5 py-1 text-xs border border-gray-300 text-gray-500 rounded hover:bg-gray-50"
-                                  >
-                                    Reject
-                                  </button>
-                                </div>
-                              </>
-                            )}
-
-                            {/* Edit & Accept inline form */}
-                            {isEditing && editForm && (
-                              <div className="space-y-2 pt-1">
-                                <input
-                                  type="text"
-                                  value={editForm.title}
-                                  onChange={(e) => setEditForm((f) => f ? { ...f, title: e.target.value } : f)}
-                                  placeholder="Title"
-                                  className="w-full border border-gray-300 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400"
-                                />
-                                <textarea
-                                  value={editForm.statement}
-                                  onChange={(e) => setEditForm((f) => f ? { ...f, statement: e.target.value } : f)}
-                                  placeholder="Statement"
-                                  rows={3}
-                                  className="w-full border border-gray-300 rounded px-2 py-1 text-xs focus:outline-none focus:ring-1 focus:ring-blue-400 resize-none"
-                                />
-                                <div className="flex gap-2">
-                                  <select
-                                    value={editForm.classification}
-                                    onChange={(e) => setEditForm((f) => f ? { ...f, classification: e.target.value, classification_subtype: null } : f)}
-                                    className="flex-1 border border-gray-300 rounded px-2 py-1 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-blue-400"
-                                  >
-                                    <option>Requirement</option>
-                                    <option>Guideline</option>
-                                  </select>
-                                  <select
-                                    value={editForm.classification_subtype ?? ''}
-                                    onChange={(e) => setEditForm((f) => f ? { ...f, classification_subtype: e.target.value || null } : f)}
-                                    className="flex-1 border border-gray-300 rounded px-2 py-1 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-blue-400"
-                                  >
-                                    <option value="">— Subtype —</option>
-                                    {(SUBTYPES_BY_CLASSIFICATION[editForm.classification] ?? []).map((s) => (
-                                      <option key={s} value={s}>{s}</option>
-                                    ))}
-                                  </select>
-                                  <select
-                                    value={editForm.discipline}
-                                    onChange={(e) => setEditForm((f) => f ? { ...f, discipline: e.target.value } : f)}
-                                    className="flex-1 border border-gray-300 rounded px-2 py-1 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-blue-400"
-                                  >
-                                    {DISCIPLINES.map((d) => <option key={d}>{d}</option>)}
-                                  </select>
-                                </div>
-                                <div className="flex gap-2">
-                                  <MiniMultiPicker
-                                    label="Hierarchy Nodes"
-                                    options={flatHierarchy}
-                                    selectedIds={editForm.hierarchy_node_ids}
-                                    onChange={(ids) => setEditForm((f) => f ? { ...f, hierarchy_node_ids: ids } : f)}
-                                  />
-                                  <MiniMultiPicker
-                                    label="Site"
-                                    options={sites}
-                                    selectedIds={editForm.site_ids}
-                                    onChange={(ids) => setEditForm((f) => f ? { ...f, site_ids: ids } : f)}
-                                  />
-                                  <MiniMultiPicker
-                                    label="Units"
-                                    options={units}
-                                    selectedIds={editForm.unit_ids}
-                                    onChange={(ids) => setEditForm((f) => f ? { ...f, unit_ids: ids } : f)}
-                                  />
-                                </div>
-                                <div className="flex gap-1.5">
-                                  <button
-                                    onClick={() => void handleAccept(c, editForm)}
-                                    className="px-2.5 py-1 text-xs bg-green-600 text-white rounded hover:bg-green-700"
-                                  >
-                                    Accept
-                                  </button>
-                                  <button
-                                    onClick={() => { setEditingCandidateId(null); setEditForm(null) }}
-                                    className="px-2.5 py-1 text-xs border border-gray-300 text-gray-500 rounded hover:bg-gray-50"
-                                  >
-                                    Cancel
-                                  </button>
-                                </div>
-                              </div>
-                            )}
-                          </div>
-                        )
-                      })}
+                      {/* Actions */}
+                      <div className="flex gap-2 pt-1">
+                        <button
+                          onClick={() => void handleExtractToRequirement()}
+                          disabled={extracting}
+                          className="px-3 py-1.5 text-sm bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50"
+                        >
+                          {extracting ? 'Creating…' : 'Create Requirement'}
+                        </button>
+                        <button
+                          onClick={() => { setExtractForm(null); setExtractError(null) }}
+                          disabled={extracting}
+                          className="px-3 py-1.5 text-sm border border-gray-300 text-gray-600 rounded hover:bg-gray-50 disabled:opacity-50"
+                        >
+                          Cancel
+                        </button>
+                      </div>
                     </div>
                   </div>
                 )}
@@ -1435,14 +1285,12 @@ export default function SourceDocumentDetail({
             {activePanel === 'references' && (
               <div className="flex-1 overflow-y-auto p-4 space-y-5">
 
-                {/* Error */}
                 {refError && (
                   <div className="px-3 py-2 bg-red-50 border border-red-200 rounded text-xs text-red-700">
                     {refError}
                   </div>
                 )}
 
-                {/* Header row */}
                 <div className="flex items-center gap-3">
                   <h3 className="text-sm font-semibold text-gray-700 flex-1">
                     Document References
@@ -1473,7 +1321,6 @@ export default function SourceDocumentDetail({
                   </button>
                 </div>
 
-                {/* Add reference inline form */}
                 {addingRef && (
                   <div className="border border-indigo-200 rounded-lg p-3 space-y-2 bg-indigo-50">
                     <p className="text-xs font-semibold text-indigo-800">
@@ -1520,7 +1367,6 @@ export default function SourceDocumentDetail({
                   </div>
                 )}
 
-                {/* Outgoing references (this doc cites) */}
                 <div>
                   <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
                     This document cites ({outRefs.length})
@@ -1556,7 +1402,6 @@ export default function SourceDocumentDetail({
                   )}
                 </div>
 
-                {/* Incoming references (who cites this doc) */}
                 <div>
                   <p className="text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
                     Referenced by ({inRefs.length})
@@ -1598,7 +1443,7 @@ export default function SourceDocumentDetail({
 }
 
 // ---------------------------------------------------------------------------
-// MiniMultiPicker — compact inline checkbox dropdown for Edit & Accept form
+// MiniMultiPicker — compact inline checkbox dropdown
 // ---------------------------------------------------------------------------
 
 function MiniMultiPicker({
@@ -1632,8 +1477,8 @@ function MiniMultiPicker({
       <button
         type="button"
         onClick={() => setOpen((v) => !v)}
-        className={`w-full border rounded px-2 py-1 text-xs bg-white text-left flex items-center justify-between gap-1 ${
-          selectedIds.length > 0 ? 'border-blue-400 text-blue-700' : 'border-gray-300 text-gray-500'
+        className={`w-full border rounded px-2 py-1.5 text-xs bg-white text-left flex items-center justify-between gap-1 ${
+          selectedIds.length > 0 ? 'border-green-400 text-green-700' : 'border-gray-300 text-gray-500'
         }`}
       >
         <span className="truncate">
@@ -1649,7 +1494,7 @@ function MiniMultiPicker({
           {options.map((opt) => (
             <label
               key={opt.id}
-              className="flex items-center gap-2 px-3 py-1.5 hover:bg-blue-50 cursor-pointer"
+              className="flex items-center gap-2 px-3 py-1.5 hover:bg-green-50 cursor-pointer"
               style={opt.depth !== undefined ? { paddingLeft: `${12 + opt.depth * 12}px` } : undefined}
             >
               <input

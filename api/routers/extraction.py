@@ -128,11 +128,27 @@ class RemoveRequirementBlockRequest(BaseModel):
     block_id: str
 
 
+class ExtractToRequirementRequest(BaseModel):
+    block_ids: List[str]
+    owner: str
+    title: Optional[str] = None
+    classification: Optional[str] = None
+    classification_subtype: Optional[str] = None
+    discipline: Optional[str] = None
+    hierarchy_node_ids: List[str] = []
+    site_ids: List[str] = []
+    unit_ids: List[str] = []
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _block_to_dict(block: DocumentBlock, include_children: bool = True) -> dict:
+def _block_to_dict(
+    block: DocumentBlock,
+    include_children: bool = True,
+    linked_req: Optional[dict] = None,
+) -> dict:
     d = {
         "id": str(block.id),
         "source_document_id": str(block.source_document_id),
@@ -145,6 +161,8 @@ def _block_to_dict(block: DocumentBlock, include_children: bool = True) -> dict:
         "sort_order": block.sort_order,
         "depth": block.depth,
         "children": [],
+        "linked_requirement_id": linked_req["id"] if linked_req else None,
+        "linked_requirement_summary": linked_req if linked_req else None,
     }
     return d
 
@@ -535,7 +553,11 @@ def detect_references(doc_id: str, db: Session = Depends(get_db)):
 
 @router.get("/source-documents/{doc_id}/blocks")
 def list_blocks(doc_id: str, db: Session = Depends(get_db)):
-    """Return blocks for a document as a flat list ordered by sort_order."""
+    """Return blocks for a document as a flat list ordered by sort_order.
+
+    Each block includes linked_requirement_id and linked_requirement_summary
+    so the frontend can show extraction status and disable already-linked blocks.
+    """
     _get_doc_or_404(doc_id, db)
     blocks = (
         db.query(DocumentBlock)
@@ -543,7 +565,25 @@ def list_blocks(doc_id: str, db: Session = Depends(get_db)):
         .order_by(DocumentBlock.sort_order)
         .all()
     )
-    return {"blocks": [_block_to_dict(b) for b in blocks]}
+
+    # Build a map from block_id → requirement summary for blocks that are linked
+    linked_map: dict[UUID, dict] = {}
+    if blocks:
+        rb_rows = (
+            db.query(RequirementBlock, Requirement)
+            .join(Requirement, RequirementBlock.requirement_id == Requirement.id)
+            .filter(RequirementBlock.block_id.in_([b.id for b in blocks]))
+            .all()
+        )
+        for rb, req in rb_rows:
+            linked_map[rb.block_id] = {
+                "id": str(req.id),
+                "requirement_id": req.requirement_id,
+                "title": req.title,
+                "status": req.status,
+            }
+
+    return {"blocks": [_block_to_dict(b, linked_req=linked_map.get(b.id)) for b in blocks]}
 
 
 @router.put("/document-blocks/{block_id}")
@@ -567,11 +607,17 @@ def extract(
     db: Session = Depends(get_db),
 ):
     """
-    Trigger LLM extraction from blocks.
-    Optional body: { "block_ids": ["uuid", ...] } to extract from specific blocks.
-    If block_ids is omitted or empty, extracts from all non-boilerplate blocks.
-    Returns newly created candidates.
+    DEPRECATED (Stage 18) — returns 410 Gone.
+    Use POST /document-blocks/extract-to-requirement instead.
     """
+    raise HTTPException(
+        status_code=410,
+        detail=(
+            "This endpoint has been retired. "
+            "Select clauses in the Document Blocks viewer and use "
+            "POST /document-blocks/extract-to-requirement instead."
+        ),
+    )
     _get_doc_or_404(doc_id, db)
 
     block_ids: list[str] = body.get("block_ids", []) if body else []
@@ -642,22 +688,22 @@ def extract(
 
 @router.get("/source-documents/{doc_id}/candidates")
 def list_candidates(doc_id: str, db: Session = Depends(get_db)):
-    """List all extraction candidates for a document, newest first."""
-    _get_doc_or_404(doc_id, db)
-    candidates = (
-        db.query(ExtractionCandidate)
-        .filter(ExtractionCandidate.source_document_id == UUID(doc_id))
-        .order_by(ExtractionCandidate.created_at)
-        .all()
+    """DEPRECATED (Stage 18) — returns 410 Gone."""
+    raise HTTPException(
+        status_code=410,
+        detail="The extraction candidates workflow has been retired. Use the Document Blocks viewer to extract requirements directly.",
     )
-    return {"candidates": [_candidate_to_dict(c) for c in candidates]}
 
 
 @router.put("/extraction-candidates/{candidate_id}")
 def update_candidate(
     candidate_id: str, body: CandidateUpdate, db: Session = Depends(get_db)
 ):
-    """Update a candidate's fields or status (Pending → Rejected, etc.)."""
+    """DEPRECATED (Stage 18) — returns 410 Gone."""
+    raise HTTPException(
+        status_code=410,
+        detail="The extraction candidates workflow has been retired.",
+    )
     c = db.query(ExtractionCandidate).filter(
         ExtractionCandidate.id == UUID(candidate_id)
     ).first()
@@ -691,10 +737,11 @@ def accept_candidate(
     body: AcceptCandidateRequest,
     db: Session = Depends(get_db),
 ):
-    """
-    Accept an extraction candidate: create a real Requirement and mark the
-    candidate as Accepted.  Returns the created requirement dict.
-    """
+    """DEPRECATED (Stage 18) — returns 410 Gone."""
+    raise HTTPException(
+        status_code=410,
+        detail="The extraction candidates workflow has been retired. Use POST /document-blocks/extract-to-requirement instead.",
+    )
     c = db.query(ExtractionCandidate).filter(
         ExtractionCandidate.id == UUID(candidate_id)
     ).first()
@@ -949,6 +996,162 @@ def remove_requirement_block(body: RemoveRequirementBlockRequest, db: Session = 
         for rb, blk in rb_rows
     ]
     return {"content_source": req.content_source, "linked_blocks": linked_blocks}
+
+
+@router.post("/document-blocks/extract-to-requirement", status_code=201)
+def extract_to_requirement(body: ExtractToRequirementRequest, db: Session = Depends(get_db)):
+    """
+    Create a block-linked requirement directly from one or more selected blocks.
+
+    Replaces the old two-pass LLM extraction flow. Users select clause(s) in the
+    document viewer, fill in metadata, and this endpoint creates the requirement
+    and requirement_blocks junction records in one step.
+
+    Returns {id, requirement_id} — navigate to the requirement detail to review.
+    """
+    if not body.block_ids:
+        raise HTTPException(status_code=422, detail="block_ids must not be empty")
+
+    blocks = (
+        db.query(DocumentBlock)
+        .filter(DocumentBlock.id.in_([UUID(bid) for bid in body.block_ids]))
+        .order_by(DocumentBlock.sort_order)
+        .all()
+    )
+
+    if not blocks:
+        raise HTTPException(status_code=404, detail="No matching blocks found")
+
+    # Validate all blocks belong to the same source document
+    doc_ids = set(b.source_document_id for b in blocks)
+    if len(doc_ids) != 1:
+        raise HTTPException(
+            status_code=422,
+            detail="All blocks must belong to the same source document",
+        )
+    source_doc_id = blocks[0].source_document_id
+
+    # Check if any selected block is already linked to a requirement
+    existing_links = (
+        db.query(RequirementBlock)
+        .filter(RequirementBlock.block_id.in_([b.id for b in blocks]))
+        .all()
+    )
+    if existing_links:
+        linked_req = db.get(Requirement, existing_links[0].requirement_id)
+        rid = linked_req.requirement_id if linked_req else "unknown"
+        raise HTTPException(
+            status_code=409,
+            detail=f"One or more blocks are already linked to {rid}. Unlink them first.",
+        )
+
+    # Build source_clause from clause numbers in document order
+    clause_nums = [b.clause_number for b in blocks if b.clause_number]
+    source_clause = ", ".join(clause_nums) if clause_nums else None
+
+    statement = "\n\n".join(_block_plain_text(b) for b in blocks)
+    discipline = body.discipline or "General"
+    classification = body.classification or "Requirement"
+    title = (body.title or "Untitled requirement")[:120]
+    req_id = _next_requirement_id(discipline, db)
+
+    from models import HierarchyNode, Site, Unit
+    hier_nodes = (
+        db.query(HierarchyNode)
+        .filter(HierarchyNode.id.in_([UUID(x) for x in body.hierarchy_node_ids]))
+        .all()
+        if body.hierarchy_node_ids else []
+    )
+    sites = (
+        db.query(Site)
+        .filter(Site.id.in_([UUID(x) for x in body.site_ids]))
+        .all()
+        if body.site_ids else []
+    )
+    units = (
+        db.query(Unit)
+        .filter(Unit.id.in_([UUID(x) for x in body.unit_ids]))
+        .all()
+        if body.unit_ids else []
+    )
+
+    req = Requirement(
+        id=uuid.uuid4(),
+        requirement_id=req_id,
+        title=title,
+        statement=statement,
+        classification=classification,
+        classification_subtype=body.classification_subtype,
+        owner=body.owner,
+        source_type="Derived from Document",
+        status="Draft",
+        discipline=discipline,
+        created_by=body.owner,
+        created_date=date.today(),
+        source_document_id=source_doc_id,
+        source_clause=source_clause,
+        content_source="block_linked",
+        hierarchy_nodes=hier_nodes,
+        sites=sites,
+        units=units,
+    )
+    db.add(req)
+    db.flush()
+
+    for i, block in enumerate(blocks):
+        db.add(RequirementBlock(
+            id=uuid.uuid4(),
+            requirement_id=req.id,
+            block_id=block.id,
+            sort_order=i,
+            created_at=datetime.utcnow(),
+        ))
+
+    db.commit()
+    return {"id": str(req.id), "requirement_id": req.requirement_id}
+
+
+@router.post("/document-blocks/{block_id}/unlink-requirement")
+def unlink_requirement_from_block(block_id: str, db: Session = Depends(get_db)):
+    """
+    Remove the requirement_blocks link for this block.
+
+    Does NOT archive or delete the requirement — it remains in the system but
+    loses its linkage to this source clause. The clause becomes available for
+    re-extraction. If this was the last linked block on the requirement,
+    content_source is reverted to 'manual'.
+    """
+    block = db.get(DocumentBlock, UUID(block_id))
+    if not block:
+        raise HTTPException(status_code=404, detail="Block not found")
+
+    rb = (
+        db.query(RequirementBlock)
+        .filter(RequirementBlock.block_id == UUID(block_id))
+        .first()
+    )
+    if rb:
+        req_id = rb.requirement_id
+        db.delete(rb)
+        db.flush()
+
+        remaining = (
+            db.query(RequirementBlock)
+            .filter(RequirementBlock.requirement_id == req_id)
+            .count()
+        )
+        if remaining == 0:
+            req = db.get(Requirement, req_id)
+            if req:
+                req.content_source = "manual"
+
+        db.commit()
+
+    return {
+        "id": str(block.id),
+        "linked_requirement_id": None,
+        "linked_requirement_summary": None,
+    }
 
 
 @router.post("/source-documents/{doc_id}/merge-blocks", status_code=201)

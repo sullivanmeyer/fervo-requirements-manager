@@ -288,6 +288,13 @@ export interface TableData {
   table_parse_quality?: 'vision' | 'fallback'
 }
 
+export interface LinkedRequirementSummary {
+  id: string
+  requirement_id: string
+  title: string
+  status: string
+}
+
 export interface DocumentBlock {
   id: string
   source_document_id: string
@@ -300,6 +307,8 @@ export interface DocumentBlock {
   sort_order: number
   depth: number
   children: DocumentBlock[]
+  linked_requirement_id: string | null
+  linked_requirement_summary: LinkedRequirementSummary | null
 }
 
 // ---------------------------------------------------------------------------

@@ -468,6 +468,9 @@ def toggle_archive(
     if req.requirement_id == SELF_DERIVED_ID:
         raise HTTPException(status_code=403, detail="The Self-Derived record cannot be archived")
     req.archived = archived
+    if archived:
+        # Free source blocks so they can be re-extracted
+        db.query(RequirementBlock).filter(RequirementBlock.requirement_id == req.id).delete()
     db.commit()
     db.refresh(req)
     return _requirement_to_dict(req, detail=True, db=db)

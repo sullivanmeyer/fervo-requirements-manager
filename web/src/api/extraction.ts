@@ -162,3 +162,43 @@ export async function acceptCandidate(
   }
   return res.json()
 }
+
+// ---------------------------------------------------------------------------
+// Direct block-to-requirement extraction (Stage 18)
+// ---------------------------------------------------------------------------
+
+export async function extractToRequirement(payload: {
+  block_ids: string[]
+  owner: string
+  title?: string
+  classification?: string
+  classification_subtype?: string | null
+  discipline?: string
+  hierarchy_node_ids?: string[]
+  site_ids?: string[]
+  unit_ids?: string[]
+}): Promise<{ id: string; requirement_id: string }> {
+  const res = await fetch(`${BASE}/document-blocks/extract-to-requirement`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({})) as { detail?: string }
+    throw new Error(err.detail ?? `Extraction failed (${res.status})`)
+  }
+  return res.json()
+}
+
+export async function unlinkBlock(
+  blockId: string,
+): Promise<{ id: string; linked_requirement_id: null }> {
+  const res = await fetch(`${BASE}/document-blocks/${blockId}/unlink-requirement`, {
+    method: 'POST',
+  })
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({})) as { detail?: string }
+    throw new Error(err.detail ?? `Unlink failed (${res.status})`)
+  }
+  return res.json()
+}
