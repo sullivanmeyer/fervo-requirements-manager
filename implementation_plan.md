@@ -1,6 +1,6 @@
 # Phase 1 MVP — Staged Implementation Checklist
 # Requirements Management Application
-# Last updated: April 2026 (through Stage 17)
+# Last updated: April 2026 (through Stage 18)
 
 This file tracks Claude Code's progress through the Phase 1 MVP build.
 Check each box as the item is implemented and verified.
@@ -1146,6 +1146,89 @@ the extraction review flow, and derivation tree filtering.
 - [x] Open Edit & Accept on an extraction candidate — verify Subtype, Hierarchy Nodes, Site, and Units fields are present and editable
 - [x] Accept a candidate with Hierarchy Nodes selected — verify the created requirement is assigned to the selected nodes
 
+## Stage 18 — Single-Pass Extraction Refactor (Eliminate Second LLM Pass)
+
+**Status: COMPLETE** (commit `0c12123`, April 2026)
+
+### Goal
+Eliminated the two-pass LLM extraction pipeline. Decomposition (Pass 1) is
+unchanged. The second pass that proposed `extraction_candidates` for user
+Accept/Reject is retired. Users now work directly with decomposed clauses:
+select 1+ blocks → "Extract to Requirement" → fill in metadata → create.
+
+The Stage 15 block-linked requirement model (`requirement_blocks` junction table,
+`content_source = 'block_linked'`, `BlockRenderer`) is fully preserved.
+
+### Architectural Change Summary
+**Before (two-pass):**
+```
+PDF → LLM Pass 1 → document_blocks → LLM Pass 2 → extraction_candidates
+    → user Accept/Reject → requirement (block-linked via Stage 15)
+```
+
+**After (single-pass):**
+```
+PDF → LLM Pass 1 → document_blocks → user selects clause(s)
+    → "Extract to Requirement" → requirement (block-linked via Stage 15)
+```
+
+### Backend — Extraction Service Changes
+- [x] `services/extraction.py` `extract_requirements()` function left in place (service layer); deprecated at the router level via 410 — no code deleted to avoid breaking any external callers during transition
+- [x] First-pass `decompose_document()` retained exactly as-is — single LLM call unchanged
+
+### Backend — New Direct Extraction Endpoint
+- [x] `POST /api/document-blocks/extract-to-requirement` added in `api/routers/extraction.py`
+  - Accepts `block_ids`, `owner`, optional `title`, `classification`, `classification_subtype`, `discipline`, `hierarchy_node_ids`, `site_ids`, `unit_ids`
+  - Validates all blocks belong to the same source document (422 if not)
+  - Validates no selected block is already linked to a requirement (409 Conflict if so)
+  - Creates requirement with `content_source = 'block_linked'`, `source_type = 'Derived from Document'`, `source_clause` = comma-joined clause numbers, `statement` = plain-text fallback
+  - Creates `requirement_blocks` junction records in document sort order
+  - Returns `{id, requirement_id}` for navigation
+  - No new DB schema — reuses Stage 15 `requirement_blocks` table
+
+### Backend — Deprecate Candidate Endpoints
+- [x] `POST /api/source-documents/{id}/extract-requirements` → 410 Gone
+- [x] `GET /api/source-documents/{id}/candidates` → 410 Gone
+- [x] `PUT /api/extraction-candidates/{id}` → 410 Gone
+- [x] `POST /api/extraction-candidates/{id}/accept` → 410 Gone
+- [x] `extraction_candidates` table NOT dropped — existing accepted candidates reference it; left for future cleanup
+
+### Backend — Requirement Lifecycle → Block Unlinking
+- [x] `toggle_archive` in `api/routers/requirements.py`: when `archived=True`, all `RequirementBlock` records for the requirement are deleted, freeing the source clauses for re-extraction (fixes the traceability bug)
+- [x] `POST /api/document-blocks/{id}/unlink-requirement` added: removes the `requirement_blocks` link, reverts requirement `content_source` to `'manual'` if it was the last linked block; does not archive/delete the requirement
+- [x] `GET /api/source-documents/{id}/blocks` updated: each block now includes `linked_requirement_id` (UUID or null) and `linked_requirement_summary` (`{id, requirement_id, title, status}` or null)
+
+### Frontend — Replace Candidate Review Panel with Direct Extraction
+- [x] Candidate Review Panel removed from `SourceDocumentDetail.tsx` — all candidate state, API calls, Edit & Accept form, and accept/reject/restore handlers removed
+- [x] "Extract Requirements from Selected", "Extract All", and "Merge to Requirement" buttons removed
+- [x] "Extract to Requirement" button added to block toolbar — enabled when 1+ **unlinked** blocks are selected; disabled (with tooltip) if any selected block is already linked
+- [x] Inline extraction form panel opens below the block list when button is clicked; contains Title input, Classification/Subtype/Discipline dropdowns, and MiniMultiPicker for Hierarchy Nodes, Site, Units
+- [x] On save: calls `extractToRequirement`, re-fetches blocks to show updated linkage, closes form, refreshes derived requirements list in left panel; stays on source document view (no forced navigation)
+- [x] **Deviation from plan**: form is an inline bottom panel (like the old candidate panel) rather than opening `RequirementDetail.tsx` in a modal — simpler, consistent with existing UI patterns, and avoids converting the full-page detail form into a modal component
+
+### Frontend — Block Status Indicators
+- [x] Linked blocks: green left border (`border-l-4 border-l-green-400`) + green background tint, requirement ID badge (clickable → opens requirement detail), "×" unlink button
+- [x] Linked block checkbox disabled with tooltip explaining how to unlink
+- [x] Unlinked blocks: normal border, checkbox enabled
+- [x] `DocumentBlock` TypeScript interface extended with `linked_requirement_id: string | null` and `linked_requirement_summary: LinkedRequirementSummary | null`
+- [x] Tab badge on "Document Blocks" tab updated: shows extracted-block count (green) instead of candidate count
+
+### Frontend — Requirement Detail View Updates
+- [x] "Source Clauses" `BlockRenderer` section from Stage 15 unchanged — works identically for requirements created via the new flow
+- [x] "View source document →" link from Stage 15 unchanged
+- [x] "Source Clause" display in requirement header not yet added (deferred — `source_clause` field already populated on the requirement, can be surfaced in a future polish pass)
+
+### Stage 18 Verification
+- [x] Upload a document and run decompose — verify clauses appear as before
+- [x] Verify "Extract Requirements from Selected", "Extract All", and Candidate Review Panel are gone
+- [x] Select block(s), click "Extract to Requirement" — form opens with clause summary
+- [x] Fill in fields, save — clause shows green border + requirement ID badge
+- [x] Click badge → navigates to requirement detail view
+- [x] "Source Clauses" and "View source document →" work on requirement detail
+- [x] Try to select an already-linked block — checkbox disabled with tooltip
+- [x] Click "×" unlink button — link cleared, checkbox re-enabled, requirement preserved
+- [x] Archive a requirement — linked clauses freed automatically (traceability fix verified)
+- [x] Deprecated endpoints return 410 Gone
 ---
 
 Proceed to Phase 3 (PRD §13) for AI-assisted conflict detection and
