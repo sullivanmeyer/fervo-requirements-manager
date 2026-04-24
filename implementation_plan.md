@@ -1,6 +1,6 @@
 # Phase 1 MVP — Staged Implementation Checklist
 # Requirements Management Application
-# Last updated: April 2026 (through Stage 18)
+# Last updated: April 2026 (through Stage 19)
 
 This file tracks Claude Code's progress through the Phase 1 MVP build.
 Check each box as the item is implemented and verified.
@@ -1230,6 +1230,144 @@ PDF → LLM Pass 1 → document_blocks → user selects clause(s)
 - [x] Archive a requirement — linked clauses freed automatically (traceability fix verified)
 - [x] Deprecated endpoints return 410 Gone
 ---
+
+---
+ 
+## Stage 19 — Derivation Tree Rework (Layered DAG / Phylogenetic Layout)
+ 
+### Goal
+Replace the force-directed derivation tree view (Stage 3) with a deterministic
+left-to-right layered DAG layout. The current force-directed graph has two
+problems: (1) the gravity-and-spring simulation places child nodes unpredictably
+rather than centering them on their parents, and (2) the synthetic `SELF-000`
+root forces all unrelated derivation chains into a single tree with a misleading
+shared root.
+ 
+The replacement renders requirement derivation chains as a phylogenetic-style
+diagram: roots on the left, children flowing rightward through layers, with
+elbow connectors. Independent derivation chains are arranged in parallel
+(stacked vertically). Requirements with parents in multiple trees have edges
+converging from both, making cross-tree derivation visually explicit. The
+`SELF-000` node is hidden from the visualization — each top-level performance
+requirement appears as its own root.
+ 
+No backend changes required. The existing `GET /api/requirements` (with parent/
+child links), `GET /api/requirements/{id}/ancestors`, and `GET /api/requirements/
+{id}/descendants` endpoints provide all needed data.
+ 
+### Frontend — Layout Algorithm (replaces force-directed simulation)
+ 
+- [x] **Delete force simulation code**: remove `initPositions()`, `simulate()`,
+  `computeDegree()`, and all force/spring/gravity logic from the derivation
+  tree component
+- [x] **Fetch all requirements with links**: single `GET /api/requirements`
+  call (or paginated equivalent) returning each requirement with its
+  `parent_requirements` and `child_requirements` arrays. Build an adjacency
+  map in memory.
+- [x] **Identify roots**: any requirement whose only parent is `SELF-000` (or
+  has no parents) becomes a DAG root. `SELF-000` itself is excluded from
+  the node set entirely.
+- [x] **Layer assignment (longest-path)**: for each node, compute its layer as
+  `max(layer of each real parent) + 1`. Roots are layer 0. This is a
+  single topological-order pass over the DAG. Nodes with parents in
+  multiple trees land in whichever layer is deepest + 1.
+- [x] **Vertical ordering within layers (crossing minimization)**: within each
+  layer, sort nodes by the median y-position of their parents (barycenter
+  heuristic). Run 2–4 up/down sweep passes — sufficient for the expected
+  5–10 root trees with moderate branching. This keeps edges from crossing
+  unnecessarily.
+- [x] **Coordinate assignment**: x = `layer × COLUMN_WIDTH` (suggested 220px
+  per layer). y = cumulative vertical position within layer, with
+  `ROW_GAP` (suggested 20px) between nodes and `TREE_GAP` (suggested
+  40px) between disconnected trees. Each node card is a fixed size
+  (suggested 180×52px).
+- [x] **Independent tree separation**: after coordinate assignment, identify
+  connected components (trees). Insert `TREE_GAP` spacing between the
+  bounding boxes of adjacent trees so they read as visually distinct
+  groups.
+### Frontend — Rendering (SVG, replaces force-directed graph)
+ 
+- [x] **Node cards**: each requirement rendered as a rounded rect with:
+  Requirement ID (bold, 12px), Title (truncated to ~25 chars, 11px),
+  Status badge (colored dot: Draft=gray, Under Review=amber, Approved=green,
+  Superseded=orange, Withdrawn=red). Cards are colored by discipline
+  (same color mapping as the requirements table discipline column).
+- [x] **Elbow connectors**: parent→child edges drawn as three-segment SVG
+  `<path>` elements: horizontal from parent right edge to a midpoint
+  x-coordinate, vertical from parent y to child y, horizontal from
+  midpoint to child left edge. Path: `M x1 y1 L xmid y1 L xmid y2 L x2 y2`.
+  Use `stroke-width: 0.5` with `marker-end` arrowhead.
+- [x] **Cross-tree edges highlighted**: when a child has parents in different
+  connected components, those edges use a distinct color (green) and
+  `stroke-width: 1` to visually flag the cross-tree derivation.
+- [x] **Click to navigate**: clicking a node card opens the requirement detail
+  view (same behavior as the current tree). Right-click or Ctrl+click
+  opens in a new tab.
+- [x] **"View in Tree" centering**: the existing "View in Tree" button on the
+  detail view scrolls/pans the SVG to center the target node and applies
+  a brief highlight pulse (CSS animation, 1s).
+- [x] **Pan and zoom**: retain the existing mouse-wheel zoom and click-drag
+  pan behavior from the current SVG graph. CSS transform pan/zoom
+  (not viewBox manipulation) for smooth interaction.
+- [x] **Hover tooltip**: on hover, show a tooltip with the full title (un-
+  truncated), classification, classification subtype, owner, and
+  hierarchy node tags. Tooltip positioned in screen-space (outside
+  canvas div) to avoid CSS transform distortion.
+- [x] **Empty state**: if no requirements exist, show "No derivation chains
+  yet — create requirements and link them as parent/child to see the
+  derivation tree."
+### Frontend — Filter Controls
+ 
+- [x] **Discipline filter**: dropdown above the diagram to filter the DAG to
+  a single discipline (or "All"). Filtering removes nodes of other
+  disciplines and re-runs the layout. Edges to/from filtered-out nodes
+  are hidden.
+- [x] **Status filter**: multi-select pill toggle buttons for Draft, Under
+  Review, Approved, Superseded, Withdrawn. Defaults to all active. Toggling
+  a status hides those nodes and their edges and recomputes layout.
+- [x] **Highlight mode**: text input that highlights (golden border) any
+  node whose ID or title matches the search string. Does not filter —
+  all nodes remain visible, but matches are emphasized.
+### Stage 19 Verification
+- [x] Create three requirements forming a chain: MECH-001 → MECH-004 → MECH-009. Open derivation tree — verify left-to-right layout with MECH-001 in layer 0, MECH-004 in layer 1, MECH-009 in layer 2
+- [x] Create a second independent chain: PROC-001 → PROC-003. Verify it appears as a separate tree below the first, with visible vertical gap between trees
+- [x] Create DERV-001 with two parents: MECH-004 (from tree 1) and PROC-003 (from tree 2). Verify DERV-001 appears in layer 2 with two converging elbow connectors, and cross-tree edges are highlighted in a distinct color
+- [x] Verify the `SELF-000` node does not appear anywhere in the visualization
+- [x] Create a standalone root (ELEC-001, no children) — verify it appears as a single node in layer 0
+- [x] Click a node — verify it opens the requirement detail view
+- [x] Use "View in Tree" from the detail view — verify the diagram scrolls to center on that requirement with a highlight pulse
+- [x] Filter by Discipline = Mechanical — verify only Mechanical requirements are shown and the layout re-computes cleanly
+- [x] Filter by Status (uncheck Draft) — verify Draft requirements disappear and edges re-route
+- [x] Type "MECH-004" in the highlight search — verify that node gets a golden highlight while all other nodes remain visible
+- [x] Verify pan (click-drag) and zoom (mouse wheel) work on the SVG
+- [x] Verify the layout is deterministic: refresh the page and confirm nodes are in the exact same positions
+- [x] Test with 8+ independent root trees — verify vertical stacking with clear separation and no overlap
+
+**Status: COMPLETE (commit 1138b15, April 2026)**
+
+**Architecture summary:**
+- `computeDagLayout()` implements: undirected-BFS component detection → Kahn's
+  topo sort for longest-path layer assignment → 3-pass barycenter crossing
+  minimization → vertical stacking of components with `TREE_GAP`
+- Layout wrapped in `useMemo` so filter changes trigger instant recompute with
+  no data re-fetch
+- Pan/zoom uses CSS transform mutation via `transformRef` + `applyTransform()`,
+  bypassing React render for smooth 60fps interaction
+- Tooltip positioned in screen-space (sibling div, not inside canvas) to avoid
+  CSS transform distortion
+- Discipline color coding uses inline `style={}` with hex values (dynamic
+  Tailwind class names are removed at build time by the JIT tree-shaker)
+
+**Deviations from plan:**
+- CSS transform used for pan/zoom instead of SVG viewBox manipulation —
+  achieves same result with simpler code; SVG text remains crisp at zoom levels
+  used in practice (0.1–5×)
+- Status filter implemented as pill toggle buttons instead of multi-select
+  checkboxes — cleaner UX for 5 fixed statuses
+---
+
+
+
 
 Proceed to Phase 3 (PRD §13) for AI-assisted conflict detection and
 AI-assisted derivation suggestions.
