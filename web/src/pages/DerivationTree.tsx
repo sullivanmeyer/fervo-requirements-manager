@@ -1,17 +1,21 @@
 /**
- * DerivationTree — Graph View
+ * DerivationTree — Layered DAG Layout (Stage 19)
  *
- * Renders the requirement derivation hierarchy as a directed graph with
- * nodes (cards) and curved arrows, flowing top-to-bottom.
+ * Replaces the force-directed graph with a deterministic left-to-right
+ * layered DAG (phylogenetic-style). Each independent derivation chain is
+ * laid out as its own tree stacked vertically. SELF-000 is hidden.
  *
- * Layout algorithm: BFS from SELF-000 assigns each node to a depth level,
- * then nodes are distributed evenly across the width of that level.
- * Edges are drawn as SVG cubic-bezier curves with arrowheads.
+ * Layout algorithm:
+ *   1. Filter to Performance + Derived Requirements (non-archived)
+ *   2. Remove SELF-000 from parent lists; roots = nodes with no real parents
+ *   3. Find connected components (undirected BFS)
+ *   4. Within each component: assign layers by longest-path (Kahn topo sort)
+ *   5. Sort rows within each layer by barycenter heuristic (3 passes)
+ *   6. Assign x = layer × COL_WIDTH, y = cumulative row position
+ *   7. Stack components vertically with TREE_GAP between them
  *
- * All data loading and tree-building logic is unchanged from the list view.
- *
- * Interactions: scroll to zoom, drag to pan, hover to highlight connected
- * nodes, click to open detail — matching the feel of DocumentNetwork.tsx.
+ * Edges are three-segment elbow connectors (orthogonal routing).
+ * Cross-tree edges (child has multiple parents) are drawn in green.
  */
 import { useEffect, useMemo, useRef, useState } from 'react'
 import {
@@ -22,191 +26,255 @@ import {
 import type { RequirementLink, RequirementListItem } from '../types'
 
 // ---------------------------------------------------------------------------
-// Tree data model (same as before)
+// Constants
 // ---------------------------------------------------------------------------
 
-interface TreeNode {
-  req: RequirementListItem
-  children: TreeNode[]
+const NODE_W = 180
+const NODE_H = 52
+const COL_WIDTH = 220   // spacing between column left edges
+const ROW_GAP = 20      // vertical gap between nodes in the same layer
+const TREE_GAP = 48     // vertical gap between independent trees
+const PADDING = 40      // canvas padding
+
+const ALL_STATUSES = ['Draft', 'Under Review', 'Approved', 'Superseded', 'Withdrawn']
+
+const STATUS_DOT: Record<string, string> = {
+  Draft: '#9ca3af',
+  'Under Review': '#f59e0b',
+  Approved: '#22c55e',
+  Superseded: '#f97316',
+  Withdrawn: '#ef4444',
 }
 
-function buildTree(
-  requirements: RequirementListItem[],
-  links: RequirementLink[],
-  selfDerived: RequirementListItem,
-): TreeNode {
-  const allReqs = [selfDerived, ...requirements]
-  const byId = new Map(allReqs.map((r) => [r.id, r]))
-
-  const parentToChildren = new Map<string, string[]>()
-  for (const lnk of links) {
-    const existing = parentToChildren.get(lnk.parent_requirement_id) ?? []
-    existing.push(lnk.child_requirement_id)
-    parentToChildren.set(lnk.parent_requirement_id, existing)
-  }
-
-  const linkedChildIds = new Set(links.map((l) => l.child_requirement_id))
-  const implicitRootIds = requirements
-    .filter((r) => !linkedChildIds.has(r.id))
-    .map((r) => r.id)
-
-  const selfChildren = [
-    ...(parentToChildren.get(selfDerived.id) ?? []),
-    ...implicitRootIds,
-  ]
-  parentToChildren.set(selfDerived.id, selfChildren)
-
-  function buildNode(reqId: string, visited: Set<string>): TreeNode | null {
-    if (visited.has(reqId)) return null
-    const req = byId.get(reqId)
-    if (!req) return null
-    const nextVisited = new Set(visited).add(reqId)
-    const childIds = parentToChildren.get(reqId) ?? []
-    const children = childIds
-      .map((cid) => buildNode(cid, nextVisited))
-      .filter((n): n is TreeNode => n !== null)
-      .sort((a, b) => a.req.requirement_id.localeCompare(b.req.requirement_id))
-    return { req, children }
-  }
-
-  return buildNode(selfDerived.id, new Set()) ?? { req: selfDerived, children: [] }
+// Card background and border by discipline (inline styles — dynamic values)
+const DISC_STYLE: Record<string, { bg: string; border: string; idColor: string }> = {
+  Mechanical:        { bg: '#eff6ff', border: '#bfdbfe', idColor: '#1d4ed8' },
+  Electrical:        { bg: '#fefce8', border: '#fde68a', idColor: '#78350f' },
+  'I&C':             { bg: '#f0fdfa', border: '#99f6e4', idColor: '#0f766e' },
+  'Civil/Structural':{ bg: '#fafaf9', border: '#e7e5e4', idColor: '#57534e' },
+  Process:           { bg: '#f0fdf4', border: '#bbf7d0', idColor: '#15803d' },
+  'Fire Protection': { bg: '#fff1f2', border: '#fecdd3', idColor: '#b91c1c' },
+  General:           { bg: '#f9fafb', border: '#e5e7eb', idColor: '#374151' },
+  Build:             { bg: '#fff7ed', border: '#fed7aa', idColor: '#c2410c' },
+  Operations:        { bg: '#faf5ff', border: '#e9d5ff', idColor: '#6b21a8' },
 }
+const DEFAULT_DISC_STYLE = { bg: '#f9fafb', border: '#e5e7eb', idColor: '#374151' }
+
+const DISCIPLINE_ORDER = [
+  'Mechanical', 'Electrical', 'I&C', 'Civil/Structural',
+  'Process', 'Fire Protection', 'General', 'Build', 'Operations',
+]
 
 // ---------------------------------------------------------------------------
-// Graph layout
+// Types
 // ---------------------------------------------------------------------------
 
-const NODE_W = 230   // card width
-const NODE_H = 80    // card height
-const H_GAP = 40     // horizontal gap between cards on the same level
-const V_GAP = 90     // vertical gap between levels
-const PADDING = 48   // canvas padding on all sides
-
-interface LayoutNode {
+interface DagNode {
   id: string
   req: RequirementListItem
-  x: number   // left edge of card
-  y: number   // top edge of card
+  x: number
+  y: number
+  layer: number
 }
 
-interface LayoutEdge {
+interface DagEdge {
   fromId: string
   toId: string
+  isCrossTree: boolean  // child has multiple real parents
 }
 
-interface GraphLayout {
-  nodes: LayoutNode[]
-  edges: LayoutEdge[]
+interface DagLayout {
+  nodes: DagNode[]
+  edges: DagEdge[]
   canvasW: number
   canvasH: number
 }
 
-function computeLayout(root: TreeNode): GraphLayout {
-  // BFS to assign each node to a depth level.
-  // A node visited at multiple depths (shared parents) keeps its
-  // maximum depth so it always renders below all its parents.
-  const depthMap = new Map<string, number>()
-  const queue: [TreeNode, number][] = [[root, 0]]
-  while (queue.length > 0) {
-    const [node, depth] = queue.shift()!
-    const prev = depthMap.get(node.req.id) ?? -1
-    if (depth <= prev) continue   // already placed at same or deeper level
-    depthMap.set(node.req.id, depth)
-    for (const child of node.children) {
-      queue.push([child, depth + 1])
-    }
+// ---------------------------------------------------------------------------
+// Layout algorithm
+// ---------------------------------------------------------------------------
+
+function computeDagLayout(
+  reqs: RequirementListItem[],
+  links: RequirementLink[],
+  selfDerivedId: string,
+): DagLayout {
+  if (reqs.length === 0) {
+    return { nodes: [], edges: [], canvasW: PADDING * 4, canvasH: PADDING * 4 }
   }
 
-  // Group nodes by level
-  const levels: TreeNode[][] = []
-  const visited = new Set<string>()
-  const bfsQueue: [TreeNode, number][] = [[root, 0]]
-  while (bfsQueue.length > 0) {
-    const [node, depth] = bfsQueue.shift()!
-    if (visited.has(node.req.id)) continue
-    visited.add(node.req.id)
-    const level = depthMap.get(node.req.id) ?? depth
-    if (!levels[level]) levels[level] = []
-    levels[level].push(node)
-    for (const child of node.children) {
-      bfsQueue.push([child, level + 1])
-    }
+  const nodeMap = new Map(reqs.map((r) => [r.id, r]))
+
+  // Build parent/child adjacency (SELF-000 excluded; both endpoints must be visible)
+  const parentOf = new Map<string, string[]>()
+  const childOf  = new Map<string, string[]>()
+  for (const lnk of links) {
+    const { parent_requirement_id: pid, child_requirement_id: cid } = lnk
+    if (pid === selfDerivedId) continue
+    if (!nodeMap.has(pid) || !nodeMap.has(cid)) continue
+    parentOf.set(cid, [...(parentOf.get(cid) ?? []), pid])
+    childOf.set(pid, [...(childOf.get(pid)  ?? []), cid])
   }
 
-  // Layout flows LEFT → RIGHT: depth level = column (x-axis),
-  // siblings within a level are distributed vertically (y-axis).
-  const maxCount = Math.max(...levels.map((l) => l.length), 1)
-  const canvasW = PADDING * 2 + levels.length * NODE_W + (levels.length - 1) * V_GAP
-  const canvasH = PADDING * 2 + maxCount * NODE_H + (maxCount - 1) * H_GAP
+  // Roots = nodes with no visible real parents
+  const roots = reqs.filter((r) => (parentOf.get(r.id) ?? []).length === 0)
 
-  // Position each node
-  const posMap = new Map<string, { x: number; y: number }>()
-  levels.forEach((levelNodes, levelIndex) => {
-    const count = levelNodes.length
-    const colH = count * NODE_H + (count - 1) * H_GAP
-    const startY = (canvasH - colH) / 2
-    levelNodes.forEach((node, i) => {
-      posMap.set(node.req.id, {
-        x: PADDING + levelIndex * (NODE_W + V_GAP),
-        y: startY + i * (NODE_H + H_GAP),
-      })
-    })
+  // Connected components (undirected BFS from each root)
+  const compOf = new Map<string, number>()
+  let nComp = 0
+  for (const root of roots) {
+    if (compOf.has(root.id)) continue
+    const comp = nComp++
+    const q = [root.id]
+    while (q.length) {
+      const nid = q.shift()!
+      if (compOf.has(nid)) continue
+      compOf.set(nid, comp)
+      for (const nb of [...(parentOf.get(nid) ?? []), ...(childOf.get(nid) ?? [])]) {
+        if (!compOf.has(nb)) q.push(nb)
+      }
+    }
+  }
+  for (const r of reqs) {
+    if (!compOf.has(r.id)) compOf.set(r.id, nComp++)
+  }
+
+  // Group by component; sort components: largest first, then alphabetical
+  const compNodes = new Map<number, string[]>()
+  for (const [nid, c] of compOf) {
+    compNodes.set(c, [...(compNodes.get(c) ?? []), nid])
+  }
+  const sortedComps = [...compNodes.keys()].sort((a, b) => {
+    const sa = compNodes.get(a)!.length
+    const sb = compNodes.get(b)!.length
+    if (sb !== sa) return sb - sa
+    const firstA = compNodes.get(a)!.map((id) => nodeMap.get(id)!.requirement_id).sort()[0] ?? ''
+    const firstB = compNodes.get(b)!.map((id) => nodeMap.get(id)!.requirement_id).sort()[0] ?? ''
+    return firstA.localeCompare(firstB)
   })
 
-  // Collect nodes and edges
-  const nodes: LayoutNode[] = []
-  const edges: LayoutEdge[] = []
-  const seenEdges = new Set<string>()
+  const allNodes: DagNode[] = []
+  let currentY = PADDING
+  let globalMaxLayer = 0
 
-  visited.clear()
-  const walkQueue: TreeNode[] = [root]
-  while (walkQueue.length > 0) {
-    const node = walkQueue.shift()!
-    if (visited.has(node.req.id)) continue
-    visited.add(node.req.id)
-    const pos = posMap.get(node.req.id)
-    if (pos) {
-      nodes.push({ id: node.req.id, req: node.req, x: pos.x, y: pos.y })
+  for (const comp of sortedComps) {
+    const cIds = compNodes.get(comp)!
+
+    // ── Layer assignment (longest-path via Kahn topological sort) ─────────
+    const layerOf = new Map<string, number>()
+    const inDeg   = new Map<string, number>()
+
+    for (const nid of cIds) {
+      const ps = (parentOf.get(nid) ?? []).filter((p) => compOf.get(p) === comp)
+      inDeg.set(nid, ps.length)
+      if (ps.length === 0) layerOf.set(nid, 0)
     }
-    for (const child of node.children) {
-      const key = `${node.req.id}→${child.req.id}`
-      if (!seenEdges.has(key)) {
-        seenEdges.add(key)
-        edges.push({ fromId: node.req.id, toId: child.req.id })
+
+    const topoQ = cIds.filter((nid) => inDeg.get(nid) === 0)
+    while (topoQ.length) {
+      const nid = topoQ.shift()!
+      const nLayer = layerOf.get(nid) ?? 0
+      for (const cid of (childOf.get(nid) ?? []).filter((c) => compOf.get(c) === comp)) {
+        const newL = Math.max(layerOf.get(cid) ?? 0, nLayer + 1)
+        layerOf.set(cid, newL)
+        const rem = (inDeg.get(cid) ?? 1) - 1
+        inDeg.set(cid, rem)
+        if (rem <= 0) topoQ.push(cid)
       }
-      walkQueue.push(child)
     }
+
+    const maxLayer = Math.max(...[...layerOf.values()], 0)
+    globalMaxLayer = Math.max(globalMaxLayer, maxLayer)
+
+    // ── Group by layer ─────────────────────────────────────────────────────
+    const layerGroups = new Map<number, string[]>()
+    for (const nid of cIds) {
+      const l = layerOf.get(nid) ?? 0
+      layerGroups.set(l, [...(layerGroups.get(l) ?? []), nid])
+    }
+
+    // Sort layer 0 alphabetically
+    layerGroups.set(
+      0,
+      (layerGroups.get(0) ?? []).sort((a, b) =>
+        (nodeMap.get(a)?.requirement_id ?? '').localeCompare(nodeMap.get(b)?.requirement_id ?? '')
+      ),
+    )
+
+    // ── Barycenter crossing minimisation (3 passes) ────────────────────────
+    const yEst = new Map<string, number>()
+    for (const [, nids] of layerGroups) nids.forEach((nid, i) => yEst.set(nid, i))
+
+    const medY = (nid: string, useParents: boolean): number => {
+      const nb = useParents
+        ? (parentOf.get(nid) ?? []).filter((p) => compOf.get(p) === comp)
+        : (childOf.get(nid)  ?? []).filter((c) => compOf.get(c) === comp)
+      if (!nb.length) return yEst.get(nid) ?? 0
+      const ys = nb.map((n) => yEst.get(n) ?? 0).sort((a, b) => a - b)
+      return ys[Math.floor(ys.length / 2)]
+    }
+
+    for (let pass = 0; pass < 3; pass++) {
+      const fwd = pass % 2 === 0
+      const range = fwd
+        ? Array.from({ length: maxLayer }, (_, i) => i + 1)
+        : Array.from({ length: maxLayer }, (_, i) => maxLayer - 1 - i)
+      for (const l of range) {
+        const nids = layerGroups.get(l) ?? []
+        const sorted = [...nids].sort((a, b) => medY(a, fwd) - medY(b, fwd))
+        sorted.forEach((nid, i) => yEst.set(nid, i))
+        layerGroups.set(l, sorted)
+      }
+    }
+
+    // ── Coordinate assignment ──────────────────────────────────────────────
+    const maxRows = Math.max(...[...layerGroups.values()].map((v) => v.length), 1)
+    const compH = maxRows * (NODE_H + ROW_GAP) - ROW_GAP
+
+    for (const [l, nids] of layerGroups) {
+      nids.forEach((nid, i) => {
+        allNodes.push({
+          id: nid,
+          req: nodeMap.get(nid)!,
+          x: PADDING + l * COL_WIDTH,
+          y: currentY + i * (NODE_H + ROW_GAP),
+          layer: l,
+        })
+      })
+    }
+
+    currentY += compH + TREE_GAP
   }
 
-  return { nodes, edges, canvasW, canvasH }
+  // ── Build edge list ────────────────────────────────────────────────────────
+  const allEdges: DagEdge[] = []
+  const seenEdges = new Set<string>()
+  for (const lnk of links) {
+    const { parent_requirement_id: pid, child_requirement_id: cid } = lnk
+    if (pid === selfDerivedId) continue
+    if (!nodeMap.has(pid) || !nodeMap.has(cid)) continue
+    const key = `${pid}→${cid}`
+    if (seenEdges.has(key)) continue
+    seenEdges.add(key)
+    allEdges.push({
+      fromId: pid,
+      toId: cid,
+      isCrossTree: (parentOf.get(cid) ?? []).length > 1,
+    })
+  }
+
+  const canvasW = PADDING * 2 + globalMaxLayer * COL_WIDTH + NODE_W
+  const canvasH = Math.max(currentY - TREE_GAP + PADDING, PADDING * 4)
+  return { nodes: allNodes, edges: allEdges, canvasW, canvasH }
 }
 
 // ---------------------------------------------------------------------------
-// SVG edge path: cubic bezier from right-center of parent to left-center of child
+// SVG helpers
 // ---------------------------------------------------------------------------
 
-function edgePath(
-  from: { x: number; y: number },
-  to: { x: number; y: number },
-): string {
-  const x1 = from.x + NODE_W        // right edge of parent card
-  const y1 = from.y + NODE_H / 2    // vertical center of parent card
-  const x2 = to.x                   // left edge of child card
-  const y2 = to.y + NODE_H / 2      // vertical center of child card
-  const midX = (x1 + x2) / 2
-  return `M ${x1} ${y1} C ${midX} ${y1}, ${midX} ${y2}, ${x2} ${y2}`
-}
-
-// ---------------------------------------------------------------------------
-// Status badge colours
-// ---------------------------------------------------------------------------
-
-const STATUS_CLASSES: Record<string, string> = {
-  Draft: 'bg-gray-100 text-gray-600',
-  'Under Review': 'bg-yellow-100 text-yellow-800',
-  Approved: 'bg-green-100 text-green-800',
-  Superseded: 'bg-orange-100 text-orange-800',
-  Withdrawn: 'bg-red-100 text-red-800',
+function elbowPath(x1: number, y1: number, x2: number, y2: number): string {
+  const xm = (x1 + x2) / 2
+  return `M ${x1} ${y1} L ${xm} ${y1} L ${xm} ${y2} L ${x2} ${y2}`
 }
 
 // ---------------------------------------------------------------------------
@@ -223,39 +291,28 @@ interface Props {
 // ---------------------------------------------------------------------------
 
 export default function DerivationTree({ focusId, onSelect }: Props) {
-  const [layout, setLayout] = useState<GraphLayout | null>(null)
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState<string | null>(null)
+  // ── Raw data ───────────────────────────────────────────────────────────────
+  const [rawReqs, setRawReqs]     = useState<RequirementListItem[]>([])
+  const [rawLinks, setRawLinks]   = useState<RequirementLink[]>([])
+  const [selfId, setSelfId]       = useState<string | null>(null)
+  const [loading, setLoading]     = useState(true)
+  const [error, setError]         = useState<string | null>(null)
 
-  // Hover highlighting state (drives React re-renders for dimming/highlighting)
-  const [hoveredId, setHoveredId] = useState<string | null>(null)
+  // ── Filter state ───────────────────────────────────────────────────────────
+  const [disciplineFilter, setDisciplineFilter] = useState('All')
+  const [statusFilter, setStatusFilter]         = useState<Set<string>>(new Set(ALL_STATUSES))
+  const [highlight, setHighlight]               = useState('')
 
-  // Cursor state — refs alone won't trigger re-renders, so we use a boolean state
+  // ── Tooltip state ─────────────────────────────────────────────────────────
+  const [tooltip, setTooltip] = useState<{ node: DagNode; sx: number; sy: number } | null>(null)
+
+  // ── Pan/zoom state ─────────────────────────────────────────────────────────
   const [isDragging, setIsDragging] = useState(false)
-
-  // Pan/zoom state — stored in a ref so mutations don't trigger re-renders
   const transformRef = useRef({ tx: 0, ty: 0, scale: 1 })
-
-  // DOM refs for the outer container and the inner canvas div
   const containerRef = useRef<HTMLDivElement>(null)
-  const canvasRef = useRef<HTMLDivElement>(null)
-
-  // Pan drag tracking
-  const dragRef = useRef<{
-    startX: number
-    startY: number
-    startTx: number
-    startTy: number
-  } | null>(null)
-
-  // Set to true once the mouse has moved >3px during a drag — prevents
-  // a pan gesture from also firing a node click
-  const didPanRef = useRef(false)
-
-  // ---------------------------------------------------------------------------
-  // applyTransform — directly mutates the inner canvas div's CSS transform.
-  // Bypasses React's render cycle entirely (same pattern as DocumentNetwork).
-  // ---------------------------------------------------------------------------
+  const canvasRef    = useRef<HTMLDivElement>(null)
+  const dragRef      = useRef<{ startX: number; startY: number; startTx: number; startTy: number } | null>(null)
+  const didPanRef    = useRef(false)
 
   function applyTransform() {
     if (!canvasRef.current) return
@@ -263,10 +320,35 @@ export default function DerivationTree({ focusId, onSelect }: Props) {
     canvasRef.current.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`
   }
 
-  // ---------------------------------------------------------------------------
-  // Data loading
-  // ---------------------------------------------------------------------------
+  // ── Layout (recomputed whenever data or filters change) ────────────────────
+  const layout = useMemo<DagLayout | null>(() => {
+    if (!selfId) return null
+    const filtered = rawReqs.filter(
+      (r) =>
+        (r.classification_subtype === 'Performance Requirement' ||
+          r.classification_subtype === 'Derived Requirement') &&
+        !r.archived &&
+        (disciplineFilter === 'All' || r.discipline === disciplineFilter) &&
+        statusFilter.has(r.status),
+    )
+    return computeDagLayout(filtered, rawLinks, selfId)
+  }, [rawReqs, rawLinks, selfId, disciplineFilter, statusFilter])
 
+  // Available disciplines for the filter dropdown
+  const availableDisciplines = useMemo(() => {
+    const ds = new Set(
+      rawReqs
+        .filter(
+          (r) =>
+            r.classification_subtype === 'Performance Requirement' ||
+            r.classification_subtype === 'Derived Requirement',
+        )
+        .map((r) => r.discipline),
+    )
+    return ['All', ...DISCIPLINE_ORDER.filter((d) => ds.has(d))]
+  }, [rawReqs])
+
+  // ── Data loading ───────────────────────────────────────────────────────────
   const load = async () => {
     setLoading(true)
     setError(null)
@@ -276,31 +358,9 @@ export default function DerivationTree({ focusId, onSelect }: Props) {
         fetchAllLinks(),
         fetchSelfDerived(),
       ])
-
-      const selfDerived: RequirementListItem = {
-        id: self.id,
-        requirement_id: self.requirement_id,
-        title: self.title,
-        classification: 'Requirement',
-        owner: 'System',
-        status: 'Approved',
-        discipline: 'General',
-        created_by: 'System',
-        created_date: '',
-        hierarchy_nodes: [],
-        sites: [],
-        units: [],
-      }
-
-      const filteredReqs = reqs.filter((r) =>
-        (r.classification_subtype === 'Performance Requirement' ||
-          r.classification_subtype === 'Derived Requirement') &&
-        !r.archived &&
-        r.status !== 'Withdrawn' &&
-        r.status !== 'Superseded'
-      )
-      const tree = buildTree(filteredReqs, links, selfDerived)
-      setLayout(computeLayout(tree))
+      setRawReqs(reqs)
+      setRawLinks(links)
+      setSelfId(self.id)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Failed to load derivation tree')
     } finally {
@@ -308,38 +368,21 @@ export default function DerivationTree({ focusId, onSelect }: Props) {
     }
   }
 
-  useEffect(() => {
-    void load()
-  }, []) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { void load() }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ---------------------------------------------------------------------------
-  // Wheel zoom — must be registered as a non-passive listener so we can call
-  // preventDefault() and stop the page from scrolling while zooming.
-  //
-  // NOTE: `loading` is a dependency here on purpose.  The container div is
-  // only in the DOM after loading completes (early returns replace the JSX).
-  // Running with [] means this effect fires while containerRef.current is
-  // still null, the guard bails, and the listener is never attached.
-  // ---------------------------------------------------------------------------
-
+  // ── Wheel zoom ────────────────────────────────────────────────────────────
   useEffect(() => {
     if (loading) return
     const container = containerRef.current
     if (!container) return
-
     const handleWheel = (e: WheelEvent) => {
       e.preventDefault()
-
       const rect = container.getBoundingClientRect()
-      // Cursor position relative to the container
       const cx = e.clientX - rect.left
       const cy = e.clientY - rect.top
-
       const { tx, ty, scale } = transformRef.current
       const factor = e.deltaY < 0 ? 1.1 : 0.91
       const newScale = Math.min(Math.max(scale * factor, 0.1), 5)
-
-      // Keep the world point under the cursor fixed in screen space
       transformRef.current = {
         tx: cx - (cx - tx) * (newScale / scale),
         ty: cy - (cy - ty) * (newScale / scale),
@@ -347,72 +390,32 @@ export default function DerivationTree({ focusId, onSelect }: Props) {
       }
       applyTransform()
     }
-
     container.addEventListener('wheel', handleWheel, { passive: false })
     return () => container.removeEventListener('wheel', handleWheel)
   }, [loading]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ---------------------------------------------------------------------------
-  // Focus centering — when layout is ready and a focusId is set, pan so that
-  // the focused node is centered in the container.
-  //
-  // Replaces the old scrollIntoView approach. Same `loading` dep note applies.
-  // ---------------------------------------------------------------------------
-
+  // ── Focus centering ───────────────────────────────────────────────────────
   useEffect(() => {
     if (loading || !layout || !focusId) return
     const container = containerRef.current
     if (!container) return
-
     const node = layout.nodes.find((n) => n.id === focusId)
     if (!node) return
-
-    const containerW = container.clientWidth
-    const containerH = container.clientHeight
-
-    // Center of the focused card in canvas-space
-    const nodeCx = node.x + NODE_W / 2
-    const nodeCy = node.y + NODE_H / 2
-
-    // Translate so that canvas-space point (nodeCx, nodeCy) maps to the
-    // center of the container in screen-space
     transformRef.current = {
-      tx: containerW / 2 - nodeCx,
-      ty: containerH / 2 - nodeCy,
+      tx: container.clientWidth  / 2 - (node.x + NODE_W / 2),
+      ty: container.clientHeight / 2 - (node.y + NODE_H / 2),
       scale: 1,
     }
     applyTransform()
   }, [layout, focusId, loading]) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // ---------------------------------------------------------------------------
-  // Hover highlighting — compute the set of ids that are "connected" to the
-  // hovered node (the node itself + all direct edge neighbours in either
-  // direction). When nothing is hovered, returns null (nothing is dimmed).
-  // ---------------------------------------------------------------------------
-
-  const connectedIds = useMemo<Set<string> | null>(() => {
-    if (!hoveredId || !layout) return null
-    const ids = new Set<string>()
-    ids.add(hoveredId)
-    for (const edge of layout.edges) {
-      if (edge.fromId === hoveredId) ids.add(edge.toId)
-      if (edge.toId === hoveredId) ids.add(edge.fromId)
-    }
-    return ids
-  }, [hoveredId, layout])
-
-  // ---------------------------------------------------------------------------
-  // Mouse event handlers
-  // ---------------------------------------------------------------------------
-
+  // ── Mouse handlers ─────────────────────────────────────────────────────────
   const handleMouseDown = (e: React.MouseEvent<HTMLDivElement>) => {
     if (e.button !== 0) return
     didPanRef.current = false
     dragRef.current = {
-      startX: e.clientX,
-      startY: e.clientY,
-      startTx: transformRef.current.tx,
-      startTy: transformRef.current.ty,
+      startX: e.clientX, startY: e.clientY,
+      startTx: transformRef.current.tx, startTy: transformRef.current.ty,
     }
     setIsDragging(true)
   }
@@ -421,11 +424,7 @@ export default function DerivationTree({ focusId, onSelect }: Props) {
     if (!dragRef.current) return
     const dx = e.clientX - dragRef.current.startX
     const dy = e.clientY - dragRef.current.startY
-
-    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
-      didPanRef.current = true
-    }
-
+    if (Math.abs(dx) > 3 || Math.abs(dy) > 3) didPanRef.current = true
     transformRef.current = {
       ...transformRef.current,
       tx: dragRef.current.startTx + dx,
@@ -434,67 +433,104 @@ export default function DerivationTree({ focusId, onSelect }: Props) {
     applyTransform()
   }
 
-  const handleMouseUp = () => {
-    dragRef.current = null
-    setIsDragging(false)
-  }
+  const handleMouseUp   = () => { dragRef.current = null; setIsDragging(false) }
+  const handleMouseLeave = () => { dragRef.current = null; setIsDragging(false) }
 
-  const handleMouseLeave = () => {
-    dragRef.current = null
-    setIsDragging(false)
-  }
-
-  // ---------------------------------------------------------------------------
-  // Early returns for loading / error states
-  // ---------------------------------------------------------------------------
-
+  // ── Early returns ──────────────────────────────────────────────────────────
   if (loading) {
-    return (
-      <div className="flex items-center justify-center h-full text-gray-400 text-sm">
-        Loading…
-      </div>
-    )
+    return <div className="flex items-center justify-center h-full text-gray-400 text-sm">Loading…</div>
   }
-
   if (error) {
     return (
       <div className="flex flex-col items-center justify-center h-full gap-2">
         <p className="text-sm text-red-600">{error}</p>
-        <button onClick={() => void load()} className="text-xs text-blue-600 underline">
-          Retry
-        </button>
+        <button onClick={() => void load()} className="text-xs text-blue-600 underline">Retry</button>
       </div>
     )
   }
-
   if (!layout) return null
 
   const { nodes, edges, canvasW, canvasH } = layout
+  const posById = new Map(nodes.map((n) => [n.id, { x: n.x, y: n.y }]))
+  const hlower  = highlight.trim().toLowerCase()
 
-  // Build a quick id→position lookup for edge rendering
-  const posById = new Map(nodes.map((n: LayoutNode) => [n.id, { x: n.x, y: n.y }]))
-
+  // ── Render ─────────────────────────────────────────────────────────────────
   return (
     <div className="flex flex-col h-full">
-      {/* Header */}
-      <div className="px-4 py-3 bg-white border-b border-gray-200 shrink-0 flex items-center justify-between">
-        <div>
-          <h2 className="text-sm font-semibold text-gray-700">
-            Requirement Derivation Tree
-          </h2>
-          <p className="text-xs text-gray-400 mt-0.5">
-            Scroll to zoom · drag to pan · click a node to open it. Arrows show derivation flow (parent → child).
+
+      {/* ── Header + filters ──────────────────────────────────────────── */}
+      <div className="px-4 py-2.5 bg-white border-b border-gray-200 shrink-0 flex items-center gap-3 flex-wrap">
+        <div className="shrink-0">
+          <h2 className="text-sm font-semibold text-gray-700 leading-tight">Requirement Derivation Tree</h2>
+          <p className="text-[10px] text-gray-400 leading-tight mt-0.5">
+            Scroll to zoom · drag to pan · click node to open
           </p>
         </div>
-        <button
-          onClick={() => void load()}
-          className="text-xs text-gray-400 hover:text-gray-600 underline"
-        >
-          Refresh
-        </button>
+
+        <div className="flex items-center gap-2 flex-wrap ml-4">
+          {/* Discipline filter */}
+          <select
+            value={disciplineFilter}
+            onChange={(e) => setDisciplineFilter(e.target.value)}
+            className="border border-gray-300 rounded px-2 py-1 text-xs bg-white focus:outline-none focus:ring-1 focus:ring-blue-400"
+          >
+            {availableDisciplines.map((d) => (
+              <option key={d} value={d}>{d}</option>
+            ))}
+          </select>
+
+          {/* Status filter — pill toggles */}
+          <div className="flex items-center gap-1 flex-wrap">
+            {ALL_STATUSES.map((s) => {
+              const active = statusFilter.has(s)
+              return (
+                <button
+                  key={s}
+                  onClick={() =>
+                    setStatusFilter((prev) => {
+                      const next = new Set(prev)
+                      next.has(s) ? next.delete(s) : next.add(s)
+                      return next
+                    })
+                  }
+                  className={`flex items-center gap-1 px-2 py-0.5 rounded-full text-xs border transition-colors ${
+                    active
+                      ? 'bg-gray-100 border-gray-300 text-gray-700'
+                      : 'bg-white border-gray-200 text-gray-300'
+                  }`}
+                  title={active ? `Hide ${s}` : `Show ${s}`}
+                >
+                  <span
+                    className="w-2 h-2 rounded-full shrink-0"
+                    style={{ backgroundColor: active ? STATUS_DOT[s] : '#d1d5db' }}
+                  />
+                  {s}
+                </button>
+              )
+            })}
+          </div>
+
+          {/* Highlight search */}
+          <input
+            type="text"
+            value={highlight}
+            onChange={(e) => setHighlight(e.target.value)}
+            placeholder="Highlight…"
+            className="border border-gray-300 rounded px-2 py-1 text-xs w-28 focus:outline-none focus:ring-1 focus:ring-amber-400"
+          />
+        </div>
+
+        <div className="ml-auto shrink-0">
+          <button
+            onClick={() => void load()}
+            className="text-xs text-gray-400 hover:text-gray-600 underline"
+          >
+            Refresh
+          </button>
+        </div>
       </div>
 
-      {/* Pan/zoom canvas container — overflow-hidden clips the canvas during pan */}
+      {/* ── Canvas container ──────────────────────────────────────────── */}
       <div
         ref={containerRef}
         className="flex-1 overflow-hidden bg-gray-50 relative"
@@ -504,27 +540,15 @@ export default function DerivationTree({ focusId, onSelect }: Props) {
         onMouseUp={handleMouseUp}
         onMouseLeave={handleMouseLeave}
       >
-        {/*
-          The inner div is the actual "canvas" that gets CSS-transformed.
-          transformOrigin: '0 0' means translations and scales are anchored
-          to the top-left corner of this div, which matches the math in
-          applyTransform() and the wheel zoom calculation.
-          willChange: 'transform' hints to the browser to promote this layer
-          to the GPU for smooth animation.
-        */}
+
+        {/* Inner canvas — receives CSS transform for pan/zoom */}
         <div
           ref={canvasRef}
           className="relative"
-          style={{
-            width: canvasW,
-            height: canvasH,
-            transformOrigin: '0 0',
-            willChange: 'transform',
-          }}
+          style={{ width: canvasW, height: canvasH, transformOrigin: '0 0', willChange: 'transform' }}
         >
-          {/* ---------------------------------------------------------------- */}
-          {/* SVG layer: arrowhead markers + edge curves                        */}
-          {/* ---------------------------------------------------------------- */}
+
+          {/* ── SVG: arrowhead markers + elbow edges ────────────────── */}
           <svg
             className="absolute inset-0 pointer-events-none"
             width={canvasW}
@@ -532,84 +556,57 @@ export default function DerivationTree({ focusId, onSelect }: Props) {
             style={{ zIndex: 0 }}
           >
             <defs>
-              {/* Default arrowhead — slate gray */}
-              <marker
-                id="arrowhead"
-                markerWidth="8"
-                markerHeight="6"
-                refX="8"
-                refY="3"
-                orient="auto"
-              >
-                <polygon points="0 0, 8 3, 0 6" fill="#94a3b8" />
+              <marker id="arrow-gray"  markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto">
+                <polygon points="0 0, 7 2.5, 0 5" fill="#94a3b8" />
               </marker>
-              {/* Highlighted arrowhead — blue, used when both endpoints are in the hover set */}
-              <marker
-                id="arrowhead-active"
-                markerWidth="8"
-                markerHeight="6"
-                refX="8"
-                refY="3"
-                orient="auto"
-              >
-                <polygon points="0 0, 8 3, 0 6" fill="#3b82f6" />
+              <marker id="arrow-green" markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto">
+                <polygon points="0 0, 7 2.5, 0 5" fill="#16a34a" />
+              </marker>
+              <marker id="arrow-blue"  markerWidth="7" markerHeight="5" refX="7" refY="2.5" orient="auto">
+                <polygon points="0 0, 7 2.5, 0 5" fill="#3b82f6" />
               </marker>
             </defs>
 
-            {edges.map(({ fromId, toId }) => {
+            {edges.map(({ fromId, toId, isCrossTree }) => {
               const from = posById.get(fromId)
-              const to = posById.get(toId)
+              const to   = posById.get(toId)
               if (!from || !to) return null
 
-              // Determine edge visual state:
-              //   - connectedIds null  → no hover active, render at default style
-              //   - both endpoints in connectedIds → highlighted (blue)
-              //   - otherwise → dimmed
-              const isHighlighted =
-                connectedIds !== null &&
-                connectedIds.has(fromId) &&
-                connectedIds.has(toId)
-              const isDimmed =
-                connectedIds !== null && (!connectedIds.has(fromId) || !connectedIds.has(toId))
+              const x1 = from.x + NODE_W
+              const y1 = from.y + NODE_H / 2
+              const x2 = to.x
+              const y2 = to.y + NODE_H / 2
+
+              const color  = isCrossTree ? '#16a34a' : '#94a3b8'
+              const width  = isCrossTree ? 1 : 0.5
+              const marker = isCrossTree ? 'url(#arrow-green)' : 'url(#arrow-gray)'
 
               return (
                 <path
                   key={`${fromId}-${toId}`}
-                  d={edgePath(from, to)}
+                  d={elbowPath(x1, y1, x2, y2)}
                   fill="none"
-                  stroke={isHighlighted ? '#3b82f6' : '#94a3b8'}
-                  strokeWidth={isHighlighted ? 2 : 1.5}
-                  opacity={isDimmed ? 0.15 : 1}
-                  markerEnd={isHighlighted ? 'url(#arrowhead-active)' : 'url(#arrowhead)'}
+                  stroke={color}
+                  strokeWidth={width}
+                  markerEnd={marker}
                 />
               )
             })}
           </svg>
 
-          {/* ---------------------------------------------------------------- */}
-          {/* Node cards                                                        */}
-          {/* ---------------------------------------------------------------- */}
+          {/* ── Node cards ──────────────────────────────────────────── */}
           {nodes.map((node) => {
             const isFocused = node.id === focusId
-            const isSelf = node.req.requirement_id === 'SELF-000'
-            const statusCls = STATUS_CLASSES[node.req.status] ?? 'bg-gray-100 text-gray-600'
-
-            // Dim this card if something is hovered AND this node is not in
-            // the connected set. SELF-000 retains its existing reduced opacity.
-            const isDimmedByHover =
-              connectedIds !== null && !connectedIds.has(node.id)
+            const dStyle    = DISC_STYLE[node.req.discipline] ?? DEFAULT_DISC_STYLE
+            const dotColor  = STATUS_DOT[node.req.status] ?? '#9ca3af'
+            const isHighlighted =
+              hlower.length > 0 &&
+              (node.req.requirement_id.toLowerCase().includes(hlower) ||
+               node.req.title.toLowerCase().includes(hlower))
 
             return (
               <div
                 key={node.id}
-                onMouseEnter={() => setHoveredId(node.id)}
-                onMouseLeave={() => setHoveredId(null)}
-                onClick={() => {
-                  // Guard: if the mouse moved during this press it was a pan,
-                  // not a click — don't navigate
-                  if (didPanRef.current) return
-                  if (!isSelf) onSelect(node.id)
-                }}
                 style={{
                   position: 'absolute',
                   left: node.x,
@@ -617,56 +614,106 @@ export default function DerivationTree({ focusId, onSelect }: Props) {
                   width: NODE_W,
                   height: NODE_H,
                   zIndex: 10,
+                  backgroundColor: dStyle.bg,
+                  border: `1px solid ${isHighlighted ? '#d97706' : isFocused ? '#3b82f6' : dStyle.border}`,
+                  boxShadow: isHighlighted
+                    ? '0 0 0 2px #fbbf24'
+                    : isFocused
+                    ? '0 0 0 2px #93c5fd'
+                    : undefined,
+                  borderRadius: 8,
+                  padding: '6px 8px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  justifyContent: 'space-between',
+                  cursor: 'pointer',
+                  userSelect: 'none',
                 }}
-                className={[
-                  'rounded-lg border bg-white p-3 flex flex-col justify-between select-none transition-opacity',
-                  isSelf
-                    ? 'border-dashed border-gray-300 cursor-default opacity-60'
-                    : 'border-gray-200 cursor-pointer hover:border-blue-400 hover:shadow-md transition-all',
-                  isFocused ? 'ring-2 ring-blue-500 border-blue-400 shadow-md' : '',
-                  // Apply hover-dim only to non-SELF nodes (SELF is already opacity-60)
-                  !isSelf && isDimmedByHover ? 'opacity-20' : '',
-                ].join(' ')}
+                onClick={() => { if (!didPanRef.current) onSelect(node.id) }}
+                onMouseEnter={() => {
+                  const container = containerRef.current
+                  if (!container) return
+                  const { tx, ty, scale } = transformRef.current
+                  setTooltip({
+                    node,
+                    sx: node.x * scale + tx + NODE_W * scale + 6,
+                    sy: node.y * scale + ty,
+                  })
+                }}
+                onMouseLeave={() => setTooltip(null)}
               >
-                {/* Top row: ID + status badge */}
-                <div className="flex items-center justify-between gap-1">
-                  <span className={`font-mono text-xs font-semibold truncate ${isSelf ? 'text-gray-400' : 'text-blue-700'}`}>
+                {/* Row 1: ID + status dot */}
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 4 }}>
+                  <span style={{ fontFamily: 'monospace', fontSize: 11, fontWeight: 700, color: dStyle.idColor, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
                     {node.req.requirement_id}
                   </span>
-                  {!isSelf && (
-                    <span className={`px-1.5 py-0.5 rounded-full text-xs font-medium shrink-0 ${statusCls}`}>
-                      {node.req.status}
-                    </span>
-                  )}
+                  <span
+                    style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: dotColor, flexShrink: 0 }}
+                    title={node.req.status}
+                  />
                 </div>
-
-                {/* Title */}
-                <p
-                  className={`text-xs leading-snug line-clamp-2 ${isSelf ? 'text-gray-400 italic' : 'text-gray-700'}`}
-                  title={node.req.title}
-                >
+                {/* Row 2: Title */}
+                <p style={{ fontSize: 11, color: '#374151', lineHeight: '1.3', overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
                   {node.req.title}
                 </p>
-
-                {/* Bottom row: owner (only for real requirements) */}
-                {!isSelf && (
-                  <p className="text-xs text-gray-400 truncate">{node.req.owner}</p>
-                )}
               </div>
             )
           })}
         </div>
 
-        {/* Controls hint overlay — sits in screen-space (outside the transformed
-            canvas div) so it doesn't move or scale with pan/zoom */}
+        {/* ── Tooltip (outside canvas div — stays in screen-space) ─── */}
+        {tooltip && (
+          <div
+            style={{
+              position: 'absolute',
+              left: Math.min(tooltip.sx, (containerRef.current?.clientWidth ?? 600) - 220),
+              top: Math.max(tooltip.sy, 4),
+              zIndex: 50,
+              pointerEvents: 'none',
+            }}
+            className="bg-white border border-gray-200 rounded-lg shadow-lg p-3 w-52 text-xs"
+          >
+            <p className="font-mono font-bold text-blue-700 mb-1">{tooltip.node.req.requirement_id}</p>
+            <p className="text-gray-800 mb-1.5 leading-snug">{tooltip.node.req.title}</p>
+            <div className="space-y-0.5 text-gray-500">
+              {tooltip.node.req.classification && (
+                <p><span className="font-medium">Type:</span> {tooltip.node.req.classification}{tooltip.node.req.classification_subtype ? ` · ${tooltip.node.req.classification_subtype}` : ''}</p>
+              )}
+              <p><span className="font-medium">Discipline:</span> {tooltip.node.req.discipline}</p>
+              <p><span className="font-medium">Owner:</span> {tooltip.node.req.owner}</p>
+              <p><span className="font-medium">Status:</span> {tooltip.node.req.status}</p>
+              {(tooltip.node.req.hierarchy_nodes?.length ?? 0) > 0 && (
+                <p>
+                  <span className="font-medium">Nodes:</span>{' '}
+                  {tooltip.node.req.hierarchy_nodes!.map((n: { name: string }) => n.name).join(', ')}
+                </p>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* ── Empty state ───────────────────────────────────────────── */}
+        {nodes.length === 0 && (
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+            <p className="text-sm text-gray-400 text-center max-w-xs leading-relaxed">
+              No derivation chains yet — create Performance or Derived Requirements and link them as parent/child to see the tree.
+            </p>
+          </div>
+        )}
+
+        {/* ── Hints overlay ─────────────────────────────────────────── */}
         <div
           className="absolute bottom-4 right-4 text-gray-400 text-[10px] text-right space-y-0.5 pointer-events-none select-none"
           style={{ zIndex: 20 }}
         >
+          {edges.some((e) => e.isCrossTree) && (
+            <p className="text-green-600">Green edges = cross-tree derivation</p>
+          )}
           <p>Scroll — zoom</p>
           <p>Drag — pan</p>
-          <p>Click node — open detail</p>
+          <p>Click node — open</p>
         </div>
+
       </div>
     </div>
   )
