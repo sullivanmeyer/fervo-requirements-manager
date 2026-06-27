@@ -29,9 +29,20 @@ from google.genai import types
 
 MODEL = "gemini-2.5-flash"
 
-# Retry config for transient 503 errors
+# Retry config for transient errors (503 overloaded / 429 rate-limited)
 _MAX_RETRIES = 3
 _RETRY_DELAY_S = 5
+
+# Max output tokens for gemini-2.5-flash.  Set explicitly so long JSON responses
+# are not silently truncated below the model's true ceiling.
+_MAX_OUTPUT_TOKENS = 65536
+
+# Decomposition is chunked by page so a large document never asks the model to
+# emit more JSON than it can fit in one response.  Pages are grouped until the
+# combined source text reaches this many characters, then a new chunk starts.
+# Conservative versus the ~65k output-token ceiling because verbatim JSON output
+# runs larger than the source text it is built from.
+_MAX_DECOMPOSE_CHARS = 60_000
 
 # ---------------------------------------------------------------------------
 # Prompt templates
@@ -209,17 +220,41 @@ def _get_client() -> genai.Client:
     return genai.Client(api_key=api_key)
 
 
+def _retry_delay(err: Exception, attempt: int) -> float:
+    """
+    Seconds to wait before the next retry.  Honours a 'retryDelay'/'retry-after'
+    hint from a 429 RESOURCE_EXHAUSTED error when present; otherwise backs off
+    geometrically from the base delay.
+    """
+    m = re.search(r"retry[-_ ]?(?:delay|after)['\"]?\s*[:=]\s*['\"]?(\d+)", str(err), re.IGNORECASE)
+    if m:
+        return float(m.group(1))
+    return _RETRY_DELAY_S * (2 ** attempt)
+
+
 def _generate_with_retry(client: genai.Client, **kwargs) -> Any:
-    """Call generate_content with simple retry logic for transient 503s."""
+    """
+    Call generate_content with retry logic for transient errors:
+      * 503 / UNAVAILABLE      — model temporarily overloaded
+      * 429 / RESOURCE_EXHAUSTED — requests-per-minute limit hit
+    Rate-limit errors back off (honouring any retry hint) instead of crashing.
+    """
     last_exc = None
     for attempt in range(_MAX_RETRIES):
         try:
             return client.models.generate_content(**kwargs)
         except Exception as e:
-            if "503" in str(e) or "UNAVAILABLE" in str(e):
+            s = str(e)
+            transient = (
+                "503" in s or "UNAVAILABLE" in s
+                or "429" in s or "RESOURCE_EXHAUSTED" in s
+            )
+            if transient:
                 last_exc = e
                 if attempt < _MAX_RETRIES - 1:
-                    time.sleep(_RETRY_DELAY_S)
+                    delay = _retry_delay(e, attempt)
+                    print(f"[gemini] transient error, retrying in {delay:.0f}s: {e}")
+                    time.sleep(delay)
             else:
                 raise
     raise last_exc
@@ -239,6 +274,32 @@ def _parse_json_response(text: str) -> Any:
     return json.loads(raw[start : end + 1])
 
 
+def _chunk_page_texts(page_texts: list[str], max_chars: int) -> list[str]:
+    """
+    Group per-page text sections into chunks whose combined length stays under
+    *max_chars*, preserving page order.  Each chunk is a single string ready to
+    drop into the decomposition prompt.
+
+    A page section larger than max_chars on its own becomes its own (oversized)
+    chunk — we never split a page mid-text, since that would risk cutting a clause
+    or table marker in half.
+    """
+    chunks: list[str] = []
+    current: list[str] = []
+    current_len = 0
+    for section in page_texts:
+        sec_len = len(section)
+        if current and current_len + sec_len > max_chars:
+            chunks.append("\n\n".join(current))
+            current = []
+            current_len = 0
+        current.append(section)
+        current_len += sec_len
+    if current:
+        chunks.append("\n\n".join(current))
+    return chunks
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
@@ -248,9 +309,11 @@ def decompose_document(pdf_bytes: bytes) -> list[dict]:
     Decompose a PDF into structured block dicts.
 
     Two-path approach:
-    1. pdfplumber pre-processing (preferred): extracts text + serializes tables as
-       Markdown with [TABLE BLOCK] markers, then sends as text to Gemini.
-       Gemini outputs table_block entries with full table_data instead of row fragments.
+    1. pdfplumber pre-processing (preferred): extracts text + batch-parses tables
+       via Gemini Vision into [TABLE BLOCK] markers, then sends the text to Gemini
+       in page-range chunks.  Each chunk is one request, so request count scales
+       with document length, not table count, and no response risks the
+       output-token truncation ceiling.
     2. File API fallback: for scanned / image-only PDFs where pdfplumber extracts
        no text, upload the raw PDF to Gemini's File API (vision-capable).
 
@@ -271,37 +334,56 @@ def decompose_document(pdf_bytes: bytes) -> list[dict]:
     # ------------------------------------------------------------------
     from services.table_extraction import extract_content_with_tables
 
-    # Pass the Gemini client so table_extraction can call vision API for
-    # each table region.  Returns (text, table_map) where table_map maps
-    # marker IDs like "TABLE_P3_I0" → pre-extracted table_data dicts.
-    extracted_text, table_map = extract_content_with_tables(
+    # Pass the Gemini client so table_extraction can batch-call the vision API
+    # for table regions.  Returns (page_texts, table_map): page_texts is a list
+    # of per-page strings; table_map maps marker IDs like "TABLE_P3_I0" →
+    # pre-extracted table_data dicts.
+    page_texts, table_map = extract_content_with_tables(
         pdf_bytes, gemini_client=client
     )
 
-    if extracted_text:
+    if page_texts:
         vision_count = sum(
             1 for v in table_map.values()
             if v.get("table_parse_quality") == "vision"
         )
+        total_chars = sum(len(p) for p in page_texts)
+        chunks = _chunk_page_texts(page_texts, _MAX_DECOMPOSE_CHARS)
         print(
-            f"[decompose] pdfplumber extracted {len(extracted_text)} chars — "
-            f"using text-based path ({vision_count}/{len(table_map)} tables via vision)"
+            f"[decompose] pdfplumber extracted {total_chars} chars across "
+            f"{len(page_texts)} page(s) → {len(chunks)} decompose chunk(s) "
+            f"({vision_count}/{len(table_map)} tables via vision)"
         )
-        prompt = f"=== DOCUMENT CONTENT ===\n{extracted_text}\n\n{DECOMPOSE_USER}"
-        response = _generate_with_retry(
-            client,
-            model=MODEL,
-            contents=[
-                types.Content(
-                    role="user",
-                    parts=[types.Part(text=prompt)],
-                )
-            ],
-            config=types.GenerateContentConfig(
-                system_instruction=DECOMPOSE_SYSTEM,
-                response_mime_type="application/json",
-            ),
-        )
+
+        # Decompose each page-range chunk in its own call so no single response
+        # has to fit the whole document under the output-token ceiling.  Blocks
+        # are concatenated in document order; parent_clause_number links resolve
+        # globally downstream regardless of which chunk a parent landed in.
+        blocks: list[dict] = []
+        for chunk_no, chunk_text in enumerate(chunks, start=1):
+            if chunk_no > 1:
+                # Space chunk calls out to stay under the per-minute request cap.
+                time.sleep(_RETRY_DELAY_S)
+            prompt = f"=== DOCUMENT CONTENT ===\n{chunk_text}\n\n{DECOMPOSE_USER}"
+            response = _generate_with_retry(
+                client,
+                model=MODEL,
+                contents=[
+                    types.Content(role="user", parts=[types.Part(text=prompt)])
+                ],
+                config=types.GenerateContentConfig(
+                    system_instruction=DECOMPOSE_SYSTEM,
+                    response_mime_type="application/json",
+                    max_output_tokens=_MAX_OUTPUT_TOKENS,
+                    thinking_config=types.ThinkingConfig(thinking_budget=0),
+                ),
+            )
+            chunk_blocks = _parse_json_response(response.text)
+            print(
+                f"[decompose] chunk {chunk_no}/{len(chunks)} → "
+                f"{len(chunk_blocks)} block(s)"
+            )
+            blocks.extend(chunk_blocks)
     else:
         # ------------------------------------------------------------------
         # Path 2: File API fallback for image-based / scanned PDFs
@@ -338,6 +420,8 @@ def decompose_document(pdf_bytes: bytes) -> list[dict]:
                 config=types.GenerateContentConfig(
                     system_instruction=DECOMPOSE_SYSTEM,
                     response_mime_type="application/json",
+                    max_output_tokens=_MAX_OUTPUT_TOKENS,
+                    thinking_config=types.ThinkingConfig(thinking_budget=0),
                 ),
             )
         finally:
@@ -345,11 +429,10 @@ def decompose_document(pdf_bytes: bytes) -> list[dict]:
                 client.files.delete(name=uploaded.name)
             except Exception:
                 pass
+        blocks = _parse_json_response(response.text)
 
-    raw_text = response.text
-    blocks = _parse_json_response(raw_text)
-
-    # Normalise: ensure required keys exist with sensible defaults
+    # Normalise: ensure required keys exist with sensible defaults.
+    # sort_order is assigned globally across all chunks to preserve reading order.
     normalised = []
     for i, b in enumerate(blocks):
         normalised.append({
