@@ -37,12 +37,18 @@ _RETRY_DELAY_S = 5
 # are not silently truncated below the model's true ceiling.
 _MAX_OUTPUT_TOKENS = 65536
 
-# Decomposition is chunked by page so a large document never asks the model to
-# emit more JSON than it can fit in one response.  Pages are grouped until the
-# combined source text reaches this many characters, then a new chunk starts.
-# Conservative versus the ~65k output-token ceiling because verbatim JSON output
-# runs larger than the source text it is built from.
-_MAX_DECOMPOSE_CHARS = 60_000
+# Block classification is sent in batches of this many blocks per request.  The
+# model returns one small label object per block (not the text), so output stays
+# tiny regardless of batch size — the limit is input size and the blast radius of
+# a failed batch (which falls back to 'informational' defaults, never lost text).
+# 120 keeps a ~250-block document to ~3 classification calls.
+_CLASSIFY_BATCH_SIZE = 120
+
+# Per-block text cap (chars) sent to the classifier.  Classification only needs
+# the opening of a clause to spot SHALL/SHOULD/MAY or boilerplate, and the full
+# verbatim text is preserved separately, so truncating the classifier's view is
+# lossless and keeps request size down.
+_CLASSIFY_TEXT_CAP = 1500
 
 # ---------------------------------------------------------------------------
 # Prompt templates
@@ -121,6 +127,38 @@ Table block (pre-parsed TABLE_DATA path):
   "parent_clause_number": "5.3",
   "depth": 2
 }
+"""
+
+CLASSIFY_SYSTEM = """\
+You are an expert at classifying blocks of engineering specification text.
+Your output must be valid JSON — no prose before or after the JSON array.
+"""
+
+CLASSIFY_USER_TEMPLATE = """\
+You are given a JSON array of pre-segmented document blocks.  Each has:
+  index         : integer identifier (unique within this batch)
+  clause_number : the detected clause number, or null
+  text          : the block's text (may be truncated — classify from what you see)
+
+For EVERY block in the input, return one object with:
+  index      : the SAME integer you were given
+  block_type : one of
+                 "heading"            – a section title with no substantive content
+                 "requirement_clause" – contains SHALL / SHOULD / MAY obligations
+                 "informational"      – explanatory or descriptive text
+                 "boilerplate"        – table of contents, revision history,
+                                        signatures, distribution lists, legal
+                                        notices, or lists of referenced documents
+  heading    : if block_type is "heading", the heading title text; otherwise null
+
+Rules:
+- Return an object for EVERY input index.  Do NOT skip any.  If unsure, classify
+  the block as "informational".
+- Do NOT echo the block text back — return only the small label object.
+- Return ONLY a JSON array.
+
+=== BLOCKS ===
+{blocks_json}
 """
 
 DETECT_REFS_SYSTEM = """\
@@ -274,30 +312,224 @@ def _parse_json_response(text: str) -> Any:
     return json.loads(raw[start : end + 1])
 
 
-def _chunk_page_texts(page_texts: list[str], max_chars: int) -> list[str]:
-    """
-    Group per-page text sections into chunks whose combined length stays under
-    *max_chars*, preserving page order.  Each chunk is a single string ready to
-    drop into the decomposition prompt.
+# Markers and patterns used by deterministic segmentation.
+_PAGE_HEADER_RE = re.compile(r"^=== Page (\d+) ===\s*$")
+_TABLE_OPEN_RE = re.compile(r"^\[TABLE BLOCK — Page (\d+), ID: (TABLE_P\d+_I\d+)\]\s*$")
+_TABLE_CLOSE = "[END TABLE BLOCK]"
+# A clause number at the start of a line: "5", "5.3", "5.3.1", followed by a
+# space, dot, paren, or colon (so "5.3 Pressure Vessels" matches but "5.3psig"
+# and bare numeric data lines like "150" inside prose are less likely to).
+_CLAUSE_START_RE = re.compile(r"^\s*(\d+(?:\.\d+){0,6})(?=[ .\):\t])")
 
-    A page section larger than max_chars on its own becomes its own (oversized)
-    chunk — we never split a page mid-text, since that would risk cutting a clause
-    or table marker in half.
+
+def _derive_hierarchy(clause_number: str | None) -> tuple[str | None, int]:
     """
-    chunks: list[str] = []
-    current: list[str] = []
-    current_len = 0
+    Derive (parent_clause_number, depth) from a clause number, deterministically.
+      "5"      → (None, 0)
+      "5.3"    → ("5", 1)
+      "5.3.1"  → ("5.3", 2)
+    Blocks with no clause number are top-level (None, 0).
+    """
+    if not clause_number:
+        return None, 0
+    parts = clause_number.split(".")
+    depth = len(parts) - 1
+    parent = ".".join(parts[:-1]) if depth > 0 else None
+    return parent, depth
+
+
+def _segment_blocks(page_texts: list[str]) -> list[dict]:
+    """
+    Deterministically split the pdfplumber text into clause-aligned blocks WITHOUT
+    any LLM involvement, so verbatim content is never dropped.
+
+    A new prose block begins at each line that starts with a clause number; table
+    markers become atomic table_block entries.  Page-header lines are stripped but
+    never break a block, so a clause spanning a page boundary stays intact.
+
+    Returns block dicts with keys:
+      clause_number, content (verbatim), block_type (None for prose, "table_block"
+      for tables), heading (None — set later by the classifier), marker_id, page,
+      parent_clause_number, depth.
+    """
+    blocks: list[dict] = []
+    cur_lines: list[str] = []
+    cur_clause: str | None = None
+    cur_page: int = 1
+
+    def _flush():
+        nonlocal cur_lines, cur_clause
+        content = "\n".join(cur_lines).strip()
+        if content:
+            parent, depth = _derive_hierarchy(cur_clause)
+            blocks.append({
+                "clause_number": cur_clause,
+                "content": content,
+                "block_type": None,        # classified later
+                "heading": None,
+                "marker_id": None,
+                "page": cur_page,
+                "parent_clause_number": parent,
+                "depth": depth,
+            })
+        cur_lines = []
+        cur_clause = None
+
     for section in page_texts:
-        sec_len = len(section)
-        if current and current_len + sec_len > max_chars:
-            chunks.append("\n\n".join(current))
-            current = []
-            current_len = 0
-        current.append(section)
-        current_len += sec_len
-    if current:
-        chunks.append("\n\n".join(current))
-    return chunks
+        lines = section.split("\n")
+        i = 0
+        while i < len(lines):
+            line = lines[i]
+
+            page_m = _PAGE_HEADER_RE.match(line)
+            if page_m:
+                cur_page = int(page_m.group(1))  # update page, don't break block
+                i += 1
+                continue
+
+            table_m = _TABLE_OPEN_RE.match(line)
+            if table_m:
+                _flush()  # close any open prose block before the table
+                marker_id = table_m.group(2)
+                # Consume through the END marker; content is just the marker line
+                # so the downstream table_data injection can match on the ID.
+                blocks.append({
+                    "clause_number": None,
+                    "content": line.strip(),
+                    "block_type": "table_block",
+                    "heading": None,
+                    "marker_id": marker_id,
+                    "page": int(table_m.group(1)),
+                    "parent_clause_number": None,
+                    "depth": 0,
+                })
+                i += 1
+                while i < len(lines) and lines[i].strip() != _TABLE_CLOSE:
+                    i += 1
+                i += 1  # skip the END marker line itself
+                continue
+
+            clause_m = _CLAUSE_START_RE.match(line)
+            if clause_m:
+                num = clause_m.group(1)
+                rest = line[clause_m.end():].lstrip(" .):\t")
+                # A dotted number ("5.3.1") is always a clause start; a bare
+                # integer only counts if followed by a heading-like capitalised
+                # word, so prose/data lines like "150 psig" don't false-trigger.
+                is_clause_start = ("." in num) or rest[:1].isupper()
+            else:
+                is_clause_start = False
+
+            if is_clause_start:
+                if cur_lines or cur_clause is not None:
+                    _flush()  # close the previous block before the new clause
+                cur_clause = num
+
+            cur_lines.append(line)
+            i += 1
+
+    _flush()
+    return blocks
+
+
+def _classify_blocks(client: genai.Client, blocks: list[dict]) -> None:
+    """
+    Assign block_type (and heading text) to each prose block IN PLACE via Gemini.
+
+    The model receives only an index, clause number, and a capped text preview per
+    block, and returns a small label object per index — it never reproduces text,
+    so output stays small and complete.  Any block the model omits keeps a safe
+    default ("informational"), so a block is never deleted, only possibly
+    mislabelled.  table_block entries are skipped (their type is already known).
+    """
+    prose = [b for b in blocks if b["block_type"] != "table_block"]
+    if not prose:
+        return
+
+    total_batches = (len(prose) + _CLASSIFY_BATCH_SIZE - 1) // _CLASSIFY_BATCH_SIZE
+    print(f"[classify] {len(prose)} prose block(s) → {total_batches} batch(es)")
+
+    for batch_no, start in enumerate(range(0, len(prose), _CLASSIFY_BATCH_SIZE), start=1):
+        if batch_no > 1:
+            time.sleep(_RETRY_DELAY_S)  # pace requests under the per-minute cap
+        batch = prose[start : start + _CLASSIFY_BATCH_SIZE]
+        payload = [
+            {
+                "index": idx,
+                "clause_number": b["clause_number"],
+                "text": b["content"][:_CLASSIFY_TEXT_CAP],
+            }
+            for idx, b in enumerate(batch)
+        ]
+        prompt = CLASSIFY_USER_TEMPLATE.format(blocks_json=json.dumps(payload, indent=2))
+
+        # Default everything in the batch to informational first; the model's
+        # answers override.  Anything it omits stays informational (never dropped).
+        for b in batch:
+            b["block_type"] = "informational"
+
+        try:
+            response = _generate_with_retry(
+                client,
+                model=MODEL,
+                contents=[types.Content(role="user", parts=[types.Part(text=prompt)])],
+                config=types.GenerateContentConfig(
+                    system_instruction=CLASSIFY_SYSTEM,
+                    response_mime_type="application/json",
+                    max_output_tokens=_MAX_OUTPUT_TOKENS,
+                    thinking_config=types.ThinkingConfig(thinking_budget=0),
+                ),
+            )
+            labels = _parse_json_response(response.text)
+        except Exception as e:
+            print(f"[classify] WARNING: batch {batch_no} failed, keeping defaults: {e}")
+            continue
+
+        valid_types = {"heading", "requirement_clause", "informational", "boilerplate"}
+        labelled = 0
+        for label in labels:
+            try:
+                idx = int(label.get("index"))
+            except (TypeError, ValueError):
+                continue
+            if 0 <= idx < len(batch):
+                bt = label.get("block_type")
+                if bt in valid_types:
+                    batch[idx]["block_type"] = bt
+                    labelled += 1
+                if bt == "heading":
+                    batch[idx]["heading"] = label.get("heading")
+        print(f"[classify] batch {batch_no}/{total_batches} → {labelled}/{len(batch)} labelled")
+
+
+def _inject_table_data(normalised: list[dict], table_map: dict[str, dict]) -> list[dict]:
+    """
+    Fill each table_block's table_data from the authoritative vision/fallback
+    table_map.  Matches by the marker ID embedded in the block content first,
+    then by positional order among table_blocks as a fallback.
+
+    The vision data is authoritative — it handles merged/multi-level headers that
+    text parsing cannot recover.  Mutates and returns *normalised*.
+    """
+    if not table_map:
+        return normalised
+
+    table_ids_in_order = list(table_map.keys())
+    positional_index = 0
+
+    for block in normalised:
+        if block["block_type"] != "table_block":
+            continue
+
+        content = block.get("content", "")
+        id_match = re.search(r"ID:\s*(TABLE_P\d+_I\d+)", content)
+        if id_match and id_match.group(1) in table_map:
+            block["table_data"] = table_map[id_match.group(1)]
+        elif positional_index < len(table_ids_in_order):
+            block["table_data"] = table_map[table_ids_in_order[positional_index]]
+
+        positional_index += 1
+    return normalised
 
 
 # ---------------------------------------------------------------------------
@@ -310,12 +542,15 @@ def decompose_document(pdf_bytes: bytes) -> list[dict]:
 
     Two-path approach:
     1. pdfplumber pre-processing (preferred): extracts text + batch-parses tables
-       via Gemini Vision into [TABLE BLOCK] markers, then sends the text to Gemini
-       in page-range chunks.  Each chunk is one request, so request count scales
-       with document length, not table count, and no response risks the
-       output-token truncation ceiling.
+       via Gemini Vision.  The text is then segmented deterministically into
+       clause-aligned blocks (no LLM), hierarchy is derived from clause numbers,
+       and Gemini is asked ONLY to classify each block's type.  The model never
+       reproduces text, so verbatim content can never be dropped — the failure
+       mode where prose was silently summarised away is eliminated by design.
     2. File API fallback: for scanned / image-only PDFs where pdfplumber extracts
-       no text, upload the raw PDF to Gemini's File API (vision-capable).
+       no text, upload the raw PDF to Gemini's File API (vision-capable).  This
+       path still has the model produce blocks verbatim, as there is no extracted
+       text to segment.
 
     Each returned dict has:
       clause_number, heading, content, block_type, table_data,
@@ -348,42 +583,33 @@ def decompose_document(pdf_bytes: bytes) -> list[dict]:
             if v.get("table_parse_quality") == "vision"
         )
         total_chars = sum(len(p) for p in page_texts)
-        chunks = _chunk_page_texts(page_texts, _MAX_DECOMPOSE_CHARS)
+
+        # Deterministic segmentation owns the verbatim text + hierarchy; the LLM
+        # only classifies each block.  Content is never reproduced by the model,
+        # so it can never be dropped.
+        blocks = _segment_blocks(page_texts)
         print(
             f"[decompose] pdfplumber extracted {total_chars} chars across "
-            f"{len(page_texts)} page(s) → {len(chunks)} decompose chunk(s) "
+            f"{len(page_texts)} page(s) → {len(blocks)} block(s) segmented "
             f"({vision_count}/{len(table_map)} tables via vision)"
         )
+        _classify_blocks(client, blocks)
 
-        # Decompose each page-range chunk in its own call so no single response
-        # has to fit the whole document under the output-token ceiling.  Blocks
-        # are concatenated in document order; parent_clause_number links resolve
-        # globally downstream regardless of which chunk a parent landed in.
-        blocks: list[dict] = []
-        for chunk_no, chunk_text in enumerate(chunks, start=1):
-            if chunk_no > 1:
-                # Space chunk calls out to stay under the per-minute request cap.
-                time.sleep(_RETRY_DELAY_S)
-            prompt = f"=== DOCUMENT CONTENT ===\n{chunk_text}\n\n{DECOMPOSE_USER}"
-            response = _generate_with_retry(
-                client,
-                model=MODEL,
-                contents=[
-                    types.Content(role="user", parts=[types.Part(text=prompt)])
-                ],
-                config=types.GenerateContentConfig(
-                    system_instruction=DECOMPOSE_SYSTEM,
-                    response_mime_type="application/json",
-                    max_output_tokens=_MAX_OUTPUT_TOKENS,
-                    thinking_config=types.ThinkingConfig(thinking_budget=0),
-                ),
-            )
-            chunk_blocks = _parse_json_response(response.text)
-            print(
-                f"[decompose] chunk {chunk_no}/{len(chunks)} → "
-                f"{len(chunk_blocks)} block(s)"
-            )
-            blocks.extend(chunk_blocks)
+        # Normalise straight from the segmented blocks (already in the final
+        # shape) and assign global sort_order, then return.
+        normalised = []
+        for i, b in enumerate(blocks):
+            normalised.append({
+                "clause_number": b.get("clause_number"),
+                "heading": b.get("heading"),
+                "content": b.get("content", ""),
+                "block_type": b.get("block_type") or "informational",
+                "table_data": None,  # filled by table_map injection below
+                "parent_clause_number": b.get("parent_clause_number"),
+                "depth": int(b.get("depth", 0)),
+                "sort_order": i,
+            })
+        return _inject_table_data(normalised, table_map)
     else:
         # ------------------------------------------------------------------
         # Path 2: File API fallback for image-based / scanned PDFs
@@ -431,8 +657,8 @@ def decompose_document(pdf_bytes: bytes) -> list[dict]:
                 pass
         blocks = _parse_json_response(response.text)
 
-    # Normalise: ensure required keys exist with sensible defaults.
-    # sort_order is assigned globally across all chunks to preserve reading order.
+    # Normalise the File-API (scanned-PDF) blocks, which the LLM still produces
+    # verbatim since there is no pdfplumber text to segment.
     normalised = []
     for i, b in enumerate(blocks):
         normalised.append({
@@ -445,33 +671,7 @@ def decompose_document(pdf_bytes: bytes) -> list[dict]:
             "depth": int(b.get("depth", 0)),
             "sort_order": i,
         })
-
-    # ------------------------------------------------------------------
-    # Inject pre-extracted vision table_data into table_block entries.
-    #
-    # The vision data is authoritative — it handles merged/multi-level
-    # headers that the LLM text-parsing cannot recover.  We match by:
-    #   1. Exact marker ID embedded in block.content  (primary)
-    #   2. Positional order among table_blocks        (fallback)
-    # ------------------------------------------------------------------
-    if table_map:
-        table_ids_in_order = list(table_map.keys())
-        positional_index = 0
-
-        for block in normalised:
-            if block["block_type"] != "table_block":
-                continue
-
-            content = block.get("content", "")
-            # Try exact match: look for "ID: TABLE_P3_I0" in content
-            id_match = re.search(r"ID:\s*(TABLE_P\d+_I\d+)", content)
-            if id_match and id_match.group(1) in table_map:
-                block["table_data"] = table_map[id_match.group(1)]
-            elif positional_index < len(table_ids_in_order):
-                block["table_data"] = table_map[table_ids_in_order[positional_index]]
-
-            positional_index += 1
-    return normalised
+    return _inject_table_data(normalised, table_map)
 
 
 def _normalize_doc_id(name: str) -> str:
